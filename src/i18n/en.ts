@@ -93,6 +93,8 @@ export const en = {
   replyWaitingFirstToken: 'Waiting for the response',
   replyWaitingSlow: 'The service is responding slowly. Still waiting…',
   replyWaitingStalled: 'This is taking unusually long. You can stop and regenerate.',
+  /** Auto-retry progress: a failed request never hangs silently (#105) */
+  chatRetrying: 'Retrying (attempt {attempt} of {limit})',
   replyRefused: "Sorry, that's beyond my current scope. Let's talk about something else.",
   messageThinkDuration: 'Thought for {count} second',
   messageThinkDurationPlural: 'Thought for {count} seconds',

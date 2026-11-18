@@ -47,7 +47,7 @@ import {
 } from './reply.js'
 import { STREAM_NOTICE_TIERS } from './streamNotice.js'
 import type { ImportSkip } from './history/toLocal.js'
-import type { TranslationKey } from '../../i18n/index.js'
+import type { TranslationMessage } from '../../i18n/index.js'
 import {
   toSessionSummary,
   type AssistantMessage,
@@ -64,10 +64,10 @@ const SYSTEM_PROMPT = '该助手为DeepSeek，由深度求索公司创造。'
 const SESSION_CACHE_LIMIT = 5
 /** 安全审核固定开启，所有请求都走扩展模式 */
 const SAFETY_CHECK = { level: 'high' } as const
-/** 服务端判定 file_id 失效后，重新补传并重发的最多次数（不含首次请求） */
-const FILE_RETRY_LIMIT = 2
+/** 自动重试的最多次数（不含首次请求）：附件补传、断网、5xx、超时共用这一个上限 */
+export const STREAM_RETRY_LIMIT = 2
 /** 退避基数，第 n 次重试等待 2^n 倍；连续失败达到上限就放弃，把原始报错展示出来 */
-const FILE_RETRY_BASE_DELAY = 1000
+const RETRY_BASE_DELAY = 1000
 
 /** 阅读链接始终开启，智能搜索开关控制是否另行声明搜索工具（含边想边搜）。 */
 const serverTools = (search: boolean): CreateMessageRequest['tools'] => {
@@ -126,7 +126,7 @@ type ChatState = {
   /** 最近一次历史导入被跳过的条目（损坏的会话 / 消息），供「导入详情」展示（#49） */
   importSkipped: ImportSkip[]
   /** 还在等首字的会话：当前该显示哪一档等待提示；收到首字或本轮结束就删掉 */
-  waitHints: Record<string, TranslationKey>
+  waitHints: Record<string, TranslationMessage>
 }
 
 export const useChatStore = create<ChatState>(() => ({
@@ -158,18 +158,23 @@ const getStreamController = (id: string) => {
   return Object.hasOwn(streams, id) ? streams[id] : undefined
 }
 
+/** 同一档提示重复写入时保持引用不变，避免组件无谓重渲染 */
+const hintSignature = (hint: TranslationMessage) =>
+  `${hint.key}|${hint.params ? JSON.stringify(hint.params) : ''}`
+
 /** 换掉/清掉某个会话的等待提示；清掉时不留空壳，组件订阅的是 key 本身 */
-const setWaitHint = (sessionId: string, key?: TranslationKey) => {
+const setWaitHint = (sessionId: string, hint?: TranslationMessage) => {
   set((state) => {
-    if (key) {
-      return state.waitHints[sessionId] === key
+    const current = state.waitHints[sessionId]
+    if (hint) {
+      return current && hintSignature(current) === hintSignature(hint)
         ? {}
-        : { waitHints: { ...state.waitHints, [sessionId]: key } }
+        : { waitHints: { ...state.waitHints, [sessionId]: hint } }
     }
-    if (!Object.hasOwn(state.waitHints, sessionId)) {
+    if (!current) {
       return {}
     }
-    const waitHints: Record<string, TranslationKey> = {}
+    const waitHints: Record<string, TranslationMessage> = {}
     for (const [id, hint] of Object.entries(state.waitHints)) {
       if (id !== sessionId) {
         waitHints[id] = hint
@@ -185,7 +190,7 @@ const armWaitHints = (sessionId: string) => {
   waitHintTimers.set(
     sessionId,
     STREAM_NOTICE_TIERS.map((tier) =>
-      setTimeout(() => setWaitHint(sessionId, tier.key), tier.afterMs)
+      setTimeout(() => setWaitHint(sessionId, { key: tier.key }), tier.afterMs)
     )
   )
 }
@@ -1164,6 +1169,41 @@ const reuploadInvalidatedFiles = (sessionId: string, request: Request, error: un
   return true
 }
 
+/** 本轮失败后要怎么办：继续重试、按用户停止收尾、还是把原始报错展示出来 */
+export type StreamRetryDecision = 'retry' | 'aborted' | 'final'
+
+/**
+ * 统一的重试口径（#105）。以前只有「附件失效补传」会重试，断网 / 5xx / 超时直接报错；
+ * 现在把可自愈的失败也算进来，但都受同一个上限约束：
+ * - 用户点了停止：abort 不是可重试错误，最高优先级，一次都不再发；
+ * - 已经收到过内容块（含被丢弃的客户端工具调用）：重发会答两遍，不再重试；
+ * - 重试次数到 STREAM_RETRY_LIMIT 就放弃，把原始报错交给界面；
+ * - 可重试分类交给 isRetryableApiError（网络 / 超时 / 断流 / 限流 / 5xx）；
+ * - 附件失效是 400，本身不可重试，但补传成功后可以再来一次，由 fileRecovered 兜住。
+ */
+export const decideStreamRetry = ({
+  error,
+  attempt,
+  receivedContent,
+  aborted,
+  fileRecovered,
+}: {
+  error: unknown
+  /** 已经重试过几次（首次请求为 0） */
+  attempt: number
+  receivedContent: boolean
+  aborted: boolean
+  fileRecovered: boolean
+}): StreamRetryDecision => {
+  if (aborted) {
+    return 'aborted'
+  }
+  if (receivedContent || attempt >= STREAM_RETRY_LIMIT) {
+    return 'final'
+  }
+  return isRetryableApiError(error) || fileRecovered ? 'retry' : 'final'
+}
+
 /** 重传前的退避等待；停止生成时立即返回，由调用方按已停止收尾 */
 const waitForRetry = (attempt: number, signal: AbortSignal) =>
   new Promise<void>((resolve) => {
@@ -1176,7 +1216,7 @@ const waitForRetry = (attempt: number, signal: AbortSignal) =>
         signal.removeEventListener('abort', onAbort)
         resolve()
       },
-      FILE_RETRY_BASE_DELAY * 2 ** attempt
+      RETRY_BASE_DELAY * 2 ** attempt
     )
     signal.addEventListener('abort', onAbort, { once: true })
   })
@@ -1385,12 +1425,26 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           })
           break
         }
-        // 附件失效：重新补传后重发。收到过内容块（含丢弃的客户端工具）后不自动重发。
-        if (
-          attempt < FILE_RETRY_LIMIT &&
-          !receivedContent &&
+        // 附件失效是 400（补传后才可自愈）：先确认「本来就要再发一次」再补传，避免白清 serverId。
+        // 收到过内容块（含丢弃的客户端工具）后不自动重发。
+        const mayRetry = attempt < STREAM_RETRY_LIMIT && !receivedContent && !controller.signal.aborted
+        const fileRecovered =
+          mayRetry &&
+          !isRetryableApiError(error) &&
           reuploadInvalidatedFiles(sessionId, request, error)
-        ) {
+        const decision = decideStreamRetry({
+          error,
+          attempt,
+          receivedContent,
+          aborted: controller.signal.aborted,
+          fileRecovered,
+        })
+        if (decision === 'retry') {
+          // 让用户看见「正在第 N 次重试」，而不是静默卡住
+          setWaitHint(sessionId, {
+            key: 'chatRetrying',
+            params: { attempt: attempt + 1, limit: STREAM_RETRY_LIMIT },
+          })
           await waitForRetry(attempt, controller.signal)
           if (controller.signal.aborted) {
             reply = settleReply(reply, 'stopped', Date.now())

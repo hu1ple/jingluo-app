@@ -87,6 +87,8 @@ export const zh = {
   replyWaitingFirstToken: '正在等待响应',
   replyWaitingSlow: '服务响应较慢，仍在等待',
   replyWaitingStalled: '等待时间过长，可以停止后重新生成',
+  /** 自动重试进度：请求失败后不会静默卡住（#105） */
+  chatRetrying: '正在第 {attempt} 次重试（共 {limit} 次）',
   replyRefused: '你好，这个问题我暂时无法回答，让我们换个话题再聊聊吧。',
   messageThinkDuration: '已思考（用时 {count} 秒）',
   messageThinkDurationPlural: '已思考（用时 {count} 秒）',

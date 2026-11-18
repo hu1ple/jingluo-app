@@ -69,8 +69,8 @@ export const AssistantMessage = memo(function AssistantMessage({
     (thinkingHidden || (view.steps.length === 0 && !message.thinking))
   // 首字等待的分级提示：等得越久说得越清楚，最高档给出停止入口（停完就能重新生成）
   const waitHint = useChatStore((state) => state.waitHints[sessionId])
-  const waitNotice = waitHint ? t(waitHint) : ''
-  const waitActions = waiting && hasStreamNoticeActions(waitHint)
+  const waitNotice = waitHint ? t(waitHint.key, waitHint.params) : ''
+  const waitActions = waiting && hasStreamNoticeActions(waitHint?.key)
   const summaryEntry = `${message.id}-summary`
   return (
     <div className={styles.message}>

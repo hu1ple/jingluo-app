@@ -6,6 +6,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { runCase, serveDist, requireDist } from '../helpers/runtime.mjs'
+import { FETCH_REFUSED_PORTS } from '../helpers/ports.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const privateRoot = async (t) => {
@@ -86,6 +87,7 @@ test('two suite entrypoints reuse injected dist without build, and fail missing 
   await writeFile(path.join(dir, 'node_modules/playwright/package.json'), JSON.stringify({ type: 'module', exports: './index.mjs' }))
   await writeFile(path.join(dir, 'node_modules/playwright/index.mjs'), `export const chromium={launch:async()=>{throw new Error('MOCK_LAUNCH_REACHED')}}`)
   await cp(path.join(root, 'tests/helpers/runtime.mjs'), path.join(dir, 'tests/helpers/runtime.mjs'))
+  await cp(path.join(root, 'tests/helpers/ports.mjs'), path.join(dir, 'tests/helpers/ports.mjs'))
   const dist = path.join(dir, 'prebuilt'); await mkdir(dist); await writeFile(path.join(dist, 'index.html'), 'immutable')
   for (const name of ['auto-title', 'diagnostics-contract']) {
     const file = path.join(dir, `tests/integration/${name}.test.mjs`)
@@ -126,6 +128,7 @@ test('CLI exact failure rerun, JSON, no-match, invalid arguments and node:test d
   await mkdir(path.join(dir, 'tests/unit'))
   await cp(path.join(root, 'tests/run-layer.mjs'), path.join(dir, 'tests/run-layer.mjs'))
   await cp(path.join(root, 'tests/helpers/runtime.mjs'), path.join(dir, 'tests/helpers/runtime.mjs'))
+  await cp(path.join(root, 'tests/helpers/ports.mjs'), path.join(dir, 'tests/helpers/ports.mjs'))
   await writeFile(path.join(dir, 'tests/unit/pass.test.mjs'), `import test from 'node:test'; test('pass',()=>{});`)
   await writeFile(path.join(dir, 'tests/unit/fail.test.mjs'), 'process.exit(9)')
   const runner = path.join(dir, 'tests/run-layer.mjs'), report = path.join(dir, 'report.json')
@@ -142,4 +145,71 @@ test('CLI exact failure rerun, JSON, no-match, invalid arguments and node:test d
   assert.equal((await execute(runner, ['unit', '--only', 'absent', '--list'])).code, 1)
   assert.equal((await execute(runner, ['unit', '--only'])).code, 2)
   assert.equal((await execute(runner, ['unit', '--timeout-ms', 'NaN'])).code, 2)
+})
+
+// Windows 的 TCP 动态端口范围从 1024 起（netsh int ipv4 show dynamicport tcp → start=1024 num=64511），
+// 所以 listen(0) 真会把 WHATWG/undici 的 “bad port”（1719 1720 1723 2049 3659 4045 4190 5060 5061 6000
+// 6566 6665-6669 6679 6697 10080）当作空闲端口发给我们；而 node 的 fetch（undici）对这批端口
+// 直接抛 TypeError: fetch failed（cause: bad port），一个 TCP 连接都不发。并发跑套件时分配落在这一段
+// 就是「偶发假红」：单跑不复现，全量并发时随机一条。
+
+test('port hygiene: dist ports stay fetchable, undici bad ports are never served', async (t) => {
+  const dir = await privateRoot(t)
+  await writeFile(path.join(dir, 'index.html'), 'private prebuilt')
+
+  // 1) 原始假红形态：绑在 bad-port 上的 dist，fetch 一个连接都不发就失败（这里是可复现的确定性版本）
+  await assert.rejects(
+    (async () => {
+      const served = await serveDist(dir, { port: 6566 })
+      try {
+        return await (await fetch(served.url)).text()
+      } finally {
+        await served.close()
+      }
+    })(),
+    /fetch failed|bad port/
+  )
+
+  // 2) 显式要一个 fetch 永远连不上的端口时必须当场拒绝，不能静默交出一个连不上的地址
+  const explicit = await serveDist(dir, { port: 6566 }).catch((error) => error)
+  if (explicit instanceof Error) {
+    assert.match(String(explicit.message), /bad port/)
+  } else {
+    await explicit.close()
+    assert.fail('serveDist handed out a port undici refuses (6566) instead of rejecting it')
+  }
+
+  // 3) 自动选端口：连续分配不得落在 bad-port 名单上
+  const picked = []
+  for (let i = 0; i < 400; i += 1) {
+    const served = await serveDist(dir)
+    picked.push(Number(new URL(served.url).port))
+    await served.close()
+  }
+  assert.deepEqual(
+    picked.filter((port) => FETCH_REFUSED_PORTS.has(port)),
+    []
+  )
+
+  // 4) 抽一个真实端口发请求：地址必须能连上并拿到内容
+  const served = await serveDist(dir)
+  try {
+    assert.equal(await (await fetch(served.url)).text(), 'private prebuilt')
+  } finally {
+    await served.close()
+  }
+})
+
+test('port helper discards bad ports handed out by the OS instead of serving them', async (t) => {
+  const dir = await privateRoot(t)
+  await writeFile(path.join(dir, 'index.html'), 'private prebuilt')
+  // 模拟系统连发两个 bad port：helper 必须丢掉重绑，最后交出的端口 fetch 真能连上。
+  const handed = [6566, 6668, 0]
+  const served = await serveDist(dir, { choosePort: (attempt) => handed[attempt] ?? 0 })
+  try {
+    assert.equal(FETCH_REFUSED_PORTS.has(Number(new URL(served.url).port)), false)
+    assert.equal(await (await fetch(served.url)).text(), 'private prebuilt')
+  } finally {
+    await served.close()
+  }
 })

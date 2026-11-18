@@ -3,6 +3,7 @@ import { mkdtemp, rm, access, readFile, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
+import { listenFetchablePort, listenFreePort } from './ports.mjs'
 
 // One invocation owns one directory and (on POSIX) one process group. Never pkill by name.
 export async function runCase(file, { cwd, timeoutMs = 180000, env = process.env, output = true } = {}) {
@@ -65,7 +66,7 @@ export async function requireDist(dir) {
   return resolved
 }
 
-export async function serveDist(dir, { port = 0 } = {}) {
+export async function serveDist(dir, { port = 0, choosePort } = {}) {
   const root = await requireDist(dir)
   const server = http.createServer(async (req, res) => {
     try {
@@ -78,11 +79,11 @@ export async function serveDist(dir, { port = 0 } = {}) {
       res.end(await readFile(file))
     } catch { res.writeHead(404).end() }
   })
-  await new Promise((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(Number(port), '127.0.0.1', resolve)
-  })
-  return { url: `http://127.0.0.1:${server.address().port}`, close: () => new Promise((resolve, reject) => {
+  // listen(0) 不等于「能连上」：Windows 的动态端口从 1024 起，会把 WHATWG/undici 的 bad port
+  // （6566 / 6666 / 6697 …）当空闲端口发出来，fetch 直接 cause: bad port —— 并发跑套件时的偶发假红。
+  const actualPort =
+    Number(port) === 0 ? await listenFreePort(server, { choosePort }) : await listenFetchablePort(server, port)
+  return { url: `http://127.0.0.1:${actualPort}`, close: () => new Promise((resolve, reject) => {
     server.close((error) => error ? reject(error) : resolve())
     server.closeAllConnections()
   }) }

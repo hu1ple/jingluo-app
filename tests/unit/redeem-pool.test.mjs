@@ -18,6 +18,7 @@ import { registerHooks } from 'node:module'
 import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
+import { FETCH_REFUSED_PORTS, listenFetchablePort, listenFreePort } from '../helpers/ports.mjs'
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -388,6 +389,47 @@ console.log('\n[9] 价格取 /api/plans；客户端不暴露图片 / 文件输�
   eq(ours.formatPlanMeta(state.plans[1], zh.oursPointsUnit), '¥39.00 · 3,900 积分', 'p2 价格来自服务端')
 }
 
+// Windows 的 TCP 动态端口范围从 1024 起（netsh int ipv4 show dynamicport tcp → start=1024 num=64511），
+// 所以 listen(0) 会把 WHATWG/undici 的 bad-port（6566 / 6665-6669 / 6679 / 6697 / 6000 / 5060 / 1719 …）
+// 当空闲端口发出来；而 node 的 fetch（undici）对这批端口直接抛 TypeError: fetch failed
+// （cause: bad port），一个 TCP 连接都不发。单跑不会撞上，六条 lane 并发才偶发 —— 假红的根。
+
+const realFetchTransport = (request) =>
+  fetch(request.url, { method: request.method, headers: request.headers, body: request.body }).then(
+    async (response) => ({ kind: 'response', status: response.status, text: await response.text() })
+  )
+
+const startStub = async ({ port = 0 } = {}) => {
+  const seen = []
+  const server = createServer((request, response) => {
+    let body = ''
+    request.on(
+      'data',
+      (chunk) => {
+        body += chunk
+      }
+    )
+    request.on('end', () => {
+      seen.push({ method: request.method, url: request.url, headers: request.headers, body })
+      if (request.url === '/redeem-card') {
+        response.writeHead(200, { 'Content-Type': 'application/json' })
+        response.end(
+          JSON.stringify({ ok: true, points: 300, quota_points: 300, remaining_points: 900, duplicate: false })
+        )
+        return
+      }
+      response.writeHead(404, { 'Content-Type': 'application/json' })
+      response.end(JSON.stringify({ error: { code: 'card_not_found', message: 'card not found' } }))
+    })
+  })
+  const actualPort = port === 0 ? await listenFreePort(server) : await listenFetchablePort(server, port)
+  return {
+    seen,
+    base: 'http://127.0.0.1:' + actualPort,
+    close: () => new Promise((resolve) => server.close(resolve)),
+  }
+}
+
 // ---------------------------------------------------------------- [10] 协议层 stub 服务器
 
 console.log('\n[10] 本地 stub 服务器：验证真实发出的报文（不是打真机/真服务）')
@@ -411,8 +453,7 @@ console.log('\n[10] 本地 stub 服务器：验证真实发出的报文（不是
       response.end(JSON.stringify({ error: { code: 'card_not_found', message: 'card not found' } }))
     })
   })
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const { port } = server.address()
+  const port = await listenFreePort(server)
   const base = `http://127.0.0.1:${port}`
 
   try {
@@ -449,6 +490,53 @@ console.log('\n[10] 本地 stub 服务器：验证真实发出的报文（不是
   }
 }
 
+
+// ---------------------------------------------------------------- [10b] 端口卫生
+
+console.log('\n[10b] stub 端口必须能被 fetch 使用；并发两份实例互不踩')
+{
+  // 1) 原始假红形态（修复前就这样红）：stub 落在 bad-port 6566 上，fetch 一个连接都不发就失败
+  let failure = null
+  try {
+    const stub = await startStub({ port: 6566 })
+    try {
+      await realFetchTransport({ url: stub.base + '/redeem-card', method: 'POST', headers: {}, body: '{}' })
+    } finally {
+      await stub.close()
+    }
+  } catch (error) {
+    failure = String(error.cause?.code ?? error.cause?.message ?? error.message)
+  }
+  truthy(failure !== null, '6566 在 bad-port 名单上，fetch 连不上（实测 ' + failure + '）')
+
+  // 2) startStub 不能把 fetch 永远连不上的地址交出去：显式要拒连端口必须当场拒绝
+  let rejected = null
+  try {
+    const stub = await startStub({ port: 6566 })
+    await stub.close()
+  } catch (error) {
+    rejected = String(error.message)
+  }
+  truthy(rejected !== null, '显式要拒连端口 6566 时直接拒绝，不发坏地址（' + rejected + '）')
+
+  // 3) 并发两份 stub：端口不同，同一时刻都能收发，互不踩
+  const [first, second] = await Promise.all([startStub(), startStub()])
+  try {
+    eq(first.base === second.base, false, '两份并发 stub 端口不同')
+    eq(FETCH_REFUSED_PORTS.has(Number(new URL(first.base).port)), false, 'stub 端口不在 fetch 拒连名单')
+    const [r1, r2] = await Promise.all([
+      invite.redeemCardAtPool({ cardNo: CARD, apiKey: KEY, baseUrl: first.base }, realFetchTransport),
+      invite.redeemCardAtPool({ cardNo: CARD, apiKey: KEY, baseUrl: second.base }, realFetchTransport),
+    ])
+    eq(r1.kind, 'success', '并发第一份 stub 跑通')
+    eq(r2.kind, 'success', '并发第二份 stub 跑通')
+    eq(first.seen.length, 1, '第一份 stub 只收到自己那一个请求')
+    eq(second.seen.length, 1, '第二份 stub 只收到自己那一个请求')
+  } finally {
+    await first.close()
+    await second.close()
+  }
+}
 // ---------------------------------------------------------------- i18n 完整性
 
 console.log('\n[11] i18n：新 key 中英齐全，既有 key 未被改写')

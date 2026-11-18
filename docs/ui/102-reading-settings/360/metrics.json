@@ -1,0 +1,66 @@
+{
+  "page": "reading-settings",
+  "title": "#102 设置 → 通用设置 → 阅读设置：三个下拉的渲染，默认档与最大档的文字渲染对比",
+  "viewport": 360,
+  "size": "360×740",
+  "shots": [
+    "docs/ui/102-reading-settings/360/reading-settings-01-message-default-360.png",
+    "docs/ui/102-reading-settings/360/reading-settings-02-settings-reading-default-360.png",
+    "docs/ui/102-reading-settings/360/reading-settings-03-settings-size-dropdown-open-360.png",
+    "docs/ui/102-reading-settings/360/reading-settings-04-settings-weight-dropdown-open-360.png",
+    "docs/ui/102-reading-settings/360/reading-settings-05-settings-lineheight-dropdown-open-360.png",
+    "docs/ui/102-reading-settings/360/reading-settings-06-settings-reading-max-360.png",
+    "docs/ui/102-reading-settings/360/reading-settings-07-message-max-360.png"
+  ],
+  "notes": [],
+  "before": {
+    "attributes": {
+      "size": "standard",
+      "weight": "regular",
+      "line": "standard"
+    },
+    "sample": {
+      "fontSize": "16px",
+      "fontWeight": "400",
+      "lineHeight": "28px",
+      "color": "rgb(15, 17, 21)",
+      "width": 320,
+      "height": 20
+    },
+    "host": null,
+    "documentScrollWidth": 360,
+    "viewportWidth": 360,
+    "overflowCount": 0,
+    "overflowSamples": []
+  },
+  "triggersAfterPick": {
+    "size": "特大",
+    "weight": "粗体",
+    "line": "宽松"
+  },
+  "after": {
+    "attributes": {
+      "size": "xlarge",
+      "weight": "bold",
+      "line": "relaxed"
+    },
+    "sample": {
+      "fontSize": "20px",
+      "fontWeight": "600",
+      "lineHeight": "40.8px",
+      "color": "rgb(15, 17, 21)",
+      "width": 320,
+      "height": 65.8
+    },
+    "host": {
+      "scrollWidth": 360,
+      "clientWidth": 360,
+      "horizontalOverflow": false
+    },
+    "documentScrollWidth": 360,
+    "viewportWidth": 360,
+    "overflowCount": 0,
+    "overflowSamples": []
+  },
+  "consoleErrors": []
+}

@@ -1,0 +1,27 @@
+{
+  "page": "payment-records",
+  "title": "#115 设置 → 数据管理 → 付款记录：入口与弹层（当前无订单，只截空状态）",
+  "viewport": 360,
+  "size": "360×740",
+  "shots": [
+    "docs/ui/115-payment-records/360/payment-records-01-settings-data-entry-360.png",
+    "docs/ui/115-payment-records/360/payment-records-02-payment-records-360.png",
+    "docs/ui/115-payment-records/360/payment-records-03-payment-records-closeup-360.png"
+  ],
+  "notes": [],
+  "dialog": {
+    "layers": 2,
+    "text": "付款记录\n累计已支付\n¥0.00\n还没有付款记录。购买套餐并付款后，这里会列出每一笔订单。\n刷新",
+    "box": {
+      "x": 16,
+      "y": 247,
+      "width": 328,
+      "height": 246
+    }
+  },
+  "state": {
+    "empty": true,
+    "error": false
+  },
+  "consoleErrors": []
+}

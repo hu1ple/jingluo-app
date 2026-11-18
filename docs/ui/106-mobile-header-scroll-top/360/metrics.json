@@ -1,0 +1,73 @@
+{
+  "page": "header-scroll-top",
+  "title": "#106 移动端顶栏：「双击回顶」提示、44px 点击区、双击后回到首条消息",
+  "viewport": 360,
+  "size": "360×740",
+  "shots": [
+    "docs/ui/106-mobile-header-scroll-top/360/header-scroll-top-01-topbar-scrolled-to-bottom-360.png",
+    "docs/ui/106-mobile-header-scroll-top/360/header-scroll-top-02-topbar-closeup-360.png",
+    "docs/ui/106-mobile-header-scroll-top/360/header-scroll-top-03-after-double-tap-first-message-360.png",
+    "docs/ui/106-mobile-header-scroll-top/360/header-scroll-top-04-after-double-tap-closeup-360.png"
+  ],
+  "notes": [],
+  "messageHost": {
+    "found": true,
+    "scrollTop": 6914,
+    "scrollHeight": 7460,
+    "clientHeight": 546
+  },
+  "headerAtBottom": {
+    "found": true,
+    "hitArea": {
+      "width": 228,
+      "height": 44
+    },
+    "ariaLabel": "回到首条消息（双击标题）",
+    "hint": {
+      "text": "双击回顶",
+      "width": 52,
+      "visible": true,
+      "color": "rgb(173, 178, 184)",
+      "fontSize": "13px"
+    },
+    "title": {
+      "text": "截图-长会话-回顶",
+      "width": 158,
+      "fontSize": "14px",
+      "truncated": false
+    },
+    "scrollTop": 6914,
+    "scrollHeight": 7460,
+    "clientHeight": 546
+  },
+  "doubleTapScroll": {
+    "before": 6914,
+    "after": 0,
+    "reachedTop": true
+  },
+  "headerAtTop": {
+    "found": true,
+    "hitArea": {
+      "width": 228,
+      "height": 44
+    },
+    "ariaLabel": "回到首条消息（双击标题）",
+    "hint": {
+      "text": "双击回顶",
+      "width": 52,
+      "visible": true,
+      "color": "rgb(173, 178, 184)",
+      "fontSize": "13px"
+    },
+    "title": {
+      "text": "截图-长会话-回顶",
+      "width": 158,
+      "fontSize": "14px",
+      "truncated": false
+    },
+    "scrollTop": 0,
+    "scrollHeight": 7494,
+    "clientHeight": 546
+  },
+  "consoleErrors": []
+}

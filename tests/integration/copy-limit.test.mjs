@@ -21,14 +21,17 @@
 //   上述两项必须在已预约设备上用 adb logcat 取证，不能以本脚本的浏览器结果替代。
 import { execFileSync, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
+import { serveDir, verifyAppUrl } from '../helpers/env.mjs'
+
+const require = createRequire(import.meta.url)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, '../..')
-const PORT = process.env.PORT || '5296'
-const APP_URL = process.env.APP_URL || `http://127.0.0.1:${PORT}`
+let APP_URL = process.env.APP_URL || ''
 const LIMIT = 512 * 1024
 /** 与 src/services/chat/db.ts 的 DB_VERSION 保持一致；fixture 建库结构必须与之一致。 */
 const DB_VERSION = 12
@@ -50,13 +53,21 @@ const expect = (condition, message, detail) => {
 }
 
 // ---------- 0) 被测产物 + 静态服务 ----------
-let distDir = process.env.DIST_DIR || path.join(ROOT, 'dist')
+// 默认用本用例自己的标准产物：`dist/` 里常是内测包（<768px 布局差异会干扰），别混用
+let distDir = process.env.DIST_DIR_STANDARD || path.join(ROOT, 'dist-copy-limit')
 if (!existsSync(path.join(distDir, 'index.html'))) {
   distDir = path.join(ROOT, 'dist-copy-limit')
   console.log('· 构建被测产物到 dist-copy-limit（DIST_OUT=dist-copy-limit）…')
+  // Windows 上 node_modules/.bin/rspack 是无扩展名的 sh 脚本，execFileSync 直接 spawn 会 ENOENT；
+  // 用当前 node 跑 @rspack/cli 的 bin 入口（跨平台一致）。
+  const rspackCli = path.join(
+    path.dirname(require.resolve('@rspack/cli/package.json')),
+    'bin',
+    'rspack.js'
+  )
   execFileSync(
-    path.join(ROOT, 'node_modules', '.bin', 'rspack'),
-    ['build', '-c', 'rspack.config.ts'],
+    process.execPath,
+    [rspackCli, 'build', '-c', 'rspack.config.ts'],
     {
       cwd: ROOT,
       env: { ...process.env, NODE_ENV: 'production', DIST_OUT: 'dist-copy-limit' },
@@ -65,11 +76,10 @@ if (!existsSync(path.join(distDir, 'index.html'))) {
   )
 }
 
-const server = spawn(
-  'python3',
-  ['-m', 'http.server', PORT, '--bind', '127.0.0.1', '--directory', distDir],
-  { cwd: ROOT, stdio: 'ignore' }
-)
+// 端口自动分配（不再固定 5296：撞到别的进程会连到陌生产物 → 假红）
+const served = await serveDir(distDir, { port: process.env.PORT, label: '被测产物' })
+APP_URL = APP_URL || served.url
+await verifyAppUrl(APP_URL, distDir, { variant: 'standard' })
 const waitForServer = async () => {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     try {
@@ -347,7 +357,7 @@ try {
   console.error(`  ✗  用例中断（后续场景未执行）：${reason}`)
 } finally {
   await browser.close()
-  server.kill()
+  served.kill()
 }
 
 console.log(`\n共 ${checks} 项断言`)

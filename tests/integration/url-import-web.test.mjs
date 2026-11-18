@@ -89,14 +89,18 @@ const run = async () => {
   console.log('\n[web 2] 回归：本地文件上传仍可用')
   const dir = await mkdtemp(path.join(tmpdir(), 'deepseek-archive-'))
   const zipPath = path.join(dir, 'deepseek_data.zip')
-  await writeFile(zipPath, buildArchiveZip({ title: SESSION_TITLE }))
+  // 夹具参数是 titlePrefix（archive-fixture.mjs），过去传 title 会被静默忽略 →
+  // 会话标题落成默认的「链接导入测试会话 01」，后面按 SESSION_TITLE 找侧栏必然找不到。
+  await writeFile(zipPath, buildArchiveZip({ titlePrefix: SESSION_TITLE }))
   check('上传前会话数 = 0', (await sessionCount(page)) === 0)
   await page.locator('input[type="file"][accept*="zip"]').setInputFiles(zipPath)
   const confirmDialog = page.getByRole('dialog', { name: /确认导入历史对话/ })
   await confirmDialog.waitFor({ timeout: 5000 })
   await page.screenshot({ path: `${SHOT_DIR}1.4.0-beta.2-url-import-web-confirm.png` })
   await confirmDialog.getByRole('button', { name: '确认导入', exact: true }).click()
-  await page.getByText('已导入 1 个对话').waitFor({ timeout: 30000 })
+  // 文案契约（src/i18n/zh.ts）：1.4.0-beta.8 起「已导入 N 个对话」→「已导入 N 个会话」，
+  // 这里兼容两种措辞，避免每次改词都假红。
+  await page.getByText(/已导入 1 个(对话|会话)/).waitFor({ timeout: 30000 })
   check('上传导入后会话数 = 1', (await sessionCount(page)) === 1)
   check('侧栏出现导入的会话', (await page.getByText(SESSION_TITLE).count()) > 0)
 

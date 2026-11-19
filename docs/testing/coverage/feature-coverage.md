@@ -315,12 +315,12 @@
 | `stop-and-regenerate.test.mjs`：流到一半点停止 → 点重新生成；表驱动断言请求次数/内容保留/版本可切回 | L1 | 是（2 组 × 3 行） | F2-03 F2-04 F2-02 | 6 | — | 2 |
 | `reply-error-ui.test.mjs`：`page.route` 一张表回放 401/429/502/上下文超长/断流/空闲超时/额度不足，逐行断言「文案 + 请求次数 + 是否可重试 + 出口动作」 | L1 | 是（7 行） | F2-05 F2-06 F2-07 F2-08 F2-09 | 7 | — | 2 |
 | `wait-and-thinking-ui.test.mjs`：慢响应 + 假时钟，一张表跑「5/30/60s 提示」与「折叠/展开/隐藏」两组状态 | L1 | 是（2 组 × 3 行） | F2-10 F2-11 | 6 | — | 2 |
-| **N3-A** `tests/unit/provider-config-matrix.test.mjs` | L0 | 是（12 行） | F3-01 F3-08 F3-09 F3-13 | 12 | 无（本身就是 8 个纯函数分支的合并体） | 3 |
-| **N3-B** `tests/unit/provider-probe-matrix.test.mjs` | L1 | 是（14 行） | F3-03 F3-05 F3-06 F3-07 | 14 | 下沉不了 L0：`probeProvider` 有 `Capacitor.isNativePlatform()` 双传输分支；上浮不了 L2：DOM 只呈现一句话，读不出六档 `reason` | 3 |
-| **N3-C** `tests/integration/settings-probe-model.test.mjs` | L1（原文标 L2） | 是（10 行 / 4 场景） | F3-05 F3-06 F3-07 F3-08 F3-13 | 10 | `describeProbe` 是组件内 `const`，下沉 L0 需先 `export`（= 改源码）；本单边界内唯一合法落点是真 DOM 表驱动 | 3 |
-| **N4-A** `tests/unit/session-crud-matrix.test.mjs` | L1 | 是（14 行） | F4-01 F4-03 F4-04 F4-05 | 14 | 上浮不了 L2：L2 注入不了「落盘失败」「流式中删除」这两种状态，而它们正是资损与白屏来源 | 4 |
-| **N4-B** `tests/unit/session-load-matrix.test.mjs` | L1 | 是（9 行） | F4-02 F4-06 F4-09 | 9 | 合不进 N4-A：需 never-resolve / 按 id 抛错的假 db 语义，与 CRUD 的同步状态断言不同构 | 4 |
-| **N4-C** `tests/integration/session-list-flow.test.mjs` | L1（原文标 L2） | 是（11 行 / 2 场景） | F4-01 F4-02 F4-03 F4-04 F4-05 F4-07 F4-09 | 11 | 合不进 N4-A/B：菜单、弹窗、刷新后持久化只能在真 DOM + 真 IndexedDB 验证；不再拆细（一次启动跑完闭环比 7 条小用例省 6 次浏览器启动） | 4 |
+| **N3-A** `tests/unit/domain03-provider-config-matrix.test.mjs` | L0 | 是（12 行） | F3-01 F3-08 F3-09 F3-13 | 12 | 无（本身就是 8 个纯函数分支的合并体） | 3 |
+| **N3-B** `tests/unit/domain03-provider-probe-matrix.test.mjs` | L1 | 是（14 行） | F3-03 F3-05 F3-06 F3-07 | 14 | 下沉不了 L0：`probeProvider` 有 `Capacitor.isNativePlatform()` 双传输分支；上浮不了 L2：DOM 只呈现一句话，读不出六档 `reason` | 3 |
+| **N3-C** `tests/integration/domain03-settings-probe-model.test.mjs` | L1（原文标 L2） | 是（10 行 / 4 场景） | F3-05 F3-06 F3-07 F3-08 F3-13 | 10 | `describeProbe` 是组件内 `const`，下沉 L0 需先 `export`（= 改源码）；本单边界内唯一合法落点是真 DOM 表驱动 | 3 |
+| **N4-A** `tests/unit/domain04-session-crud-matrix.test.mjs` | L1 | 是（14 行） | F4-01 F4-03 F4-04 F4-05 | 14 | 上浮不了 L2：L2 注入不了「落盘失败」「流式中删除」这两种状态，而它们正是资损与白屏来源 | 4 |
+| **N4-B** `tests/unit/domain04-session-load-matrix.test.mjs` | L1 | 是（9 行） | F4-02 F4-06 F4-09 | 9 | 合不进 N4-A：需 never-resolve / 按 id 抛错的假 db 语义，与 CRUD 的同步状态断言不同构 | 4 |
+| **N4-C** `tests/integration/domain04-session-list-flow.test.mjs` | L1（原文标 L2） | 是（11 行 / 2 场景） | F4-01 F4-02 F4-03 F4-04 F4-05 F4-07 F4-09 | 11 | 合不进 N4-A/B：菜单、弹窗、刷新后持久化只能在真 DOM + 真 IndexedDB 验证；不再拆细（一次启动跑完闭环比 7 条小用例省 6 次浏览器启动） | 4 |
 | **N1(5)** 下载状态机表（复用现有 `url-harness` stub） | L0 | 是（11 行） | F-05-02 03 04 05 06 07 22 | 11 | 与 N2 不可合并：N1 观察「下载层状态与请求序列」，N2 观察「分类器输出与文案」，桩不同层 | 5 |
 | **N2(5)** 失败档位矩阵表 | L0 | 是（14 行） | F-05-08（8 类 + 403 三档 + 非原生平台） | 14 | 同上；且纯函数 + 文案断言，不需要网络桩 | 5 |
 | **N3(5)** 归档失败矩阵表 | L0 | 是（16 行） | F-05-13 14 15 16 17 19 18 | 16 | 与 N5 不可合并：N3 断言「整包被拒」，N5 断言「跳过 N 条、其余照常入库」，期望相反 | 5 |
@@ -382,7 +382,7 @@
 | P0-2 | **F9-11** | 9 | 迁移只覆盖 #339 单场景，**没有**「schema 升级只删白名单内键」的结构性不变量 | `config-migration` 6 例全是 schema 1→2；升到 3 时无断言兜底，配置破坏不可回滚 | L0 | **N3(8)** |
 | P0-3 | **F9-12** | 9 | 「删除所有对话」及清数据后的保留口径**零断言** | `deleteAllSessions` 在 `tests/**` 0 命中；设备码被清 = 丢账号（域 8 原标 P1，本表因「丢账号」上调至资损档） | L1 | **N7(8)**（必须单列） |
 | P0-4 | **F4-05** | 4 | 删除会话整链零覆盖（确认弹窗/删当前会话回空态/中止流/清理原件与草稿/失败提示） | `grep -rln "removeSession" tests/` 无命中；两个文案 0 断言 | L1 + L2 | **N4-A / N4-C** |
-| P0-5 | **F-05-23** | 5 | 导出 ZIP 全链路**零测试**（导出是唯一「用户把数据带走」的入口） | `grep -rln "exportHistory\|exportArchive\|zipWriter\|writeArchive" tests/` 只命中 `tests/fixtures/archive-fixture.mjs`（独立用 `fflate` 造包，**不经过生产导出代码**） | L0 + L1 | **N6(5) / N7(5) / N9(5)** |
+| P0-5 | **F-05-23** | 5 | 导出 ZIP 全链路**零测试**（导出是唯一「用户把数据带走」的入口） | `grep -rln "exportHistory\|exportArchive\|zipWriter\|writeArchive" tests/` 只命中 `tests/fixtures/domain05/archive-fixture.mjs`（独立用 `fflate` 造包，**不经过生产导出代码**） | L0 + L1 | **N6(5) / N7(5) / N9(5)** |
 | P0-6 | **F-05-28** | 5 | 导出 → 导入往返一致性零覆盖 | `archive-fixture-roundtrip` 是「夹具→导入」单向，不经过导出 | L0 | **N6(5)** |
 | P0-7 | **F-05-30** | 5 | 配额耗尽只有 `console.error`，无文案无降级无测试 | `grep -rn "QuotaExceeded\|ENOSPC" src` 无命中；导入失败会冒成通用「导入失败」 | L0 + L1 | **N8(5)** |
 | P0-8 | **F-05-31** | 5 | 进程被杀后的孤儿暂存清理零断言 | `clearStaging()` 只在其它测试的 stub 里出现，未被断言；半导入的用户感知是「会话变少了」 | L0 | **N8(5)** |

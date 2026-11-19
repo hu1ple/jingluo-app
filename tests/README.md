@@ -12,7 +12,9 @@ tests/
 ├── e2e/           2 个：真上游 + 真 UI（要 API Key）/ 真实反馈后端
 ├── device/        1 个：Android 模拟器或真机（adb）
 ├── golden/         4 个：黄金回归——每域 1 条主路径，真 dist + stub 后端，合计 ~6s（#404）
-├── fixtures/      mock 服务与样本数据（不是测试，被上面引用）
+├── fixtures/      mock 服务与样本数据（不是测试，被上面引用）；**根目录只放目录不放假夹**：
+│                  按域分 `fixtures/<域>/`（domain01-02 / domain03-04 / … / domain10），
+│                  外加三类跨域替身目录 chat-stubs / url-import-stubs / import-archive-stubs（#408）
 ├── helpers/       共享装配：单元层 dom-env.mjs（.js→.ts + 替身），集成层 runtime/env/ports，黄金层 golden.mjs
 ├── tools/         手工用的一次性脚本（不是测试，不参与分层执行）
 ├── run-layer.mjs  分层 runner（串行；本文件是唯一入口）
@@ -216,7 +218,7 @@ E2E_API_KEY=sk-xxx npm run test:e2e               # 真上游握手（发版前�
 | `tests/test.diagnostics-e2e.spec.mjs` | `tests/e2e/diagnostics-upload.test.mjs` |
 | `tests/e2e-real-upstream.spec.mjs` | `tests/e2e/real-upstream.test.mjs` |
 | `tests/run-acceptance.mjs`（36KB 巨型套件） | `tests/integration/full-acceptance.test.mjs` |
-| `tests/helpers.mjs` / `archive-fixture.mjs` / `mock-anthropic.mjs` | `tests/helpers/helpers.mjs` / `tests/fixtures/archive-fixture.mjs` / `tests/fixtures/mock-anthropic.mjs` |
+| `tests/helpers.mjs` / `archive-fixture.mjs` / `mock-anthropic.mjs` | `tests/helpers/helpers.mjs` / `tests/fixtures/domain05/archive-fixture.mjs` / `tests/fixtures/domain03-04/mock-anthropic.mjs` |
 | `tests/package.json`（自带 playwright 依赖） | 删除，依赖统一由根 `package.json` 提供 |
 
 ---
@@ -239,5 +241,8 @@ E2E_API_KEY=sk-xxx npm run test:e2e               # 真上游握手（发版前�
 | `tests/domain-map.json` | 改动路径 glob → 用例文件 glob，10 个域（对齐 `docs/testing/coverage/domain-*.md`） |
 | `tests/fast-subset.json` | `test:fast` 排除的 20 个最慢单元文件 + 逐条理由（它们仍在 `pnpm test` / `test:full` 里跑） |
 | `tests/timing-baseline.json` | 各层上次实测耗时/用例数（只由 `test:report --measure` 写，供看板引用） |
+| `tests/test-layout-baseline.json` | 布局门禁的存量豁免清单（**只减不增**，#408 后已清空：命名 / 孤儿 / 落位 / fixture 散放全 0） |
+| `tests/test-duplication-baseline.json` | 逐字重复门禁的存量豁免清单（21 组，#408 起从 32 组降下来；新组不许进，抽掉一组删一条） |
+| `tests/test-duplication-whitelist.json` | 允许长期存在的跨层重复（必须写 reason），R1 组 / R2 topic / R3 title 三种键 |
 
 使用场景与判红口径见 `docs/TESTING-POLICY.md` 第 10 节。

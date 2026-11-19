@@ -23,6 +23,7 @@
     "check:legacy": "node scripts/check-bundle-syntax.mjs",
     "check:matrix": "node scripts/compat/matrix-scan.mjs",
     "check:ip": "node scripts/check-hardcoded-ip.mjs",
+    "check:identity": "node scripts/check-identity.mjs",
     "check:icon": "node scripts/check-icon-edges.mjs",
     "check:apk": "node scripts/check-apk-debuggable.mjs",
     "check:keystore": "node scripts/check-keystore-config.mjs",

@@ -28,19 +28,21 @@ pnpm run test:golden              # = node tests/run-golden.mjs（并行 + 每�
 | 更新 | 检查 → 解析清单 → 选对版本 → 下载校验 | `g10-update.test.mjs` | `services/updateManifest.ts`、`components/settings/AppUpdateField.tsx` |
 | 账户与消费 | JWT 登录 → 读余额 → 兑换卡密 → 余额变化（+ 冷启动续期）；mock 驱动 | `g12-consume.test.mjs` | `services/auth/{store,transport}.ts`、`services/consume/{auth,usage,redeem}.ts` |
 | 文档附件 | 选 tiny.txt → 卡片 success → 发送「帮我总结」→ 收到回复（顺带 docx/pdf 只断非空正文 + 表格/页码标记） | `g13-documents.test.mjs` ✅（A 线 #480 落地，#567 的 g13） | `services/attachments/parsers/{txt,docx,pdf}.ts`、`attachments/{manager,inject,providerCapability,requestDocs}.ts`、`attachments/contextBuilder.ts`（buildWithDocuments）、`components/attachments/*`（卡片五态）、`chat/{store,reply}.ts`（请求组装） |
-| 图片 vision | 附 1 张 png → vision 请求带图 → 收到回复 | `g14-vision.test.mjs`（待 B 线 #548 落地） | `services/attachments/*`（图片编码 / 注入）、`services/api/providers.ts` |
+| 图片 vision | 附 1 张 png → 内联编码 → 发一条消息（三渠道形状不同、图片字节相同） | `g14-vision.test.mjs` ✅（B 线 #548 落地） | `services/attachments/imageSource.ts`（编码）、`chat/drafts.ts`（选图编码 / 就绪态）、`chat/reply.ts`（内联块）、`api/openaiAdapter.ts`（data URL 翻译） |
 | 支付/购买 | 打开「账户与消费」→ 套餐列表 → 下单（`/api/pay-link`）→ 回跳 → 卡密 → 一键复制 | `g15-purchase.test.mjs` | `components/consume/{AccountConsumePage,BuyTab,MyCardsTab}.tsx`、`services/ours/{api,purchases,transport}.ts`、`components/consume/quotaPanelModel.ts`（额度口径） |
 
-> **「待 … 落地」的行是占位**（#567 定了三主线各补一条黄金：A 文档附件 g13 / B 图片 vision g14 /
-> C 购买 g15）。本仓现在 `g15`（购买）与 **`g13`（文档附件）已落地**，只剩 `g14`（图片 vision）待
-> B 线 #548；它要用的最小真二进制夹具已经先备好（见下面「夹具怎么用」），写用例的人不用再从零造文件。
+> **三条黄金哨兵都已落地**（#567 定的三主线各一条：A 文档附件 g13 / B 图片 vision g14 / C 购买 g15）：
+> `g13`（A 线 #480）、`g15`（C 线购买）、**`g14`（B 线 #548，随本次合并进 main）** 全部在树上并有 ✅ 判定。
+> 它们要用的最小真二进制夹具见下面「夹具怎么用」。
 
 对应关系按「**改动落在哪就至少跑那一条**」用，不是穷举：动了 `src/services/chat/` 就跑 G1/G2/G4/G5/G6，
 动了设置面板/渠道就跑 G3/G5/G6/G9/G10（`g11` 邮箱见 `tests/golden/g11-email.test.mjs`），
 动了 `src/components/consume/**` 或 `src/services/ours/**`（套餐 / 下单 / 卡密 / 额度口径）就跑 **G15**，
-动了 `src/services/attachments/**` 或 `src/components/attachments/**`（文档解析 / 注入 / 卡片）就跑 **G13**。
-拿不准就 `pnpm run test:golden` 全跑 —— 11 条约 14 秒（g12 单独约 0.9s，自带 mock，不需要 dist；
-g13 单跑约 1.2s、4 并发整层里约 3.9s；g15 约 1.7s）。
+动了 `src/services/attachments/**` 或 `src/components/attachments/**`（文档解析 / 注入 / 卡片）就跑 **G13**，
+动了图片那条通路（`attachments/imageSource.ts`、`chat/drafts.ts` 的选图编码、`chat/reply.ts` 的 `toFileBlocks`
+内联块、`api/openaiAdapter.ts` 的 data URL 翻译）就跑 **G14**（文档与图片是同目录的两条独立通路，各跑各的）。
+拿不准就 `pnpm run test:golden` 全跑 —— 12 条约 18 秒（g12 单独约 0.9s，自带 mock，不需要 dist；
+g13 单跑约 1.2s、4 并发整层里约 3.9s；g14 约 4.3s；g15 约 1.7s）。
 
 > **购买域的黄金回归换过人（W1-D #487 → #567）**：老的 `g07-quota-purchase.test.mjs` 跟着旧额度/邀请体系
 > 一起删了 —— 它断言的「领取 → 刷新 → 兑换」走的是 `device_id` + 本机池那条整条被替换的链路。
@@ -63,6 +65,22 @@ g13 单跑约 1.2s、4 并发整层里约 3.9s；g15 约 1.7s）。
 **现在页面外壳已经合并**（`AuthGate` 已挂、账户页已在 dist 里），但 g12 仍然保留 mock 驱动的写法：
 它守的是**消费层链路**（登录 / 余额 / 兑换），而「点按钮」那条用户路径由 **G15** 从 dist 里点
 （账户与消费 → 卡密 / 购买 / 额度三个 tab 都在 G15 与 g12 的覆盖范围内，两条不重复断言）。
+
+### g14「图片 vision」为什么抓请求体、而不是看界面
+
+图片比纯文本多一段「本地编码 → 内联进请求体」的链路（`imageSource.ts` 编码 → 草稿就绪态 →
+`store.prepareInlineImages` → `reply.toFileBlocks` → `openaiAdapter` 翻成 data URL）。**任何一环接错，
+界面上都不会红**：文字照发、回复照收，只是模型看不见图（发出去是一张空图也一样绿）。所以这一条
+不看界面长什么样，直接把真浏览器发出去的请求体抓下来按**字节**钉三件事：
+
+1. 图片在请求体里，且 `media_type` / data URL 前缀是 `image/png`；
+2. 这份 base64 **逐字等于** `tests/fixtures/golden/tiny.png`（阈值内原图直发，一个字节不改）；
+3. 把它解回像素是 8×8 纯色 `#3366cc`（「有段 base64」不算过，能出图才算）。
+
+三渠道（anthropic / openai / ours）各跑一次：**形状不同**（`{type:'image', source:{type:'base64'…}}`
+vs `{type:'image_url', image_url:{url:'data:…'}}`）、**字节相同**。渠道配置用 localStorage 预置
+（`provider-kind` + `api-key` + 自填渠道的 `base-url:<kind>` / `model:<kind>`），上游用 `page.route`
+拦成两套 SSE —— 「切渠道」本身归 G3，这里不重复。
 
 ## 夹具怎么用（`tests/fixtures/golden/`）
 
@@ -237,3 +255,33 @@ DOCX/PDF 那一步约 0.8s）；4 并发整层里约 3.9s。整层对账：加 G
 > `DOCUMENT_FOOTER` 拼块，只有无预算的 `injectDocuments()` 才用 `documentBlock()`）。改成污染
 > `contextBuilder` 的块正文后立刻红。谁要动「块怎么拼」，改这两处**必须一起想**，而 G13 钉的是
 > **请求主路径**那一处。
+
+## 第五批（#548）：图片 vision 主路径 G14
+
+B 线（#548）的黄金哨兵，与第四批的 G13 **并行**（同目录、两条独立通路：文档走文本注入，图片走内联/`file_id`）。
+**钉的是「选图 → 本地编码 → 内联进请求体 → 三渠道各自翻译 → 回复」这条整链路**：
+
+```
+输入区「图片」→ 选 tiny.png
+  → imageSource.toImagePart()（阈值内原图直发，阈值外 canvas 重编码 webp）
+  → 草稿就绪态 status:'inline'（无 serverId，不进 Files API）
+  → 发送 → store.prepareInlineImages → reply.toFileBlocks(files, vision)
+  → anthropic {type:'image', source:{type:'base64'}} / openai {type:'image_url'} / ours 自有形状
+  → POST /messages（page.route 拦下的 SSE）→ 回复上屏
+```
+
+只断三件事（上面「g14 为什么抓请求体」已经说明为什么按字节断）：图片在请求体里且媒体类型对、
+这份 base64 逐字等于 `tests/fixtures/golden/tiny.png`、解回像素是 8×8 纯色 `#3366cc`。
+
+| 域 | 黄金路径 | 用例 | 状态 |
+| --- | --- | --- | --- |
+| 图片 vision | 附 1 张 png → 内联编码 → 发一条消息（三渠道形状不同、字节相同） | `g14-vision.test.mjs` | ✅ |
+
+实测（2026-11-20，本机，标准产物 + `TEST_AUTH_SEAM=1`）：G14 约 4.3s（7 步，三渠道各一次）；
+整层 12 条 4 并发**墙钟 18.0s**（预算 300s）。
+
+负向验证（人为破坏一次、确认变红后再还原）：
+
+| 用例 | 破坏方式 | 红在哪一句 |
+| --- | --- | --- |
+| G14 | `reply.ts` 的 `toFileBlocks` 不再产出内联图片块（`const part = undefined && imagePartOf(id)`） | 「请求体里带上了图片 · 实际=user content="这张图是什么颜色？"」（三渠道第一站就红） |

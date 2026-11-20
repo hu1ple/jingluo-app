@@ -36,7 +36,7 @@
 
 | 能力 | DeepSeek 官方 | Anthropic 协议 | OpenAI 兼容 |
 | --- | --- | --- | --- |
-| 基础文本对话 | ✅可用 —— `POST /anthropic/v1/messages`，`system` + `messages` 直发，`x-api-key` 鉴权（`providers.ts` 的 `SPECS`、`client.ts:276-285`） | ✅可用 —— 路径换 `/v1/messages`，正文链路一字不改，只剥私有字段（`providers.ts:225`、`tests/integration/full-acceptance.test.mjs`（第 7 组：anthropic `/v1/*` + 字段剥离）） | ✅可用 —— `POST /v1/chat/completions` + `Bearer`，请求体经 `toOpenAIRequest` 翻译（`providers.ts:136`、`openaiAdapter.ts:71-94`） |
+| 基础文本对话 | ✅可用 —— `POST /anthropic/v1/messages`，`system` + `messages` 直发，`x-api-key` 鉴权（`providers.ts` 的 `SPECS`、`client.ts:276-285`） | ✅可用 —— 路径换 `/v1/messages`，正文链路一字不改，只剥私有字段（`providers.ts:225`、`tests/integration/full-acceptance.test.mjs`（第 7 组：anthropic `/v1/*` + 字段剥离）） | ✅可用 —— `POST /v1/chat/completions` + `Bearer`，请求体经 `toOpenAIRequest` 翻译（`providers.ts:136`、`openaiAdapter.ts:162-202`） |
 | 流式输出 | ✅可用 —— 原生 SSE，`readServerSentEvents` → `readMessageEvent` 逐事件消费（`client.ts` 的 `readServerSentEvents`） | ✅可用 —— 与 DeepSeek 走同一段 `streamMessage`，1.2.3 起就是纯透传（`client.ts` 的 `streamMessage`） | ✅可用 —— 翻译器把 chunk 转成严格合法的 `content_block_delta` 序列，断流也会补 `message_stop`（`openaiAdapter.ts:237-337`） |
 | 深度思考 | ✅可用 —— 请求带 `thinking:{type:'enabled'}`，字段发不发由 `requestBody.ts` 的 `buildMessageBody()` 按 `gates.reasoning_param` 判定，思考块按 `thinking_delta`/`signature_delta` 累积（`reply.ts:103-108`） | ✅可用 —— 同一个开关，另自动补 `budget_tokens:4096`（真 Anthropic 必填，`requestBody.ts` 的 `gates.thinking_budget` 分支、`providers.ts:128`） | ⚠️按档位 —— 出厂 `reasoningParam:'none'`：`caps.thinking=false`，入口仍常驻（#341：可点、只改本地档位，`data-thinking-effective=false`），请求里一个思考字段都不加（与 1.3.0 一致）。渠道改成 `'reasoning_effort'` 则发 `reasoning_effort:'low'|'medium'|'high'`，改成 `'thinking_enabled'` 则发 `thinking:{type:'enabled'}`；非法档位按 `none` fail-closed（`providers.ts` 的 `reasoningParamOf()` / `thinkingAvailable()`、`openaiAdapter.ts` 的 `reasoningFields()`、`ThinkingToggle.ts`） |
 | 联网搜索 | ✅可用 —— `tools` 里带 `deepseek_web_search`，结果块渲染成搜索面板与正文角标（`store.ts` 的 `serverTools()` + `gates.tools`、`view.ts:197-205`、`SearchPanel.tsx:9-35`） | ❌不可用 —— 上游没接口（中转基本不实现 `deepseek_web_search`）：`gates.tools=false`，不发 `tools`，开关也不渲染（`providers.ts` 的 `caps.search` + `gates.tools`、`ChatInput.tsx:229-242`） | ❌不可用 —— 既无 `tools`（`gates.tools=false`）也没有等价的服务端搜索协议（`providers.ts` 的 `caps.search` / `gates.tools`） |
@@ -99,7 +99,7 @@
 
 ### 2.4 服务端内容安全审核（Anthropic ⚠️ / OpenAI ⚠️）
 
-- **为什么做不到**：**上游没这个参数**。`safety_check:{level:'high'}` 是 DeepSeek 私有顶层字段，裸 Anthropic 收到未知顶层字段直接 400，所以 `gates.safety_check=false`（`providers.ts:185`、`src/services/chat/store.ts:1038`）。剩下的只有协议自带的 `stop_reason:'refusal'`（`parseEvent.ts:211`）与 OpenAI 的 `finish_reason:'content_filter'`（`openaiAdapter.ts:104`）——**审核强度、审核时机、审核文案全由上游决定，客户端无法要求**。
+- **为什么做不到**：**上游没这个参数**。`safety_check:{level:'high'}` 是 DeepSeek 私有顶层字段，裸 Anthropic 收到未知顶层字段直接 400，所以 `gates.safety_check=false`（`providers.ts:382`、`src/services/chat/store.ts:1038`）。剩下的只有协议自带的 `stop_reason:'refusal'`（`parseEvent.ts:211`）与 OpenAI 的 `finish_reason:'content_filter'`（`openaiAdapter.ts:104`）——**审核强度、审核时机、审核文案全由上游决定，客户端无法要求**。
 - **变通办法与代价**：客户端自建审核（敏感词/分类模型前置拦截）。代价：多一份模型或词表依赖、多一次延迟；误杀无法申诉；且挡不住上游自己的拒答，两套策略要合并展示（`describe.ts:19-59` 的 Notice 体系要扩展）。
 - **未来补的话依赖**：一个可配置的审核服务；或上游（中转商）暴露同类开关。
 
@@ -140,7 +140,7 @@
 | 阅读链接 | `tools:[{type:'deepseek_read_url'}]` 恒定下发（`store.ts` 的 `serverTools()`（`deepseek_read_url`）），同受 `gates.tools` 门控 | `web_fetch_tool_result(kind:read_link)` + `signature`（`parseEvent.ts:114-140`、`reply.ts:229-239`） | `ReplyArea.tsx:159,381-391`（ReadLinkRow）、`PageLink` 子组件 |
 | 自动标题 | `title:{enabled:true}`（`store.ts` 的 `title:{enabled:true}`、`providers.ts:188`） | `message_delta.delta.title`（`parseEvent.ts:219-224`）→ `session.title`（`store.ts` 的 `event.delta.title`） | `SessionItem.tsx:23`（空标题回落 `untitledChat`）、`store.ts` 的 `renameSession()`（手动重命名） |
 | 用户元信息 | `messages` 里的 `{role:'latest_reminder'}`（`reply.ts` 的 `foldReminders()` / `toRequestMessages()`）；不支持时折进 `system`（`store.ts` 的 `toRequestBody()`） | 无（只上行，响应不体现） | 无 UI；来源 `latestReminder.ts:19-30`、`services/location.ts` |
-| 内容安全审核/拒答 | `safety_check:{level:'high'}`（`store.ts` 的 `SAFETY_CHECK` + `gates.safety_check`、`providers.ts:185`）；OpenAI `content_filter` 映射（`openaiAdapter.ts:104`） | `message_delta.delta.stop_reason:'refusal'`（`parseEvent.ts:211`）→ 丢弃文本/思考（`reply.ts:143-160`）→ 模板（`describe.ts` 的 `describeReply()`） | `AssistantMessage.tsx:95-126`（notice 区） |
+| 内容安全审核/拒答 | `safety_check:{level:'high'}`（`store.ts` 的 `SAFETY_CHECK` + `gates.safety_check`、`providers.ts:382`）；OpenAI `content_filter` 映射（`openaiAdapter.ts:104`） | `message_delta.delta.stop_reason:'refusal'`（`parseEvent.ts:211`）→ 丢弃文本/思考（`reply.ts:143-160`）→ 模板（`describe.ts` 的 `describeReply()`） | `AssistantMessage.tsx:95-126`（notice 区） |
 | 上下文缓存 | 无请求字段（Anthropic 缺 `cache_control`，`grep` 零命中） | `usage.cache_read_input_tokens` / `cache_creation_input_tokens`（`parseEvent.ts:168-172`、`openaiAdapter.ts` 的 `readUsage()`） | 无 UI（仅 `toArchive.ts:200-207` 导出用） |
 | 用量统计 | OpenAI 侧 `stream_options.include_usage`（`openaiAdapter.ts:92`） | `message.usage` / `message_delta.usage`（`reply.ts:97,147`） | 无 UI；仅 `toArchive.ts:200-207` |
 | 停止生成 | `AbortSignal`（`client.ts` 的 `streamMessage`） | 中断 → `settleReply('stopped')`（`settleReply('stopped')`、`reply.ts:143-160`） | `ChatInput.tsx:290`（发送键切换为停止键，`store.ts` 的 `stopReply()`） |

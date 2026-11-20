@@ -47,6 +47,17 @@ const WATCHED = [
     allow: [{ value: 1500, count: 1, reason: 'FILE_BLOCK_CHARS：附件块的字符成本估算，不是时间/体积阈值' }],
   },
   { file: 'src/services/chat/store.ts', allow: [] },
+  {
+    // 图片内联通路（#551）：阈值全在 limits.ts 的 `images` 组，这里一个裸数字都不许留
+    file: 'src/services/attachments/imageSource.ts',
+    allow: [],
+  },
+  {
+    // 附件域的限制视图（#562）：只有「LIMITS.attachments.doc.xxx」这种引用，
+    // 一个裸数字都不许留 —— 它是证明「全仓只有一份附件限制」的那条断言
+    file: 'src/services/attachments/limits.ts',
+    allow: [],
+  },
   { file: 'src/services/chat/autoTitle.ts', allow: [] },
   { file: 'src/services/chat/autoTitleQueue.ts', allow: [] },
   {

@@ -77,7 +77,47 @@ const ORIGINAL_VALUES = {
   importHeartbeatMs: 5_000,
   clockJumpMs: 2 * 60_000,
   autoTitle: { timeoutMs: 8000, maxOutputTokens: 32, maxInputBytes: 2048, concurrency: 2, maxQueue: 6 },
-  attachments: { maxSizeMb: 64, maxUserDataSizeMb: 32, maxCount: 50, maxConcurrent: 3 },
+  attachments: {
+    maxSizeMb: 64,
+    maxUserDataSizeMb: 32,
+    maxCount: 50,
+    maxConcurrent: 3,
+    /**
+     * #562：「附件/内容限制只有一份」—— #480 写在 `attachments/limits.ts` 的
+     * `ATTACHMENT_LIMITS` 搬进了 `LIMITS.attachments.doc`（**值一个没改**）。
+     * 手抄一份的作用就是证明搬家前后一模一样；那个文件已经改成逐字段转出。
+     */
+    doc: {
+      txtMaxBytes: 5 * 1024 * 1024,
+      docxMaxBytes: 20 * 1024 * 1024,
+      pdfMaxBytes: 50 * 1024 * 1024,
+      maxExtractedChars: 400_000,
+      docBudgetTokens: 32_000,
+      minInjectableChars: 200,
+      maxFilesPerMessage: 10,
+      maxZipEntries: 2000,
+      maxZipUncompressedBytes: 100 * 1024 * 1024,
+      pdfMinCharsPerPage: 20,
+    },
+  },
+  /**
+   * #551 新增的一组（不是「搬家」的那批数字）：图片内联通路的阈值，取值依据 `ref-vision.md` 5.3。
+   * 手写一遍是为了让「改了阈值必须同时改这里」，别让这组数字悄悄漂。
+   */
+  images: {
+    maxEdge: 1568,
+    maxPixels: 1_150_000,
+    passThroughBytes: Math.round(3.5 * 1024 * 1024),
+    webpQuality: 0.85,
+    jpegFallbackQuality: 0.9,
+    maxSourceBytes: 16 * 1024 * 1024,
+    maxEncodedBytes: 5 * 1024 * 1024,
+    maxCanvasArea: 4096 * 4096,
+    maxCount: 20,
+    maxTotalBytes: 20 * 1024 * 1024,
+    cacheEntries: 24,
+    maxHeadBytes: 262_144,
+  },
   bootDeadlineMs: 12000,
 }
 
@@ -140,6 +180,9 @@ test('每个 LIMITS 叶子都被生产代码引用（表里不许有没人用的
   const exempt = {
     bootDeadlineMs: '内联脚本 src/index.html 在 bundle 之前执行，import 不到模块；由本文件断言两处相等',
     importMaxBytes: '单一来源仍在 importLimit.ts（#34 的纪律），消费方经由 DEFAULT_MAX_IMPORT_BYTES 使用',
+    // #552 接线完成：`images.maxCount` / `images.maxTotalBytes` 已由 `store.prepareInlineImages()`
+    // 真正使用（#562 暂押的那两条豁免到此删除）；`images.sniffHeadBytes` 随选图预检并入
+    // `toImagePart()` 的 magic-bytes 探测一并删除 —— 选图阶段不再单独读一遍头部。
   }
   const text = readSrcText()
   const missing = leaves(LIMITS).filter((leaf) => !exempt[leaf] && !text.includes(`LIMITS.${leaf}`))

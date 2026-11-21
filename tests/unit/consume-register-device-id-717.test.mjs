@@ -13,13 +13,17 @@
 //   R1 合法 deviceId → 进 body；
 //   R2 未传 → body 里**完全没有**该键（不是空串、不是占位值）；
 //   R3 传空串 → 没有该键（**且不偷偷改成「本机设备码」**）；
-//   R4 非法（长度 7 / 长度 129 / 含 `/`）→ 没有该键；
+//   R4 非法（长度 7 / 长度 129 / 含 `/` / 含空格）→ 没有该键；
 //   R5 采集函数抛错 → 注册**仍然成功**（deviceId 只是配角，不许挡注册）；
-//   R6 deviceId **只进 body**，不进 URL query（`check:consume-api` 的 R7 是同一个口径）。
+//   R6 deviceId **只进 body**，不进 URL query（`check:consume-api` 的 R7 是同一个口径）；
+//   R7 只有 register 带该字段：login / send-verify-code / refresh 的请求体**没有** deviceId
+//      （同一采集口下 register 确实带上了，所以这一行不是空转）。
 // 另外补三条：采集值被采纳且**只取一次**、显式传值时**不采集**、默认采集口绝不抛。
 //
-// 负向对照（人工，非本文件）：把 `toRegisterBody` 的「仅当合法才放」改成「无条件放」，
-// R3 / R4 必须变红，还原后变绿 —— 那是这组断言不空转的证据。
+// 负向对照（人工，非本文件）两处，都必须红、还原后转绿：
+//   ① 把 register 的 `deviceId` 整段去掉 → R1 变红（合法值进不去 body）；
+//   ② 把「仅当合法才放」改成「无条件照发」→ R2 / R3 / R4 / R7 对照组变红。
+//      —— 那是这组断言不空转的证据（见 PR 正文的实测输出）。
 //
 //   node --test tests/unit/consume-register-device-id-717.test.mjs
 import assert from 'node:assert/strict'
@@ -31,7 +35,7 @@ import { panelOk, pathOf, recordingTransport } from '../helpers/consume-fixtures
 installResolveHooks()
 
 const { createConsumeHttp } = await import('../../src/services/consume/http.ts')
-const { register } = await import('../../src/services/consume/auth.ts')
+const { login, refresh, register, sendVerifyCode } = await import('../../src/services/consume/auth.ts')
 
 const EMAIL = 'migrate-717@example.com'
 const PASSWORD = 'secret-717'
@@ -116,6 +120,14 @@ const ROWS = [
     source: () => undefined,
     expect: undefined,
   },
+  {
+    id: 'R4d-含空格',
+    name: '非法（含空格）→ 没有该键',
+    input: { deviceId: 'd-012345 789abcdef' },
+    // 采集口故意回**合法**值：实现若在「显式值非法」时改发采集值，这一行会露馅（契约是「忽略」不是「替换」）
+    source: () => COLLECTED_DEVICE_ID,
+    expect: undefined,
+  },
 ]
 
 for (const row of ROWS) {
@@ -194,6 +206,39 @@ test('采集口返回非字符串 / 空白 → 省略该键（不猜、不 strin
     const result = await scene.run()
     assert.equal(result.ok, true, `采集口返回 ${String(returned)} 时注册照样成功`)
     assert.equal('deviceId' in bodyOf(scene.recorder), false, `采集口返回 ${String(returned)} 时省略该键`)
+  }
+})
+
+test('R7 防串端点：login / send-verify-code / refresh 的请求体里没有 deviceId（契约只改了 register）', async () => {
+  // 一条 transport 覆盖四个端点：先证明「这台设备确实有设备码」，再看别的端点有没有把它带上。
+  const recorder = recordingTransport((request) => {
+    if (request.method !== 'POST') {throw new Error(`只该发 POST：${request.method}`)}
+    const path = pathOf(request.url).split('?')[0]
+    if (path === '/api/v1/auth/register' || path === '/api/v1/auth/login' || path === '/api/v1/auth/refresh') {
+      return panelOk(SESSION)
+    }
+    if (path === '/api/v1/auth/send-verify-code') {return panelOk({})}
+    throw new Error(`不该被打到的端点：${path}`)
+  })
+  const http = createConsumeHttp({ accessToken: () => undefined, transport: recorder.transport })
+  const lastBody = () => JSON.parse(recorder.calls[recorder.calls.length - 1].body)
+
+  // 对照组：同一个采集口，register **确实**带上了 —— 否则下面「别的端点没有」就是空转（根本没值可串）
+  const registered = await register(http, { email: EMAIL, password: PASSWORD }, () => COLLECTED_DEVICE_ID)
+  assert.equal(registered.ok, true)
+  assert.equal(lastBody().deviceId, COLLECTED_DEVICE_ID, 'register 该带就带（本行是对照，不是空转）')
+
+  for (const [label, call] of [
+    ['login', () => login(http, { email: EMAIL, password: PASSWORD })],
+    ['send-verify-code', () => sendVerifyCode(http, { email: EMAIL })],
+    ['refresh', () => refresh(http, { refreshToken: 'rt-717' })],
+  ]) {
+    const before = recorder.calls.length
+    await call()
+    assert.equal(recorder.calls.length, before + 1, `${label}：只打一次`)
+    const body = lastBody()
+    assert.equal('deviceId' in body, false, `${label}：请求体里**没有** deviceId（#717 契约只改了 register）`)
+    assert.equal('device_id' in body, false, `${label}：也没有 snake_case 变体（避免「顺手换个名字」串过去）`)
   }
 })
 

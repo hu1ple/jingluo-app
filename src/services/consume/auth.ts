@@ -262,8 +262,11 @@ export type ConsumeRegisterInput = {
    *    （后端对缺省 / 非法一律「忽略该字段」，不会因此返回错误、**不阻断注册**）；
    *  - **不是凭据**：不能单独认领老额度，也不能替代密码 / 免验证登录。真正决定迁移的是
    *    `oldApiKey`（持有证明），deviceId 只是配角（老系统「知道设备码就能顶号」的毛病不延续）；
-   *  - **只进请求体**：不进 URL query（`check:consume-api` 的 R7 也拦），不进日志 / 埋点 / 诊断
-   *    （凭据类，真要出现在日志里最多尾 4 位 —— 本层一处都不打印）；
+   *  - **只进请求体**：不进 URL query（`check:consume-api` 的 R7 也拦），**不进日志 / 埋点 / 诊断**。
+   *    本层一处都不打印它；万一将来有人要打，按仓库既有的脱敏口径走、不要另立一套：
+   *    `services/diagnostics/fields.ts` 把 `deviceId` / `device_id` 归入敏感段 `deviceid`（`sanitizeMeta`
+   *    整条丢弃），`services/diagnostics/redact.ts` 在自由文本里把 `d-xxxxxxxx…` 替换成 `[DEVICE_ID]`
+   *    （导出边界不留尾号；界面展示最多 `••••` + 尾 4 位）。
    *  - 后端当前（`RegisterRequest`）**还没有**这个字段：传过去会被直接忽略，注册照常成功；
    *    后端上线后同一份代码自动生效，客户端不用再改。
    *

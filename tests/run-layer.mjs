@@ -83,6 +83,9 @@ const APP_URL_FILES = new Set([
   // + 点开就是新页面」。它原来自起静态服务（`serveDist`），现在跟其它 L1 一样吃 runner 注入的
   // 共享标准产物服务，省掉一份重复的服务脚手架。
   'ours-services',
+  // #379：导入会话里「源缺失附件不拖垮发送」是**用户可见**的行为，要真浏览器 + 真产物；
+  // 它自己不起静态服务，跟其它 L1 一样吃 runner 注入的共享标准产物服务。
+  'imported-attachment-source-379',
 ].map((s) => `${s}.test.mjs`))
 
 /**
@@ -144,6 +147,17 @@ const UNIT_SOLO = new Set([
   // 而这两个文件一个要「引擎会自动应用 EXIF」（83 档）、一个要「不会」（79 档）。并进批次时后一个会读到
   // 前一个探到的结论 —— 实测批内红、单跑绿（正是本清单开头那条「吃到前一个文件的替身」）。单列最诚实。
   'vision-acceptance-553.test.mjs', 'vision-exif-manual-553.test.mjs',
+  // #379：这条用例把 store / drafts / attachments 三份**模块级单例**都用到（pendingFiles、上传任务表、
+  // imageSource 缓存），并且要在两条渠道上各跑一遍。并进批次时它会吃到同批前一个文件留下的替身与
+  // 模块状态 —— 实测批内红、单跑绿（35s 里两次 awaitIdle 超时）。单列最诚实。
+  'imported-source-missing-379.test.mjs',
+  // 同批里有文件在模块顶层 `import 'fake-indexeddb/auto'` 并在收尾把 `indexedDB` 等全局清掉；
+  // 后面再 import 一次是模块缓存命中（副作用不会重跑），于是本文件直接拿到 `indexedDB is not defined`。
+  // 这条要的正是**真 IndexedDB**（桩掉 db 就等于把被测物换成替身），单列一个进程最诚实。
+  'attachment-preserve-import-531.test.mjs',
+  // 同理：本文件在模块顶层装自己的 fetch / localStorage 替身并断言「实际发出的 URL」，
+  // 同批其它文件对 fetch 的改写/还原会让它在批内打到真上游（CI 实测打到 api.deepseek.com 吃 401）。
+  'attachment-endpoint-303.test.mjs',
 
   // ── #513：实测「批内红 → 单跑绿」，且在进程内**不可修**的那一批 ────────────────────────────
   //

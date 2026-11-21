@@ -840,9 +840,8 @@ export const en = {
 
   // Sign-in / sign-up (sub2api /api/v1/auth)
   sub2authEmail: 'Email',
-  settingsSourceBuiltin: 'Built-in channel',
-  settingsSourceThird: 'Third-party channel',
-  settingsSourceOfficial: 'Official channel',
+  // #727: the three "model source" options now use the accountConsumeSource* keys
+  // (three-row list wording — no duplicate definitions of the same strings).
   settingsThirdPartyProtocol: 'Protocol',
   settingsProtocolOpenai: 'OpenAI-compatible',
   settingsProtocolAnthropic: 'Anthropic-compatible',
@@ -893,7 +892,7 @@ export const en = {
   accountConsumeGroupSource: 'Model source',
   accountConsumeSourceBuiltin: 'Built-in service',
   accountConsumeSourceThird: 'Third-party service',
-  accountConsumeSourceDeepseek: 'DeepSeek official service',
+  accountConsumeSourceOfficial: 'DeepSeek official service',
   accountConsumeSourceAnthropic: 'Anthropic-compatible service',
   accountConsumeSourceKeyInvalid: 'Invalid API key — check it and try again',
   accountConsumeSourcePickHint: 'Pick a source and press Save; the app uses it right away',
@@ -910,7 +909,6 @@ export const en = {
   accountConsumeBindEmail: 'Linked email',
   accountConsumeLoginMethod: 'Sign-in method',
   accountConsumeLoginMethodEmail: 'Email',
-  accountConsumeSecurity: 'Account & security',
   accountConsumeSignedOutCta: 'Log in / Sign up',
   accountConsumeSignOutConfirm: 'Sign out now?',
 
@@ -998,7 +996,7 @@ export const en = {
     'That request did not go through. Try again later, and send us this message if it keeps happening.',
   consumeErrNetwork: 'No network connection. Check your connection and try again.',
   consumeErrTimeout: 'The request timed out. Wait a moment and try again.',
-  consumeErrUnsupported: 'This app version does not support that feature. Update to the latest version.',
+  consumeErrUnsupported: 'This environment cannot reach the consume service directly — please test inside the App.',
   consumeErrBadRequest: 'Something in the form is not valid. Check it and try again.',
   consumeErrInvalidResponse:
     'The server sent data we could not read. Try again later, and tell us if it keeps happening.',

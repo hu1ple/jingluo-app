@@ -826,10 +826,8 @@ export const zh = {
   // 登录注册（sub2api /api/v1/auth）
   sub2authEmail: '邮箱',
   // #727 阶段 1：设置里的登录卡（账号页未登录态 / 模型来源未登录态）
-  // #727 阶段 1：「模型来源」的三个选项 + 第三方渠道的协议切换
-  settingsSourceBuiltin: '内置渠道',
-  settingsSourceThird: '第三方渠道',
-  settingsSourceOfficial: '官方渠道',
+  // #727：第三方渠道的协议切换
+  // （「模型来源」的三个选项改走 accountConsumeSource* 词条 —— 三行列表的口径，同一批文案不重复定义）
   settingsThirdPartyProtocol: '协议',
   settingsProtocolOpenai: 'OpenAI 兼容',
   settingsProtocolAnthropic: 'Anthropic 协议',
@@ -889,7 +887,7 @@ export const zh = {
   accountConsumeGroupSource: '模型来源',
   accountConsumeSourceBuiltin: '内置服务',
   accountConsumeSourceThird: '第三方服务',
-  accountConsumeSourceDeepseek: 'DeepSeek 官方服务',
+  accountConsumeSourceOfficial: 'DeepSeek 官方服务',
   accountConsumeSourceAnthropic: 'Anthropic 协议服务',
   accountConsumeSourceKeyInvalid: 'API Key 无效，请检查后重试',
   accountConsumeSourcePickHint: '选一个来源后按「保存」，主界面会立刻用它',
@@ -906,7 +904,6 @@ export const zh = {
   accountConsumeBindEmail: '绑定邮箱',
   accountConsumeLoginMethod: '登录方式',
   accountConsumeLoginMethodEmail: '邮箱登录',
-  accountConsumeSecurity: '账号与安全',
   accountConsumeSignedOutCta: '登录 / 注册',
   accountConsumeSignOutConfirm: '确定退出？',
 
@@ -992,7 +989,7 @@ export const zh = {
   consumeErrUnknown: '这次请求没成功，请稍后重试；反复出现请把这条提示反馈给我们',
   consumeErrNetwork: '网络连不上，检查一下网络再试',
   consumeErrTimeout: '请求超时了，稍等一会儿再试',
-  consumeErrUnsupported: '当前版本不支持这个功能，请更新到最新版本',
+  consumeErrUnsupported: '当前环境不支持直连消费服务，请在 App 内测试',
   consumeErrBadRequest: '提交的内容有问题，请检查后重试',
   consumeErrInvalidResponse: '服务返回的数据读不懂，请稍后重试；反复出现请反馈给我们',
   consumeErrUnauthorized: '登录已过期，请重新登录',

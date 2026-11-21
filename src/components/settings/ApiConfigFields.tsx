@@ -25,8 +25,9 @@ import { useIsMobile } from '../../app/viewport.js'
 import { IconButton } from '../base/IconButton.js'
 import { Select } from '../base/Select.js'
 import { useSettings } from '../../services/settings.js'
+import { sendBlockFieldOf, sendBlockMessageKeyOf, type SendBlockField } from '../../services/api/sendConfigCheck.js'
 import { useApiKeyForm } from './useApiKeyForm.js'
-import { useSettingsDialog } from './settingsDialogState.js'
+import { clearSendConfigBlocked, useSettingsDialog } from './settingsDialogState.js'
 import { ManagedKeyField } from './ManagedKeyField.js'
 import { apiKeyFieldMode } from './managedKeyView.js'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
@@ -115,6 +116,32 @@ const BuiltInModelField = ({ spec }: { spec: ProviderSpec }) => {
           {model}
         </div>
       </div>
+      <SendBlockedHint field="model" />
+    </div>
+  )
+}
+
+/**
+ * #490：这次发送被「必错配置」拦下来的那一行，就在该字段下面写清原因（红字）。
+ *
+ * 为什么要写在行内而不是只弹 toast：toast 三秒就没了，而用户接下来要做的就是改这一行；
+ * 提示停在字段旁边，「跳到对应设置」才算真的落到了地方（与 #451 的 Key 行、#596 的领取行同一纪律）。
+ * 显示哪一句、落在哪一行都从 `sendConfigCheck` 的同一张表取（`sendBlockMessageKeyOf` /
+ * `sendBlockFieldOf`），组件里不再按码做第二次判断。
+ */
+const SendBlockedHint = ({ field }: { field: SendBlockField }) => {
+  const t = useTranslate()
+  const blocked = useSettingsDialog((state) => state.sendConfigBlocked)
+  if (blocked === null || sendBlockFieldOf(blocked) !== field) {
+    return null
+  }
+  return (
+    <div
+      className={styles.error}
+      role="status"
+      data-testid={`settings-${field === 'baseUrl' ? 'base-url' : 'model'}-blocked`}
+    >
+      {t(sendBlockMessageKeyOf(blocked))}
     </div>
   )
 }
@@ -318,6 +345,14 @@ const BaseUrlField = ({ spec }: { spec: ProviderSpec }) => {
       setValue(normalized)
     }
     setBaseUrl(normalized)
+    /**
+     * #490：**改过**这一行之后才撤掉那条「这条消息没有发出」—— 只是点进来又失焦（值没变）不算改，
+     * 否则「地址填成了具体接口」这种（URL 本身合法、保存也成功）会被一次空编辑悄悄洗掉红字。
+     * 真没改的话，下次发送会重新判一遍并再次点出来。
+     */
+    if (normalized !== (stored || fallback)) {
+      clearSendConfigBlocked('baseUrl')
+    }
     return true
   }
 
@@ -347,6 +382,7 @@ const BaseUrlField = ({ spec }: { spec: ProviderSpec }) => {
           />
         </div>
         {error ? <div className={styles.error}>{t(error)}</div> : null}
+        <SendBlockedHint field="baseUrl" />
       </div>
     </div>
   )
@@ -381,6 +417,10 @@ const ModelField = ({ spec }: { spec: ProviderSpec }) => {
       return
     }
     setValue(value.trim())
+    // #490：同上 —— 值真的变了才撤红字（空编辑不算改）
+    if (value.trim() !== (stored || fallback)) {
+      clearSendConfigBlocked('model')
+    }
   }
 
   const loadModels = useCallback(async () => {
@@ -478,6 +518,7 @@ const ModelField = ({ spec }: { spec: ProviderSpec }) => {
         {status === 'empty' ? <div className={styles.description}>{t('settingsModelsEmpty')}</div> : null}
         {status === 'error' ? <div className={styles.error}>{t('settingsModelsFailed')}</div> : null}
         {error ? <div className={styles.error}>{t(error)}</div> : null}
+        <SendBlockedHint field="model" />
       </div>
     </div>
   )

@@ -72,6 +72,16 @@ export const zh = {
   tableCopy: '复制表格',
   /** 公式右上角的「复制 TeX 源码」：从 katex-mathml 的 annotation 取纯 TeX（#486 P0-2） */
   mathCopySource: '复制 TeX 源码',
+  /** #821：气泡美化包常用 KaTeX 没有的排版宏（\scalebox 等），失败的模块降级成这句提示 */
+  mathUnsupportedBlock: '这一行用了不支持的排版命令',
+  /** #821：折叠里显示该模块的 TeX 原文 */
+  mathSourceToggle: '查看原文',
+  /** #821：折叠里解释 KaTeX 报的错 */
+  mathUnsupportedReason: '原因：',
+  /** #821：A 方案做过等价映射（丢缩放 / 丢旋转）时的一句总提示 */
+  mathSimplified: '部分排版命令已简化显示',
+  /** #821：这块没抛错，但 KaTeX 把排版参数当文字打出来了（`[0pt][0pt]`） */
+  mathIgnoredArgs: '排版参数未生效，可能是 KaTeX 不支持这一写法',
   toolSearchIntro: '搜索',
   messageSearching: '搜索中...',
   imageSearching: '图像搜索中...',
@@ -871,6 +881,9 @@ export const zh = {
   settingsAuthForgotNeedsEmail: '请先填写邮箱，再点「忘记密码」',
   // #797：注册的「确认密码」与密码可见切换
   settingsAuthConfirmPlaceholder: '请再次输入密码',
+  // #819：注册分段的「邀请码（可选）」——只在 settings/public 的 invitation_code_enabled 为真时出现
+  // （注册后无法补填：sub2api 没有「登录后补邀请码」的端点，见 inviteCodeAtRegister 那条说明）
+  settingsAuthInvitePlaceholder: '邀请码（可选）',
   /** 两次输入不一致（只在客户端校验，不上服务端；提交前就拦下） */
   settingsAuthPasswordMismatch: '两次输入的密码不一致',
   /** 眼睛按钮的可访问名（说的是「点了会发生什么」：现在隐藏 → 「显示密码」） */
@@ -923,9 +936,9 @@ export const zh = {
 
   // 「账户与消费」页（#482 三弹层合一 / #487 W1-C1）：一个页面四个 tab。
   // 标题与三个 tab 名在词条骨架里没有对应项，这里最小新增；Tab 2「购买」复用 oursPayTitle。
-  // #817：`accountConsumeTabQuota`（我的额度）随那一页一起删掉；它已经没有任何引用（`check:i18n` R4）。
   accountConsumeTitle: '账户与消费',
   accountConsumeTabCards: '我的卡密',
+  accountConsumeTabQuota: '我的额度',
   accountConsumeTabAccount: '账号',
   // #727：这一页重排成「一级整页 + 四个分区」（模型来源 / 连通性测试 / 我的钱包 / 账号）。
   // 分区名与行文案都走词条：原型里的 34px 大标题 / 56px inset 行 / 底部 sheet / 居中 dialog

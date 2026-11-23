@@ -771,6 +771,8 @@ export const en = {
   settingDialogReadingLineStandard: 'Standard',
   settingDialogReadingLineRelaxed: 'Relaxed',
   settingDialogEnterKeyMode: 'Enter key behavior',
+  settingDialogAppUpdate: 'App update',
+  settingDialogAppUpdateWebHint: 'The web app is always up to date. Reload the page to get the latest version.',
   settingDialogEnterKeyModeDescription:
     'Send on Enter, or insert a line break and use the send button — the soft-keyboard Enter key follows your choice.',
   settingDialogEnterKeySend: 'Enter sends (Shift + Enter for a new line)',

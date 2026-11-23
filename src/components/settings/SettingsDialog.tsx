@@ -29,6 +29,7 @@ import {
 } from '../../services/chat/history/urlImport.js'
 import { copyText } from '../../utils/clipboard.js'
 import { saveHistoryArchive } from '../../services/chat/history/saveArchive.js'
+import { isAndroidUpdate } from '../../services/appUpdate.js'
 import { ImportSkippedDetails, importedMessage, summaryFromCount } from './importSkipped.js'
 import { useChatStore, type HistoryImportSummary } from '../../services/chat/store.js'
 import {
@@ -53,7 +54,7 @@ import { Button } from '../base/Button.js'
 import { Modal } from '../base/Modal.js'
 import { Select } from '../base/Select.js'
 import { showToast } from '../base/toastState.js'
-import { AppUpdateField } from './AppUpdateField.js'
+import { AppUpdateField, AppVersionField } from './AppUpdateField.js'
 import { ChatBackgroundField } from './ChatBackgroundField.js'
 import { DOUYIN_ACCOUNT_ID, douyinCopyToast } from './douyinAccount.js'
 import { AccountRow } from '../auth/AccountRow.js'
@@ -173,7 +174,8 @@ const SettingsContent = ({ visible }: { visible: boolean }) => {
               <LocaleSetting />
               <TtsVoiceSetting />
               <ThinkingDisplaySetting />
-              <AppUpdateField />
+              {/* 内置更新只在 APK 里有落地：Web 端只显示版本，不渲染检查更新（见 AppVersionField 注释） */}
+              {isAndroidUpdate() ? <AppUpdateField /> : <AppVersionField />}
               <ReadingSettings />
               <EnterKeySettings />
               {/* 「位置信息」已从设置页移除（1.4.0-beta.1）：location 仍在 store 里读取，

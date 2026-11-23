@@ -178,11 +178,11 @@ const scripted = (results) => {
 }
 
 /** 每个用例从干净的本地配置 + 干净的单飞槽开始 */
-const reset = () => {
+const reset = (kind = 'ours') => {
   dom.localStorage.clear()
   // 设备码播种：领取链路按「设备固定名 app-<前 16 位>」查重，随机设备码会让预期名对不上
   dom.localStorage.setItem('chat-demo:ours-device-id', DEVICE_ID)
-  apiConfig.setProviderKind('ours')
+  apiConfig.setProviderKind(kind)
   apiConfig.setApiKey('')
   apiConfig.clearServerKeyMark()
   ensureState.resetManagedKeyEnsure()
@@ -316,15 +316,21 @@ test('[①] 别的渠道不自动领：不许覆盖用户自己的 Key', async (
 
 // ---------------------------------------------------------------- [②] 没有 Key → 建一次
 
-test('[②] 没有同名 Key → POST 一次成功 → 本机可用（body 里没有 group_id）', async () => {
-  reset()
+test('[②] 标准版首次注册且没有配置来源 → 自动选用内置服务，只新建一把 Key', async () => {
+  reset('deepseek')
+  dom.localStorage.removeItem(apiConfig.CONFIG_KEYS.kind)
+  assert.equal(apiConfig.getProviderKind(), 'deepseek')
+  assert.equal(apiConfig.checkApiKeyBeforeSend(), 'missing')
   const { client, recorder } = clientFrom((request) =>
     request.method === 'GET' ? keysPage([]) : panelOk(keyRow({ id: 77, key: FRESH_KEY }))
   )
   setConsumeClient(client)
-  pretendPreviousUserSignedIn()
-
-  const outcome = await runtime.ensureManagedKeyForDevice()
+  auth.setAuthTransport(fakeAuthTransport())
+  let provisioning
+  auth.setSessionEstablishedHook((reason) => { provisioning = runtime.ensureManagedKeyAfterAuth(reason) })
+  const registration = await auth.useAuthStore.getState().signUp({ email: 'new@example.com', password: 'pw' })
+  assert.equal(registration.ok, true)
+  const outcome = await provisioning
   assert.equal(outcome, 'updated', '本机从「没有」变成「服务端那把」')
   // 一次 GET（本层查重，参数就是 #803 第 2 条那组）+ 一次 POST —— 查重只做一次、只打一次
   assert.deepEqual(
@@ -340,6 +346,8 @@ test('[②] 没有同名 Key → POST 一次成功 → 本机可用（body 里�
   assert.equal('group_id' in body, false, '不许传 group_id（#803 第 3 条）')
 
   assert.equal(apiConfig.getApiKey(), FRESH_KEY, '界面与请求用的是同一把')
+  assert.equal(apiConfig.getProviderKind(), 'ours', '新用户无需先点模型来源')
+  assert.equal(apiConfig.checkApiKeyBeforeSend(), 'ok')
   assert.equal(apiConfig.getManagedKeyVerdict(), 'ok', '发送前那道闸应该放行')
   assert.equal(ensureState.useManagedKeyEnsure.getState().status, 'idle', '成功之后没有留下的失败提示')
 })

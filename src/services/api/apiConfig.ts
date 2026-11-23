@@ -104,15 +104,16 @@ const read = (key: string) => {
   }
 }
 
-const write = (key: string, value: string | null) => {
+const write = (key: string, value: string | null): boolean => {
   try {
     if (value === null) {
       localStorage.removeItem(key)
     } else {
       localStorage.setItem(key, value)
     }
+    return true
   } catch {
-    // 存储不可用时只在内存中生效
+    return false
   }
 }
 
@@ -243,7 +244,9 @@ const storedModel = (kind: ProviderKind): string => {
 export const readLegacySharedModel = (): string => (read(CONFIG_KEYS.model) ?? '').trim()
 
 /** 迁移专用：清掉老版共享模型键（等价于用户手工 `removeItem('chat-demo:model')`） */
-export const clearLegacySharedModel = (): void => write(CONFIG_KEYS.model, null)
+export const clearLegacySharedModel = (): void => {
+  write(CONFIG_KEYS.model, null)
+}
 
 /**
  * 迁移专用：按原样读 / 写任意配置键。
@@ -253,7 +256,9 @@ export const clearLegacySharedModel = (): void => write(CONFIG_KEYS.model, null)
  * 的口径统一，也让宿主能力盘点（docs/capabilities/host.md）只多一个调用点而不是一个新文件。
  */
 export const readConfigValue = (key: string): string | null => read(key)
-export const writeConfigValue = (key: string, value: string | null): void => write(key, value)
+export const writeConfigValue = (key: string, value: string | null): void => {
+  write(key, value)
+}
 
 /**
  * 迁移专用：清键之后把界面 state 里的模型同步成当前渠道真正生效的值。
@@ -293,8 +298,7 @@ export const getCurrentSpec = (): ProviderSpec => getSpec(getProviderKind())
  * 服务地址：已存的值优先（升级前配过中转的用户保持原样），
  * 其次用当前 spec 的内置默认，最后回落到构建期地址。
  */
-const resolveBaseUrl = (): string => {
-  const spec = getCurrentSpec()
+const resolveBaseUrl = (spec = getCurrentSpec()): string => {
   if (spec.locked) {
     // 内置锁定渠道（ours）：地址由 spec.defaults 决定，已存值一律不参与
     return spec.defaults?.baseUrl ?? DEFAULT_BASE_URL
@@ -459,8 +463,7 @@ export const markServerKey = (apiKey: string, id?: number, at: number = Date.now
     return false
   }
   const mark = serverKeyMark(value, at, id)
-  write(CONFIG_KEYS.serverKey, JSON.stringify(mark))
-  return true
+  return write(CONFIG_KEYS.serverKey, JSON.stringify(mark))
 }
 
 /** 清掉下发标记（退出账号 / 记录坏了自愈时用）；不动 Key 本身 */
@@ -474,13 +477,34 @@ export const clearServerKeyMark = (): void => {
  * 两件事分开写会出现「界面尾号来自 A、请求用的是 B」的中间态；这一个入口保证
  * 「显示的那把 = 发送时用的那把 = 服务端刚下发的那把」。
  */
-export const applyManagedKey = (apiKey: string, id?: number): boolean => {
+export const applyManagedKey = (
+  apiKey: string,
+  id?: number,
+  options?: { selectBuiltin: boolean }
+): boolean => {
   const value = apiKey.trim()
   if (value === '') {
     return false
   }
-  setApiKey(value)
-  markServerKey(value, id)
+  const previousKey = getApiKey()
+  const previousMark = read(CONFIG_KEYS.serverKey)
+  const previousKind = read(CONFIG_KEYS.kind)
+  const select = options?.selectBuiltin && !usesManagedKey(getProviderKind())
+  // 共享密钥会用于当前渠道。先确保存储能切到内置服务，再写密钥，三项写完才通知界面。
+  if (select && !write(CONFIG_KEYS.kind, 'ours')) {
+    return false
+  }
+  if (!markServerKey(value, id) || !write(CONFIG_KEYS.apiKey, value)) {
+    write(CONFIG_KEYS.serverKey, previousMark)
+    if (select) {
+      write(CONFIG_KEYS.kind, previousKind)
+    }
+    return false
+  }
+  if (select) {
+    updateProviderState('ours')
+  }
+  updateApiKeyState(value, previousKey)
   return true
 }
 
@@ -554,7 +578,10 @@ export const joinUrl = (baseUrl: string, path: string): string => {
 /** GET 模型列表：baseUrl + paths.models（官方 /models，Anthropic 兼容 /v1/models） */
 export const getModelsUrl = (): string => joinUrl(getBaseUrl(), getCurrentSpec().paths.models)
 /** 发消息：baseUrl + paths.messages */
-export const getMessagesUrl = (): string => joinUrl(getBaseUrl(), getCurrentSpec().paths.messages)
+export const getMessagesUrl = (kind = getProviderKind()): string => {
+  const spec = getSpec(kind)
+  return joinUrl(resolveBaseUrl(spec), spec.paths.messages)
+}
 /** ASR / TTS 等工具接口前缀 */
 export const getToolsBaseUrl = (): string => joinUrl(getBaseUrl(), getCurrentSpec().paths.tools)
 
@@ -576,6 +603,10 @@ export const supportsFileUpload = (): boolean => Boolean(getCurrentSpec().paths.
 export const setProviderKind = (kind: ProviderKind) => {
   const next = isProviderKind(kind) ? kind : DEFAULT_PROVIDER_KIND
   write(CONFIG_KEYS.kind, next)
+  updateProviderState(next)
+}
+
+const updateProviderState = (next: ProviderKind): void => {
   // 地址/模型按渠道分开存，切换后要把界面上的已存值换成新渠道的
   useApiConfig.setState({ kind: next, baseUrl: storedBaseUrl(next), model: storedModel(next) })
   recordAction('config_change', 'provider-kind', { result: 'saved', kind: next })
@@ -587,6 +618,10 @@ export const setApiKey = (apiKey: string) => {
   const value = apiKey.trim()
   const previous = getApiKey()
   write(CONFIG_KEYS.apiKey, value || null)
+  updateApiKeyState(value, previous)
+}
+
+const updateApiKeyState = (value: string, previous: string): void => {
   useApiConfig.setState({ apiKey: value })
   /**
    * #451：Key 身份记录跟着这次写入走 ——

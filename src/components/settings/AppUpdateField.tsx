@@ -1,4 +1,5 @@
 import { registerPlugin } from '@capacitor/core'
+import clsx from 'clsx'
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '../base/Button.js'
 import { Modal } from '../base/Modal.js'
@@ -108,6 +109,32 @@ interface NativeBrowserPlugin {
   open(options: { url: string; presentationStyle?: string }): Promise<void>
 }
 const nativeBrowser = registerPlugin('Browser') as unknown as NativeBrowserPlugin
+
+/**
+ * Web 端的「应用更新」行：**只显示版本，不提供检查更新**。
+ *
+ * 为什么不是把 `AppUpdateField` 自己隐藏了事：网页版没有安装包通道——
+ * 浏览器里既没有 APK 安装器，iOS 侧也不允许 App 自己装新版本，所以「检查更新 + 下载安装」
+ * 这一整条链路在 Web 上没有落点。网页版永远是最新构建（刷新即最新），
+ * 给它一个检查按钮只会换来「查到了但装不了」。
+ *
+ * 与 `AppUpdateField` 的分派在 `SettingsDialog`（按 `isAndroidUpdate()`），不在本文件内部：
+ * 早退会打断 hooks 顺序，放在调用点才是安全的。
+ */
+export const AppVersionField = () => {
+  const t = useTranslate()
+  return (
+    <div className={clsx(styles.cell, styles.row)} data-testid="app-version">
+      <div className={styles.text}>
+        <div className={styles.label}>{t('settingDialogAppUpdate')}</div>
+        <div className={styles.description}>{t('settingDialogAppUpdateWebHint')}</div>
+      </div>
+      <div className={styles.cellActions}>
+        <span className={styles.description}>{bundledApp().version}</span>
+      </div>
+    </div>
+  )
+}
 
 /** Update operations are isolated from history, API settings and feedback transport. */
 export const AppUpdateField = () => {

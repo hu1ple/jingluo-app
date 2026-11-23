@@ -763,6 +763,8 @@ export const zh = {
   settingDialogReadingLineStandard: '标准',
   settingDialogReadingLineRelaxed: '宽松',
   settingDialogEnterKeyMode: '回车键行为',
+  settingDialogAppUpdate: '应用更新',
+  settingDialogAppUpdateWebHint: '网页版始终是最新版本，刷新页面即可加载更新。',
   settingDialogEnterKeyModeDescription: '回车发送换行、或只换行靠发送按钮，按你的习惯选；手机软键盘的回车键会跟着变。',
   settingDialogEnterKeySend: '回车发送（Shift + 回车换行）',
   settingDialogEnterKeyModifierSend: 'Ctrl / ⌘ + 回车发送（回车换行）',

@@ -690,6 +690,11 @@ export const en = {
   oursPayUnavailable: 'Payment channel is temporarily unavailable, please try again later',
   oursPayNotConfigured: 'The checkout page is not available yet, please try again later',
   oursPayOpenFailed: 'Could not open the checkout page inside the app, please try again later',
+  // Web (browser build, checkout page in a new tab): placeholder / entry hint / blocked / opened
+  oursPayHintWeb: 'Opens the shop checkout page in a new tab. After paying, switch back to this page and the order is checked and the card key redeemed automatically.',
+  oursPayPlaceholder: 'Opening the shop checkout page…',
+  oursPayPopupBlocked: 'The browser blocked the popup; allow popups for this site and try again',
+  oursPayTabOpened: 'The checkout page is open in a new tab; switch back to this page once you have paid',
   oursRedeemAction: 'Redeem',
   oursRedeemSuccess: 'Redeemed. +{points}',
   oursRedeemPending: 'Redemption is being processed, refresh quota shortly',

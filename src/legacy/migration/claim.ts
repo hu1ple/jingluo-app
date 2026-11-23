@@ -19,14 +19,16 @@
  *   4. **开关三处都判**：`config.migration.enabled === false` → 不采集（这里在采集之前就返回）、
  *      不请求；`LegacyMigrationButton.tsx` 另判一次（不显示按钮）。默认值是 `false`。
  *   5. **超时只从配置读**（`migration.timeoutMs`，默认 20000）：本文件不写毫秒字面量。
- *   6. **走原生传输层**：复用 `services/consume/http.ts` 的 `capacitorTransport`（`CapacitorHttp`），
- *      不自己写 fetch / 不用 XMLHttpRequest —— sub2api 系后端的 CORS `allowed_origins` 默认是空的
- *      （#484 §4.6），WebView 里裸 fetch 必然失败，且失败原因会被误读成「网络不好」。
+ *   6. **只走原生传输层**：复用 `services/consume/http.ts` 的 `nativeOnlyTransport`（`CapacitorHttp`），
+ *      不自己写 fetch / 不用 XMLHttpRequest。**注意要用 `nativeOnlyTransport` 而不是
+ *      `capacitorTransport`**：后者在 Web 上会走 fetch（消费侧通道放开后如此），而迁移是
+ *      「本来就只能在 App 里做」的链路，网页端必须继续明确回 `unsupported`，
+ *      否则界面会从「请在 App 内使用」变成「网络不好」。
  *      这里只借传输层，不用 `createConsumeHttp`：那个实例强制路径落在
  *      `apiV1Prefix` / `gatewayPrefix` 之内、且 base 是 consume 的，而迁移服务是**另一台后端**。
  */
 
-import { capacitorTransport } from '../../services/consume/http.js'
+import { nativeOnlyTransport } from '../../services/consume/http.js'
 import { collectLegacyIdentity, isIdentityEmpty } from './collect.js'
 import { CLAIM_STATUSES, type ClaimResult, type LegacyIdentity } from './types.js'
 
@@ -252,7 +254,7 @@ export const claimLegacyMigration = async (token: string): Promise<ClaimResult> 
   }
 
   try {
-    const outcome = await capacitorTransport({
+    const outcome = await nativeOnlyTransport({
       method: 'POST',
       url: `${config.baseUrl}${config.endpoint}`,
       // 契约只把 jwt 放在 body 里（#498 §二）；这里不带 Authorization 头，避免两处身份来源打架

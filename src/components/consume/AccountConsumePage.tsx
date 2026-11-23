@@ -67,6 +67,7 @@ import { HistoryView } from './HistoryView.js'
 import { MyCardsTab } from './MyCardsTab.js'
 import { runWalletAutoRedeem, type WalletAutoRedeemOutcome } from './walletAutoRedeem.js'
 import { WALLET_PAY_ENTRY_PAGE, landAfterPayReturn } from './walletPayFlow.js'
+import { runWebPayReturn, subscribeWebPayOpened } from './webPayReturn.js'
 import { WalletHeaderView } from './walletHeaderView.js'
 import { formatCurrency, maskedEmail } from './panels.js'
 import { sourceKeyOf } from './SourceSheet.js'
@@ -102,6 +103,21 @@ import styles from './AccountConsume.module.css'
  * 类型放在这里而不是设置的状态层：它只描述「这一页内部展示什么」，进出都由内容区自己点，
  * 不参与 `openSettings` / 付款回跳那套跨模块状态。
  */
+/**
+ * Web 端「付款回来」的兜底节拍：**4.5s 一次、最多 8 次（≈36 秒）**，页面不可见时不查。
+ *
+ * 为什么要有它（原生端根本不需要）：
+ *  - 切回本页的 `visibilitychange` 只给「用户回来了」这一个时刻，而小铺的发卡 / 回调可能晚几秒：
+ *    那一刻订单还不是 `COMPLETED`，`runWalletAutoRedeem` 会正常地 `skipped:no-pending`，
+ *    之后就没有第二次机会了 —— 于是补一层低频轮询，把「晚几秒的卡」捞回来；
+ *  - 上限写死（8 次）而不是一直轮下去：这是**兜底**，不是「客户端负责查单」，
+ *    该由用户手动重试的场合必须停在手动重试上（`walletAutoRedeem` 本身也永不自动重试）。
+ */
+const WEB_PAY_POLL_MS = 4500
+const WEB_PAY_POLL_MAX = 8
+/** 轮询的墙钟上限（2 分钟）：无论用户有没有切回来，定时器到点自己退场（监听仍留着） */
+const WEB_PAY_POLL_WALL_MS = 120000
+
 export type AccountSubPage = 'wallet' | 'source' | 'cards' | 'buy' | 'history' | 'account'
 
 export type AccountConsumePanelProps = {
@@ -167,6 +183,11 @@ export const AccountConsumePage = ({
   }, [])
   const [balance, setBalance] = useState<number | undefined>(undefined)
   const [walletTick, setWalletTick] = useState(0)
+  /**
+   * Web「开过收款页」的会话计数：`0` = 本次挂载还没有开过收款页（此时**不挂**可见性监听）。
+   * `BuyTab` 在收款页导航成功那一刻 `markWebPayOpened()`（`webPayReturn.ts`），这里加一。
+   */
+  const [webPayTick, setWebPayTick] = useState(0)
   const [signOutAsk, setSignOutAsk] = useState(false)
   /**
    * #784：「付款回来」那一次自动兑现的结局。只有 `openPayLinkInApp` 的 `onClosed` 会写它
@@ -190,6 +211,8 @@ export const AccountConsumePage = ({
   )
 
   const alive = useRef(true)
+  /** Web 轮询预算（跨 effect 重启不复位：只在新一次「开过收款页」时清零），见下面的 watcher */
+  const webPayAttempts = useRef(0)
 
   useEffect(() => {
     alive.current = true
@@ -404,8 +427,12 @@ export const AccountConsumePage = ({
    *
    * #817：换页那一句收进了 `landAfterPayReturn()`（`walletPayFlow.ts`），落点是
    * `WALLET_PAY_RETURN_PAGE = 'cards'` —— 从钱包页首的付款入口进去付款，回来同样停在卡密页
-   * （两个入口共用同一段 `BuyTab`，所以只有这一处落点）。**Web 分支不在这条链上**：
-   * 非原生环境 `openPayLinkInApp` 返回 false、`onClosed` 不触发，界面停在购买页给可读提示。
+   * （两个入口共用同一段 `BuyTab`，所以只有这一处落点）。
+   *
+   * **Web 也走这里，但入口不同**（原生 `openPayLinkInApp` 在非原生环境仍然返回 false、
+   * `onClosed` 不触发 —— 那条链一个字没动）：Web 的收款页开在**新标签页**里，回来的信号是
+   * 本文件的 `visibilitychange` + 低频轮询兜底（见下面 `WEB_PAY_POLL_*` 那一段），
+   * 两条路最后调的都是同一个 `backToCards`，**自动兑现的判定一行都没有第二份**。
    *
    * 自动兑现本身不在这里写逻辑：判定与不发第二枪的规则全在 `walletAutoRedeem.ts`（复用既有的
    * `consume.redeem` 封装，一行兑换逻辑都没有重写）。这里只负责两件事：
@@ -463,6 +490,108 @@ export const AccountConsumePage = ({
       })
       .catch(() => undefined)
   }, [consume, onNavigate, signedIn, t])
+
+  /** 「本次会话开过收款页」的订阅：只在 `BuyTab` **真的把 Web 收款页导航出去**之后加一 */
+  useEffect(
+    () =>
+      subscribeWebPayOpened(() => {
+        // 新一次付款 = 新的轮询预算
+        webPayAttempts.current = 0
+        setWebPayTick((tick) => tick + 1)
+      }),
+    []
+  )
+
+  /**
+   * Web 端「付款回来」的两个触发点 —— 走的都是**同一个** `backToCards`（自动兑现的判定一行都没复制）。
+   *
+   *   1. `visibilitychange` → `visible`：用户从收款页（另一个标签页）切回来了。
+   *      原生那条是 `browserFinished` → `onClosed` → `BuyTab.onPurchased`，Web 没有这个事件；
+   *   2. 低频轮询兜底（`WEB_PAY_POLL_MS` / `WEB_PAY_POLL_MAX`）：切回来那一秒订单可能还没变成
+   *      `COMPLETED`（小铺回调晚几秒），那一刻 `runWalletAutoRedeem` 会正常地 `skipped:no-pending`，
+   *      再给几次机会把它捞回来。
+   *
+   * 三条边界（都是「别乱触发」）：
+   *  - **只有本次会话真的开过收款页**（`webPayTick > 0`）才挂监听：用户随便切个标签回来，
+   *    不该白查一次订单；
+   *  - 页面不可见时**一个请求都不发**（浏览器也会把定时器节流到 1 分钟一次）；
+   *  - 轮询有**上限**（8 次请求 / 墙钟 2 分钟，两者任一先到就停），页面卸载时
+   *    `clearInterval` + `removeEventListener`；可见性那一下是**一次性的**
+   *    （回调里就把监听摘了，不用幂等标记再兜一层）。
+   *
+   * ⚠️ **`visibilitychange` 会被「用户切个标签又切回来」误触发，这是已知且可接受的代价，
+   * 别把它当 bug 修掉。** `runWalletAutoRedeem` 是幂等的：订单状态判据（`COMPLETED` + 卡号完整）、
+   * `GET /api/v1/redeem/history` 交叉比对、本地指纹去重（`wasAutoSubmitted` 先落盘再发）、
+   * 以及**永不自动重试**，四道闸决定了最坏结果只是「白查一次订单」——
+   * 绝不会多兑一张卡、也不会对同一张卡打第二枪。
+   */
+  useEffect(() => {
+    // 没开过收款页 / 未登录（`loadOrders` 都不会注入，查了也是 skipped）/ 非浏览器环境 → 不挂
+    if (webPayTick === 0 || signedIn !== true || typeof document === 'undefined') {
+      return
+    }
+    /** 用户离开过本页吗：没离开过说明收款页根本没被看，别自作主张把人拽到卡密页 */
+    let leftOnce = false
+    let timer: ReturnType<typeof setInterval> | null = null
+    const startedAt = Date.now()
+
+    /** 只停轮询：可见性监听要留到「切回来」那一下（用户可能在收款页上停留很久） */
+    function stopPolling(): void {
+      if (timer !== null) {
+        clearInterval(timer)
+        timer = null
+      }
+    }
+    /** 全停（组件卸载 / 页面已经不再是本会话）：定时器和监听一起摘 */
+    function stop(): void {
+      stopPolling()
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+    /**
+     * 与原生 `onClosed` **完全同一条路**：`runWebPayReturn()` 调的就是 `BuyTab` 登记进来的
+     * `onPurchased`（= 本文件的 `backToCards`）——换页 + 重拉订单 + 自动兑现，
+     * 判定逻辑（`walletAutoRedeem.ts`）一行都没有复制，也没有第二个回调名。
+     */
+    function fire(): void {
+      if (!alive.current) {
+        stop()
+        return
+      }
+      runWebPayReturn()
+    }
+    /** 切回来这一下最准：一次就够（之后就交给下面的轮询兜底），摘掉监听 */
+    function onVisibility(): void {
+      if (document.visibilityState === 'visible') {
+        document.removeEventListener('visibilitychange', onVisibility)
+        fire()
+        return
+      }
+      leftOnce = true
+    }
+
+    document.addEventListener('visibilitychange', onVisibility)
+    timer = setInterval(() => {
+      // 墙钟上限：用户一直待在收款页（本页长时间不可见）时，定时器同样要自己退场
+      if (Date.now() - startedAt > WEB_PAY_POLL_WALL_MS) {
+        stopPolling()
+        return
+      }
+      if (document.visibilityState !== 'visible') {
+        return
+      }
+      if (!leftOnce) {
+        return
+      }
+      webPayAttempts.current += 1
+      if (webPayAttempts.current > WEB_PAY_POLL_MAX) {
+        stopPolling()
+        return
+      }
+      fire()
+    }, WEB_PAY_POLL_MS)
+
+    return stop
+  }, [signedIn, webPayTick])
 
   const SOURCE_LABEL_KEYS: Record<string, TranslationKey> = {
     builtin: 'accountConsumeSourceBuiltin',

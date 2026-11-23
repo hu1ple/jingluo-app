@@ -683,6 +683,11 @@ export const zh = {
   oursPayUnavailable: '收款通道暂不可用，请稍后再试',
   oursPayNotConfigured: '收款页暂未开通，请稍后再试',
   oursPayOpenFailed: '没能在 App 内打开收款页，请稍后再试',
+  // Web 端（浏览器打开，收款页在新标签页）：占位页 / 入口说明 / 被拦截 / 已开出去
+  oursPayHintWeb: '将在新标签页打开联动小铺收款页；付款后切回本页，会自动查单并兑换卡密。',
+  oursPayPlaceholder: '正在打开联动小铺收款页…',
+  oursPayPopupBlocked: '浏览器拦截了弹窗，请允许本站弹窗后重试',
+  oursPayTabOpened: '已在新标签页打开收款页；付款完成后切回本页即可',
   oursRedeemAction: '兑换',
   oursRedeemSuccess: '兑换成功，+{points}',
   oursRedeemPending: '兑换处理中，请稍后刷新额度查看',

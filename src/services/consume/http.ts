@@ -5,13 +5,17 @@
  *   - 不解释业务语义（`{code,message,data}` 三套信封的解析在 errors.ts）；
  *   - 不读 localStorage、不 import 界面代码 —— 地址、前缀、超时全部从构建期注入的
  *     `__ENDPOINTS__.consume` 取（唯一来源 `config/endpoints.json`，见 #484 §6.1/6.2）；
- *   - **必须走原生 `CapacitorHttp`**：sub2api 的 CORS `allowed_origins` 默认是空数组
- *     （部署侧不配就拒绝所有跨域），WebView 里裸 `fetch()` 必然失败（#484 §4.6）。
- *     本地实例实测：`Origin: capacitor://localhost` → `Access-Control-Allow-Origin: *`，
- *     但**没有** `Access-Control-Allow-Credentials` —— 也就是说**浏览器侧不能靠 cookie 带身份**，
- *     JWT 必须走 `Authorization` 头（这正好也是本层的唯一鉴权方式）。
- *     所以这里没有 fetch 兜底：非原生环境返回 `unsupported`，由调用方给「请在 App 内使用」而不是
- *     假装网络错误（把「CORS 没配」伪装成「网络不好」是历史上最难查的一类假红）。
+ *   - **原生走 `CapacitorHttp`，Web 走浏览器 `fetch`**（同一份产物既部署网页也打进 APK）。
+ *     #484 §4.6 记的「`allowed_origins` 默认空数组 → WebView 裸 `fetch()` 必然失败」**在生产网关上
+ *     不成立**（2026-11-23 实测 `consume.baseUrl` 指向的那台 sub2api，后端配置是
+ *     `cors: { allowed_origins: ["*"], allow_credentials: false }`）：预检 `OPTIONS /api/v1/payment/orders/my` → **204** +
+ *     `access-control-allow-origin: *` + `allow-headers` 含 `Authorization` + `max-age: 86400`；
+ *     `GET /api/v1/pay-link` → 200 带 `*`；无 token 的 `GET /api/v1/payment/orders/my` → 401 **仍带** `*`。
+ *     所以浏览器端可以直接 fetch。**但 `*` 等于不带 credentials**：身份**只能**走 `Authorization` 头，
+ *     **不能**靠 cookie —— 这也正是本层唯一的鉴权方式；凭据也**绝不进 query**（见 `FORBIDDEN_QUERY_KEYS` 守卫）。
+ *     两条分支返回**完全相同的形状**（`response` / `timeout` / `network`）；只有真的没有 `fetch` 的
+ *     环境（`typeof fetch !== 'function'`）才回 `unsupported`，由调用方给「请在 App 内使用」——
+ *     把「跑不了」伪装成「网络不好」是历史上最难查的一类假红。
  *
  * 安全（#484 §7 红线）：
  *   - Key / JWT **只进 `Authorization` 请求头**；URL 里出现 `key` / `api_key` / `token` /
@@ -95,7 +99,18 @@ export type ConsumeTransportRequest = {
 }
 
 export type ConsumeTransportResult =
-  | { kind: 'response'; status: number; text: string; headers: Record<string, string> }
+  | {
+      kind: 'response'
+      status: number
+      text: string
+      /** 小写化后的响应头（`location` 也在这里，别只看下面那个字段） */
+      headers: Record<string, string>
+      /**
+       * `Location` 头（从上面那张表里按大小写不敏感取出来的同一份值）。
+       * 两条分支都**不跟随重定向**，所以 3xx 的跳转目标只能这样交给上层解释；没有该头就是 `undefined`。
+       */
+      location?: string
+    }
   | { kind: 'timeout' }
   | { kind: 'network' }
   | { kind: 'unsupported' }
@@ -153,13 +168,37 @@ const failureOf = (error: unknown): 'timeout' | 'network' => {
 }
 
 /**
- * 默认传输：**只走原生** `CapacitorHttp`。
+ * 响应头归一：**小写 key** 的 `Record<string, string>`。原生与 Web 两条分支共用 ——
+ * 上层靠 `content-type` 分派错误（缺了会误判），`Location` 也靠它统一大小写。
+ */
+const normalizeHeaders = (raw: Record<string, string>): Record<string, string> => {
+  const headers: Record<string, string> = {}
+  for (const [name, value] of Object.entries(raw)) {headers[name.toLowerCase()] = String(value)}
+  return headers
+}
+
+/** 拼「拿到了响应」的结果：两条分支共用，保证形状与语义（含 `location`）完全一致 */
+const responseResult = (
+  status: number,
+  text: string,
+  headers: Record<string, string>
+): ConsumeTransportResult => ({
+  kind: 'response',
+  status,
+  text,
+  headers,
+  // `location` 只是原样透传：原生侧因为 `disableRedirects` 能读到跳转目标，Web 侧跟随重定向后
+  // 通常没有这个头（见 `webRequest` 注释）。**消费侧目前没有任何调用方读它**，留着是为了形状一致。
+  location: headers.location === '' ? undefined : headers.location,
+})
+
+/**
+ * 原生分支：`CapacitorHttp`。
  *
  * `connectTimeout` / `readTimeout` 全部来自配置档位；不跟随重定向（业务接口没有需要跟随的 3xx，
  * 跟随反而会把状态码与 Location 一起藏起来）。
  */
-export const capacitorTransport: ConsumeTransport = async (request) => {
-  if (!Capacitor.isNativePlatform()) {return { kind: 'unsupported' }}
+const nativeRequest = async (request: ConsumeTransportRequest): Promise<ConsumeTransportResult> => {
   try {
     const response = await CapacitorHttp.request({
       url: request.url,
@@ -172,52 +211,77 @@ export const capacitorTransport: ConsumeTransport = async (request) => {
       readTimeout: request.timeoutMs,
       disableRedirects: true,
     })
-    const rawHeaders = (response.headers ?? {}) as Record<string, string>
-    const headers: Record<string, string> = {}
-    for (const [name, value] of Object.entries(rawHeaders)) {headers[name.toLowerCase()] = String(value)}
+    const headers = normalizeHeaders((response.headers ?? {}) as Record<string, string>)
     const text = typeof response.data === 'string' ? response.data : JSON.stringify(response.data ?? null)
-    return { kind: 'response', status: response.status, text, headers }
+    return responseResult(response.status, text, headers)
   } catch (error) {
     return { kind: failureOf(error) }
   }
 }
 
 /**
- * Web 兜底传输：**只为在浏览器里能真跑一遍登录 / 注册**（维护者要在 Web 上测全流程）。
+ * Web 分支：浏览器 `fetch`（同一份产物部署成网页时走这里）。
  *
- * 语义与 `capacitorTransport` 严格对齐：超时 → `failureOf` 折成 `timeout`，其它异常 → `network`；
- * 响应头转成**小写 key** 的 `Record<string,string>`（上层靠 `content-type` 分派错误，缺了会误判）；
- * body 字符串原样发出，`Content-Type` 由 `request.headers` 决定。
+ * 与 `nativeRequest` 的**语义逐条对齐**：
+ *  - 超时用 `request.timeoutMs`（`AbortController` + `setTimeout`，`finally` 里清 timer；
+ *    不用 `AbortSignal.timeout` —— Chromium 83 / 旧 Safari 没有它）；
+ *  - 响应头同样**小写化**（`Headers.forEach` 的 name 已经是小写，仍显式归一，防止替身实现不守规矩）；
+ *  - `responseType: 'text'` 等价于 `response.text()`；body 字符串原样发出，`Content-Type` 由 headers 决定；
+ *  - 异常折叠沿用同一个 `failureOf()`（超时 → `timeout`，其它 → `network`），不另写一套判定。
  *
- * 唯一**有意**与原生不同的地方：`redirect: 'follow'`。跨域下 `manual` 只会把 3xx 原样吐给上层
- * （`Location` 拿不到），比跟随更难查；原生那边不跟随是因为 `CapacitorHttp` 拿得到状态码。
+ * **重定向是一个有意保留的差异：Web 走 `redirect: 'follow'`，不跟原生对齐。**
+ * 原生不跟随是因为 `CapacitorHttp` 拿得到状态码与 `Location`；浏览器跨域下 `redirect: 'manual'`
+ * 只会给 opaque-redirect（`status 0`、头与体都读不到），既读不到 `Location`、又会把一次
+ * 「http→https」这类本该自动过去的跳转变成「连不上」，比跟随更难查。业务接口本来就不该回 3xx，
+ * 所以两种写法在正常路径上等价 —— 选一个出错时更容易解释的。
  *
- * 超时用 `AbortController` + `setTimeout` 自己算，不用 `AbortSignal.timeout`
- * （Chromium 83 / 旧 Safari 没有它）。
+ * 凭据只走 `Authorization` 头：生产网关的 CORS 是 `allowed_origins: ["*"]` + `allow_credentials: false`，
+ * 带 cookie 的跨域请求会被浏览器直接拒（而且 `*` 本来就不带凭据），所以显式 `credentials: 'omit'`。
  */
-const webTransport: ConsumeTransport = async (request) => {
+const webRequest = async (request: ConsumeTransportRequest): Promise<ConsumeTransportResult> => {
+  // 只有真的没有 `fetch` 的环境才算「跑不了」：这是 `unsupported`（不是「网络不好」）
+  if (typeof fetch !== 'function') {return { kind: 'unsupported' }}
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), request.timeoutMs)
   try {
     const response = await fetch(request.url, {
       method: request.method,
       headers: request.headers,
-      // string 原样发出：content-type 由 headers 决定（与 Capacitor 分支同一语义）
+      // string 原样发出：content-type 由 headers 决定（与原生分支同一语义）
       body: request.body,
       signal: controller.signal,
       redirect: 'follow',
+      credentials: 'omit',
     })
     const headers: Record<string, string> = {}
-    response.headers.forEach((value, name) => {
-      headers[name.toLowerCase()] = value
-    })
-    return { kind: 'response', status: response.status, text: await response.text(), headers }
+    response.headers.forEach((value, name) => {headers[name.toLowerCase()] = value})
+    return responseResult(response.status, await response.text(), headers)
   } catch (error) {
     return { kind: failureOf(error) }
   } finally {
     clearTimeout(timer)
   }
 }
+
+/**
+ * 默认传输：**本函数只做分派**，两条实现各自独立（不复制粘贴同一段）。
+ *
+ * 原生 → `CapacitorHttp`（不受 CORS 约束、可读任意响应头）；其余 → 浏览器 `fetch`。
+ * 非原生**不再**一律返回 `unsupported`：生产网关的 CORS 是 `*`（见文件头实测），浏览器能直连，
+ * 而 `unsupported` 只留给「连 `fetch` 都没有」的环境 —— 那时说「跑不了」才是真话。
+ */
+export const capacitorTransport: ConsumeTransport = (request) =>
+  Capacitor.isNativePlatform() ? nativeRequest(request) : webRequest(request)
+
+/**
+ * 只走原生的传输：**给「本来就只能在 App 内做」的链路**（历史账号迁移 `services/legacy/migration`）。
+ *
+ * 为什么需要它：`capacitorTransport` 放开 Web 之后，非原生环境会真的发请求；而迁移那类链路
+ * 在网页端本来就没有对应能力，旧行为是明确回 `unsupported` → 界面给「请在 App 内使用」。
+ * 有了这个导出，业务代码里就不必再写 `if (isNativePlatform())`（平台分支只允许存在这一处）。
+ */
+export const nativeOnlyTransport: ConsumeTransport = async (request) =>
+  Capacitor.isNativePlatform() ? nativeRequest(request) : { kind: 'unsupported' }
 
 /** 配置读取失败（缺字段 / 明文 http / 不是绝对地址）：**启动即抛**，不带着错地址跑 */
 export class ConsumeConfigError extends Error {
@@ -369,10 +433,10 @@ const defaultHeaders: Record<string, string> = {
  * 请求（401 说明没有产生副作用），而且只重放一次；`onUnauthorized` 没注入时连这一次都没有。
  */
 export const createConsumeHttp = (options: ConsumeHttpOptions = {}): ConsumeHttp => {
-  // 唯一的选择点：原生走 `CapacitorHttp`，非原生（浏览器预览 / 插件缺失）走 fetch 兜底。
-  // `capacitorTransport` 本身**一个字符都没改**。
-  const transport =
-    options.transport ?? (Capacitor.isNativePlatform() ? capacitorTransport : webTransport)
+  // 唯一的选择点：`capacitorTransport` 自己分派（原生 `CapacitorHttp` / Web `fetch`），
+  // 这里不再做平台判断 —— 平台分支只允许存在一份（`nativeRequest` / `webRequest`）。
+  // 单测注入 `transport` 时完全不碰真实请求。
+  const transport = options.transport ?? capacitorTransport
   const endpoints = options.endpoints ?? readConsumeEndpoints()
 
   const url = (path: string, query?: ConsumeRequest['query']): string => {

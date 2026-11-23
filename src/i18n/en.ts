@@ -529,6 +529,7 @@ export const en = {
   settingsManagedKeyFailNetwork: 'the request timed out or could not connect',
   settingsManagedKeyFailHttp: 'the server answered {status}',
   settingsManagedKeyFailEmpty: 'the server answered 2xx but returned no key value',
+  settingsManagedKeyFailStorage: 'the device could not save the built-in service settings. Check available storage and try again',
   /** #812: on-site facts in the failure banner — which key (first 6 chars) hit which address */
   settingsManagedKeyEnsureContext: 'Key in use: {keyPrefix}… (first 6 chars) · Request URL: {address}',
   settingsManagedKeyNoKeyYet: 'not claimed yet',

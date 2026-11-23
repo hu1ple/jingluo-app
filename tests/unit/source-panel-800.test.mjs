@@ -114,7 +114,7 @@ test('[1] 面板里没有「重新领取」的接线，恢复改走后台自动�
   const app = codeOf('src/app/App.tsx')
   assert.match(
     app,
-    /\}, \[oursChannel, signedIn\]\)/u,
+    /\}, \[needsBuiltinKey, signedIn\]\)/u,
     '启动对齐还必须跟着登录态重跑（#800：按钮没了，登录后那一次对齐是唯一入口）'
   )
 })
@@ -216,7 +216,7 @@ test('[4] 内置服务不再有「重新领取」：401 / 未领取的出路是�
   )
   assert.match(
     runtime,
-    /if \(!alreadyApplied\) \{\s*applyManagedKey\(result\.key, result\.id\)/u,
+    /!alreadyApplied && !applyManagedKey\(result\.key, result\.id, \{ selectBuiltin: true \}\)/u,
     '没生效就必须走 applyManagedKey（Key + 标记同一个入口写），不许只判断名字存在就收工'
   )
 })

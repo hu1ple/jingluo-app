@@ -50,7 +50,7 @@ import type { ConsumeClient, ConsumeUser } from '../../services/consume/index.js
 import { getConsumeClient } from '../../services/consumeClient.js'
 import { MY_ORDERS_DEFAULT_PAGE_SIZE, type ConsumeMyOrder } from '../../services/consume/orders.js'
 import { useAuthStatus } from '../../services/auth/useAuthStatus.js'
-import { managedKeyTail } from '../../services/api/managedKey.js'
+import { managedKeyTail, shouldSyncManagedKey } from '../../services/api/managedKey.js'
 import { detectThirdPartyProtocol } from '../../services/api/protocolDetect.js'
 import { syncManagedKeyFromServer } from '../settings/managedKeyRuntime.js'
 import { clearManagedKeyBlocked, useSettingsDialog } from '../settings/settingsDialogState.js'
@@ -174,7 +174,7 @@ export const AccountConsumePage = ({
    */
   const [autoRedeem, setAutoRedeem] = useState<WalletAutoRedeemOutcome | null>(null)
   /** #803：失败原因（带状态码）+「重试」；重试真的再跑一轮完整流程（查重 → 建） */
-  const keyEnsureBanner = (
+  const keyEnsureBanner = signedIn && shouldSyncManagedKey(kind, apiKey) && (
     <ManagedKeyEnsureBanner
       t={t}
       status={keyEnsureStatus}
@@ -308,9 +308,11 @@ export const AccountConsumePage = ({
       if (!alive.current) {
         return
       }
-      if (result.kind === 'claimed') {
+      if (result.kind === 'claimed' || result.kind === 'superseded') {
         dispatchSource({ type: 'claim-ok' })
-        showToast(t('settingsSourceSwitched', { name: t(SOURCE_ROW_LABEL_KEY.builtin) }))
+        if (result.kind === 'claimed') {
+          showToast(t('settingsSourceSwitched', { name: t(SOURCE_ROW_LABEL_KEY.builtin) }))
+        }
         return
       }
       if (result.kind === 'need-login') {
@@ -660,7 +662,8 @@ export const AccountConsumePage = ({
     return (
       <div className={`${styles.page} ${styles.embedded}`} data-testid="account-consume-page">
         {subHeader('source', null)}
-        {keyEnsureBanner}
+        {sourceState.open === 'builtin' && (sourceState.claim.phase === 'claiming' || sourceState.claim.phase === 'failed')
+          ? null : keyEnsureBanner}
         <SourceAccordionView
           t={t}
           state={sourceState}
@@ -747,6 +750,7 @@ export const AccountConsumePage = ({
     return (
       <div className={`${styles.page} ${styles.embedded}`} data-testid="account-consume-page">
         {signedIn === true ? subHeader('account', null) : subHeaderWithTitle(null, 'sub2authLogin')}
+        {keyEnsureBanner}
 
         {/* 资料区：已登录 = 头像 + 昵称 + 邮箱；未登录 = 一句「未登录」（登录 / 注册入口在下方的账号面板） */}
         {signedIn === true ? (
@@ -802,7 +806,6 @@ export const AccountConsumePage = ({
           <div className={styles.viewBody} data-testid="account-consume-tab-account">
             {/* 未登录 = **这一页就是登录界面**：登录 / 注册分段 + 获取验证码 + 忘记密码 +
                 「暂不登录」（#608 的口子，直接去填 API Key）。 */}
-            {keyEnsureBanner}
             <SettingsAuthCard consume={consume} onSkip={() => onNavigate('source')} />
           </div>
         )}

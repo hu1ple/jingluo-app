@@ -318,9 +318,14 @@ quota(元，0=不限), quota_used(元), expires_at, last_used_at, …}`。**`quo
 
 ### 6.4 运行时要求
 
-1. **必须走原生 `CapacitorHttp`**：sub2api 的 `cors.allowed_origins` 默认空数组（部署样例
-   `config.example.yaml` 的 `cors` 段），空数组时中间件**拒绝所有跨域请求**
-   （`middleware/cors.go:31-35` 会打 "CORS allowed_origins not configured" 警告）。WebView 裸 `fetch()` 必然失败。
+1. **原生走 `CapacitorHttp`，Web 直连浏览器 `fetch`**：部署样例（`config.example.yaml` 的 `cors` 段）
+   `allowed_origins` 若是**空数组**，中间件会**拒绝所有跨域请求**
+   （`middleware/cors.go:31-35` 会打 "CORS allowed_origins not configured" 警告）。
+   **实测（2026-11-23）生产网关不是空数组，而是 `allowed_origins: ["*"]` + `allow_credentials: false`**：
+   预检 `OPTIONS /api/v1/payment/orders/my` → 204 + `Access-Control-Allow-Origin: *`（放行 `Authorization`），
+   `GET /api/v1/pay-link` → 200 带 `*`，无 token 的 `GET /api/v1/payment/orders/my` → 401 **仍带** `*`；
+   也就是说浏览器侧 `fetch` 可达。**但 `*` 不带凭据**：身份**只能**走 `Authorization` 头，绝不进 query
+   （实现见 `src/services/consume/http.ts` 文件头）。
 2. 超时按 §6.1 的 `timeoutMs` 读，**不许在各调用点硬编码毫秒数**。
 3. **base 只从配置读**：`src/**` 出现任何后端地址字面量 → 门禁红。
 4. `check:ip`（`scripts/check-hardcoded-ip.mjs`）的扫描范围扩展到 `config/endpoints.json` 的 `consume` / `pay`。

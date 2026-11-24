@@ -66,9 +66,7 @@ const exerciseAllNodes = async () => {
   // 收款页：取到了 + 打不开
   await api.fetchPayLink(once(json(200, { ok: true, url: SHOP_URL, note: 'n' })))
   await api.fetchPayLink(once(json(503, { ok: false })))
-  // 卡密：202 处理中 + 409 已用过
-  await api.redeemCard({ cardNo: CARD, apiKey: KEY, requestId: CARD }, once(raw(202, '{"code":"CREDIT_PENDING"}')))
-  await api.redeemCard({ cardNo: CARD, apiKey: KEY, requestId: CARD }, once(json(409, { code: 'CARD_ALREADY_USED' })))
+  // 卡密兑换已从本模块移除（2026-11-24：兑换改走 sub2api 的 /api/v1/redeem），这里不再采样 quota.redeem
   // cid：命中缓存 + 一个都没有
   await customerId.ensureCustomerId(memoryStorage({ [customerId.CUSTOMER_ID_STORAGE_KEY]: '10' }))
   customerId.resetCustomerIdCache()
@@ -83,14 +81,13 @@ const exerciseAllNodes = async () => {
   await paymentRecords.fetchPaymentRecords(KEY, once(raw(200, '<html>nope</html>')), null)
 }
 
-test('六个节点各留一条带 stage 的日志，meta 都够用且键在白名单里', async () => {
+test('各节点各留一条带 stage 的日志，meta 都够用且键在白名单里', async () => {
   await clearLogs()
   await exerciseAllNodes()
   const logs = quotaLogs()
   const expected = [
     'quota.balance',
     'quota.pay',
-    'quota.redeem',
     'quota.cid',
     'quota.orders',
   ]
@@ -121,7 +118,7 @@ test('六个节点各留一条带 stage 的日志，meta 都够用且键在白�
   }
   // 失败分支也要有：收款页 503、兑换 409、记录页 badResponse
   const warnings = logs.filter((entry) => entry.level === 'warn')
-  assert.ok(warnings.length >= 3, `失败分支的 warning 至少 3 条，实际 ${warnings.length}`)
+  assert.ok(warnings.length >= 2, `失败分支的 warning 至少 2 条（兑换节点随 redeemCard 一起移除，少一条），实际 ${warnings.length}`)
 })
 
 test('脱敏铁律：凭证原文、收款页地址、设备码一个都不进日志', async () => {
@@ -133,29 +130,7 @@ test('脱敏铁律：凭证原文、收款页地址、设备码一个都不进�
   }
   // 只留尾 4 位，且带掩码前缀（读日志的人一眼能看出这是打码值）
   assert.equal(firstOf('quota.balance').meta['key.tail'], '••••3812', 'Key 只留尾 4 位')
-  assert.equal(firstOf('quota.redeem').meta['card.tail'], '••••A3SR', '卡密只留尾 4 位')
   // 单号只留尾 4 位那条断言原本挂在时间线的「按单号查一笔」上；时间线随旧支付 UI 下线（#487）后
   // 这条链路上已经没有写 `order.tail` 的调用点，字段仍留在 META_KEYS 里用于读旧日志。
 })
 
-test('语义：202 是 pending、409 带错误码、空记录页与失败页分得开', async () => {
-  await clearLogs()
-  await exerciseAllNodes()
-  const redeemLogs = quotaLogs().filter((entry) => entry.meta?.stage === 'quota.redeem')
-  const pending = redeemLogs.find((entry) => entry.meta.status === 202)
-  const used = redeemLogs.find((entry) => entry.meta.upstreamCode === 'CARD_ALREADY_USED')
-  assert.equal(pending?.meta.result, 'pending', '202 是「处理中」，不许并进 error')
-  assert.equal(pending?.level, 'info')
-  assert.equal(used?.meta.result, 'error')
-  assert.equal(used?.level, 'warn')
-
-  // 记录页：失败带 reason；成功带 count/total（空白页与失败页靠这两个字段区分）
-  const ordersLogs = quotaLogs().filter((entry) => entry.meta?.stage === 'quota.orders')
-  const failed = ordersLogs.find((entry) => entry.meta.source === 'payment-records')
-  assert.equal(failed?.meta.result, 'error')
-  assert.equal(failed?.meta.reason, 'oursErrInvalidResponse')
-  const okPage = ordersLogs.find((entry) => entry.meta.source === 'purchases')
-  assert.equal(okPage?.meta.result, 'ok')
-  assert.equal(okPage?.meta.total, 57, '页大小与 total 都要记，否则分不出「没数据」与「只拉了第一页」')
-  assert.equal(okPage?.meta.limit, 20)
-})

@@ -35,7 +35,7 @@
 import { record, recordAction } from '../diagnostics/collector.js'
 import { buildMeta } from '../diagnostics/fields.js'
 import { formatMoney, formatMoneyValue, formatYuan, pointsToYuan } from '../../utils/money.js'
-import { maskCard, maskKey, maskTail } from './mask.js'
+import { maskKey, maskTail } from './mask.js'
 
 export { maskCard, maskDeviceId, maskKey, maskTail } from './mask.js'
 
@@ -179,20 +179,11 @@ const readString = (record: Record<string, unknown> | null, field: string): stri
   return typeof value === 'string' ? value : ''
 }
 
-const readNumber = (record: Record<string, unknown> | null, field: string): number | null => {
-  const value = record?.[field]
-  return typeof value === 'number' && Number.isFinite(value) ? value : null
-}
-
 const isSuccessStatus = (status: number): boolean => status >= 200 && status < 300
 
 /** 超时 / 连不上这类传输层问题，统一换成可重试的文案 key */
 const transportFailure = (result: Exclude<OursHttpResult, { kind: 'response' }>): OursMessageKey =>
   result.kind === 'timeout' ? 'oursErrTimeout' : 'oursErrNetwork'
-
-/** 服务端错误码 → 文案 key（先看 code，再看状态码） */
-const messageKeyFor = (code: string, status: number): OursMessageKey =>
-  OURS_ERROR_KEYS[code] ?? OURS_STATUS_KEYS[status] ?? 'oursErrUnknown'
 
 // ------------------------------------------------------------------ 额度文案（元）
 
@@ -410,8 +401,6 @@ export type OursRedeemResult =
  * 服务端按 request_id 去重：同一张卡超时重发时，重发必须能被识别成同一笔，
  * 而 card_no 天然一一对应、不需要额外保存一份 id（也就少一处会丢的状态）。
  */
-export const requestIdForCard = (cardNo: string): string => cardNo.trim()
-
 export type OursRedeemInput = { cardNo: string; apiKey: string; requestId: string }
 
 /**
@@ -419,106 +408,5 @@ export type OursRedeemInput = { cardNo: string; apiKey: string; requestId: strin
  * - 202 / CREDIT_PENDING → kind='pending'（处理中，界面不能说「失败」，也不催用户重试）
  * - 409 CARD_ALREADY_USED → 提示不要重复提交
  * - 400 API_KEY_INVALID → 提示重填 Key；503 VERIFY_UNAVAILABLE → 可重试
- */
-export const redeemCard = async (
-  input: OursRedeemInput,
-  transport: OursTransport
-): Promise<OursRedeemResult> => {
-  const startedAt = Date.now()
-  const cardNo = input.cardNo.trim()
-  const cardTail = cardNo === '' ? '' : maskCard(cardNo)
-  /** 最近一次拿到 HTTP 状态码（连不上 / 超时没有状态码，就不写这个键） */
-  let httpStatus: number | undefined
-  /**
-   * 出口埋点（#312）：202（受理）/ 409（已用过）/ 404（卡不存在）/ 503（校验服务不可用）
-   * 在界面上是一句话，但含义完全不同 —— 用户付过钱之后的这一步必须留证据。
-   * `pending` 单独一个 result 值，不许并进 error（服务端受理不是失败）。
-   * 卡密只留尾 4 位；`request_id`（= 卡密原文）与 api_key 一个字都不落库。
-   */
-  const settle = (outcome: OursRedeemResult): OursRedeemResult => {
-    const base = {
-      ...buildMeta({
-        stage: 'quota.redeem',
-        durationMs: Date.now() - startedAt,
-        ...(httpStatus === undefined ? {} : { status: httpStatus }),
-        ...(outcome.kind === 'error'
-          ? { upstreamCode: outcome.code, retryable: outcome.retryable }
-          : {}),
-      }),
-      result: outcome.kind,
-      'card.tail': outcome.cardTail === '' ? 'none' : outcome.cardTail,
-    }
-    if (outcome.kind === 'error') {
-      record('warning', 'warn', 'ours redeem failed', base)
-    } else {
-      record('nav', 'info', outcome.kind === 'pending' ? 'ours redeem pending' : 'ours redeem done', base)
-    }
-    return outcome
-  }
-  if (cardNo === '') {
-    return settle({
-      kind: 'error',
-      code: 'CARD_MISSING',
-      messageKey: 'oursErrCardMissing',
-      cardTail,
-      retryable: false,
-    })
-  }
-  const key = input.apiKey.trim()
-  if (key === '') {
-    return settle({
-      kind: 'error',
-      code: 'API_KEY_MISSING',
-      messageKey: 'oursErrKeyMissing',
-      cardTail,
-      retryable: false,
-    })
-  }
-  const result = await transport({
-    method: 'POST',
-    url: `${OURS_API_BASE}/api/redeem`,
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ card_no: cardNo, api_key: key, request_id: input.requestId }),
-    timeoutMs: OURS_TIMEOUTS.redeem,
-    followRedirects: false,
-  })
-  if (result.kind !== 'response') {
-    return settle({
-      kind: 'error',
-      code: result.kind === 'timeout' ? 'TIMEOUT' : 'NETWORK',
-      messageKey: transportFailure(result),
-      cardTail,
-      retryable: true,
-    })
-  }
-  httpStatus = result.status
-  const parsed = parseJson(result.text)
-  const body = parsed.ok ? asRecord(parsed.value) : null
-  // 业务码兼容两种信封：顶层 {code}（本服务）与 {error:{code}}（本机池那条链路）
-  const code = readString(body, 'code') || readString(asRecord(body?.error), 'code')
-  if (result.status === 202 || code === 'CREDIT_PENDING') {
-    return settle({ kind: 'pending', cardTail })
-  }
-  if (isSuccessStatus(result.status) && body !== null && body.ok === true) {
-    return settle({ kind: 'success', points: readNumber(body, 'points') ?? 0, cardTail })
-  }
-  if (!parsed.ok && isSuccessStatus(result.status)) {
-    return settle({
-      kind: 'error',
-      code: 'INVALID_RESPONSE',
-      messageKey: 'oursErrInvalidResponse',
-      cardTail,
-      retryable: false,
-    })
-  }
-  return settle({
-    kind: 'error',
-    code: code || `HTTP_${result.status}`,
-    messageKey: messageKeyFor(code, result.status),
-    cardTail,
-    retryable: result.status >= 500,
-  })
-}
-
 /** 收款页地址只接受 https（App 内浏览器也只放行 https），其余一律当作「没有支付入口」 */
 export const isOpenableCheckout = (url: string): boolean => /^https:\/\//i.test(url.trim())

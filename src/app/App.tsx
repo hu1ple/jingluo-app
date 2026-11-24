@@ -15,7 +15,7 @@ import { SessionView } from '../components/session/SessionView.js'
 import { SessionBranchDialog } from '../components/session/SessionBranchDialog.js'
 import { MobileHeader } from '../components/session/MobileHeader.js'
 import { Welcome } from '../components/session/Welcome.js'
-import { ensureApiKey, openSettings } from '../components/settings/settingsDialogState.js'
+import { ensureApiKey, openSettings, useSettingsDialog } from '../components/settings/settingsDialogState.js'
 import { syncManagedKeyFromServer } from '../components/settings/managedKeyRuntime.js'
 import { useAuthStatus } from '../services/auth/useAuthStatus.js'
 import { useApiConfig } from '../services/api/apiConfig.js'
@@ -34,7 +34,7 @@ import { CollapsedSider } from '../components/sider/CollapsedSider.js'
 import { closeMobileSider } from '../components/sider/mobileSiderState.js'
 import { MobileSider, Sider } from '../components/sider/Sider.js'
 import { UpdateDialog } from '../components/update/UpdateDialog.js'
-import { snoozeStartupUpdatePrompt, startUpdateGate, useUpdateGate } from '../services/updateGateState.js'
+import { snoozeStartupUpdatePrompt, startUpdateGate, updateRequiredNow, useUpdateGate } from '../services/updateGateState.js'
 import { bundledApp } from '../services/appUpdate.js'
 import styles from './App.module.css'
 
@@ -100,8 +100,18 @@ export const App = () => {
 
   useEffect(() => {
     void initChat()
-    // 首次打开先在设置里输入 API Key（启动这一次只为「一个都没有」打开设置，见 #596）
-    ensureApiKey({ fromBoot: true })
+    /**
+     * 首次打开先把 API Key 填了（启动这一次只为「一个都没有」打开设置，见 #596）。
+     *
+     * **但强制更新优先级更高**：判定结果出来之前不要抢屏，否则「无 Key 首启 + 服务端要求强制更新」
+     * 会同时叠两层弹窗（实测：设置弹窗盖在强制更新上，用户既看不到原因也点不到「去更新」）。
+     * 判定是 fail-open 的（拉不到＝不拦），所以正常情况下这只是把 Key 引导推迟到一次网络往返之后。
+     */
+    void startUpdateGate().then(() => {
+      if (!updateRequiredNow()) {
+        ensureApiKey({ fromBoot: true })
+      }
+    })
   }, [])
 
   /**
@@ -269,8 +279,21 @@ const StartupUpdatePrompt = () => {
       return
     }
     decided.current = true
-    // forced 无视别的弹层（它优先级最高）；soft 只有「屏幕上已经有 dialog」才让位（先到先得）
-    setShow(gate.kind === 'forced' || !anotherDialogOpen())
+    // forced 无视别的弹层（它优先级最高）
+    if (gate.kind === 'forced') {
+      setShow(true)
+      return
+    }
+    /**
+     * soft 让位给「先到先得」，但**必须等一个宏任务再判**：
+     * 「无 Key 首启」那条路会在本次判定之后、同一个 tick 内把设置弹层打开（`ensureApiKey`），
+     * 立刻问 `anotherDialogOpen()` 只会得到 false，于是两层弹窗叠在一起（实测）。
+     */
+    const timer = setTimeout(() => {
+      // 设置弹层「已打开」以 store 为准（DOM 要等 React 提交，宏任务里可能还没落）；再兜一层 DOM 检查
+      setShow(!useSettingsDialog.getState().open && !anotherDialogOpen())
+    }, 0)
+    return () => clearTimeout(timer)
   }, [checked, gate])
 
   if (!checked || gate.kind === 'none' || !show || closed) {

@@ -232,6 +232,57 @@ const evaluate = (rows: UpdateRelease[], source: GateSource, ctx: GateContext): 
  * 调用点只该有一处（`App` 的首屏 effect），并且**不要 await 它** —— 它不阻塞渲染，
  * 结果落到 `updateGateState` 的轻量 store 上。
  */
+/**
+ * 演示开关：`?diag-debug&update-demo=forced`（或 `=soft`）。
+ *
+ * 为什么需要它：平台闸门规定**网页永不 forced**（刷新即最新，没有安装概念），所以在浏览器里
+ * 无论服务端下发什么策略都看不到强制更新那套 UI。要在网页上验收「强制更新长什么样」，
+ * 只能显式伪造一次判定结果。
+ *
+ * 闸门与 `installDiagnosticsDebugHandle` 同一道：**必须同时带 `?diag-debug`**，所以生产里
+ * 用户不可能靠加参数把自己卡住。返回的是**合成**的 release（版本号故意写成本机 +1 的假值），
+ * 不来自网络、不写节流时间、不影响真实清单。
+ */
+const demoOverride = (): Extract<UpdateGate, { kind: 'soft' | 'forced' }> | null => {
+  try {
+    const params = new URLSearchParams(globalThis.location.search)
+    if (!params.has('diag-debug')) {
+      return null
+    }
+    const mode = params.get('update-demo')
+    if (mode !== 'forced' && mode !== 'soft') {
+      return null
+    }
+    const installed = bundledApp()
+    const release = {
+      version: '2.0.2',
+      versionCode: (installed.versionCode || 1) + 2,
+      releasedAt: new Date().toISOString(),
+      file: 'apk/jingluo-chat-2.0.2.apk',
+      size: 6930703,
+      md5: 'demo',
+      sha256: 'demo',
+      changes: [
+        '修复若干问题',
+        '新增启动检查更新',
+        '公告栏支持未读红点与弹开阅读',
+      ],
+      artifactVariant: currentVariant(),
+      buildType: 'stable',
+    } as unknown as UpdateRelease
+    const policy = {
+      mode,
+      minSupportedVersionCode: mode === 'forced' ? release.versionCode : 0,
+      snoozeHours: 24,
+      reason: mode === 'forced' ? '当前版本存在已知问题，请升级后继续使用。' : undefined,
+      basis: 'mode',
+    } as unknown as ResolvedUpdatePolicy
+    return { kind: mode, release, policy }
+  } catch {
+    return null
+  }
+}
+
 export const checkUpdateGate = async (deps: UpdateGateDeps = {}): Promise<UpdateGate> => {
   const now = deps.now ?? Date.now()
   const installed = (deps.installed ?? localInstalled)()
@@ -239,6 +290,12 @@ export const checkUpdateGate = async (deps: UpdateGateDeps = {}): Promise<Update
   if (!Number.isSafeInteger(installed.versionCode) || installed.versionCode <= 0) {
     return NONE
   }
+  // 演示：网页上也能看到 forced / soft 长什么样（必须带 ?diag-debug，见 demoOverride 注释）
+  const demo = demoOverride()
+  if (demo) {
+    return demo
+  }
+
   const android = (deps.isAndroid ?? isAndroidUpdate)()
   const channel =
     deps.channel ?? readUpdateChannel(defaultChannel(installed.version), deps.storage)

@@ -261,7 +261,7 @@ export const en = {
   settingsRowAppearance: 'Appearance',
   settingsRowGeneral: 'General',
   settingsRowVoice: 'Voice',
-  settingsRowStyle: 'Style',
+  settingsRowFont: 'Font',
   settingsRowAnnouncement: 'Announcement board',
   settingsRowHelpFeedback: 'Help & feedback',
   settingsAnnouncementEmpty: 'No announcements yet',

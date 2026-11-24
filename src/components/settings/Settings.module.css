@@ -90,6 +90,12 @@
   position: relative;
 }
 
+/* 卡片内的小标题（.cardLabel）**只留上方那条线**：下面那行（如「字号」）自己也会画一条，
+   两条线把小标题夹在中间很难看（外观页「字体」那组实测就是这样）。 */
+.card > .cardLabel + *::before {
+  display: none;
+}
+
 .card > * + *::before {
   content: '';
   position: absolute;
@@ -191,7 +197,7 @@
 /* 卡片内的块标题（例如「语音」页里「朗读设置」那一组字号/字重/行高的抬头）：
    比分组标题还轻一档，只做分组说明，不抢行的注意力 */
 .cardLabel {
-  padding: 14px 0 2px;
+  padding: 18px 0 6px;
   color: var(--dsw-alias-label-tertiary);
   font-size: 12px;
   font-weight: 500;

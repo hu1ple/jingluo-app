@@ -443,7 +443,7 @@ const SettingsContent = ({ visible }: { visible: boolean }) => {
         <SettingsCard>
           <ThemeSetting />
           <ChatBackgroundField />
-          <div className={styles.cardLabel}>{t('settingsRowStyle')}</div>
+          <div className={styles.cardLabel}>{t('settingsRowFont')}</div>
           <ReadingSettings />
         </SettingsCard>
       )

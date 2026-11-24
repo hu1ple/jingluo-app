@@ -1,0 +1,18 @@
+# 代码归属：签名的「命门」文件必须由 owner 审批改动。
+#
+# 为什么单独给 workflow 目录划 owner：`build-apk.yml` / `release.yml` 里用到了签名 Secret。
+# 任何能修改这些文件的人，都能加一行 `echo ${{ secrets.ANDROID_KEYSTORE_B64 }}`
+# 把私钥导出到日志或 artifact —— 所以「谁能改 workflow」等价于「谁能拿到私钥」。
+# 配合 branch protection 的「Require review from Code Owners」才真正生效；
+# 只写这个文件、不开那条规则，等于没有保护。
+#
+# 注意：CODEOWNERS 的 owner 必须是**有写权限**的账号或团队。换 owner 请改这里。
+
+/.github/workflows/            @zzy-repo
+/.github/CODEOWNERS            @zzy-repo
+
+# 签名与版本身份：证书指纹、包名、版本号的单一来源，改动会导致「用户无法覆盖升级」
+/config/appIdentity.json       @zzy-repo
+/android/app/build.gradle      @zzy-repo
+/scripts/check-keystore-config.mjs   @zzy-repo
+/scripts/verify-release-apk.mjs      @zzy-repo

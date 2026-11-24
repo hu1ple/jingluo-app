@@ -12,7 +12,7 @@
 //   [2] 回车事件被输入框吃掉：document 冒泡 / window 都收不到（只剩 capture 能看到）
 //   [3] 会话没被切换：挂载窗口里的消息 id 全是本会话的
 //   [4] 中文输入法合成期（isComposing）不拦：事件不被 preventDefault，也不插换行
-//   [5] 上滑看历史时内容变化（编辑上方已挂载的消息）后，正在读的那一行屏幕位置不变
+//   [5] 上滑看历史时内容变化（增高上方已挂载的消息）后，正在读的那一行屏幕位置不变
 //   [6] 上滑过程本身不出现反向跳动（rAF 逐帧方向的单调性）
 //   [7] 切会话后仍然贴底（不许为了锚定把 #386 的跟随逻辑弄坏）
 //
@@ -356,14 +356,26 @@ const scenario = async ({ label, width, height, isMobile }) => {
   })
   const rowsAfterEdit = await page.evaluate(() => window.__probe.rows())
 
-  // 编辑态一打开，阅读位置就不许跳（#610：autoFocus 的原生 scroll-into-view 会甩走 ~1100px）
+  // 移动端验证编辑区居中；桌面端继续验证 #610 的阅读位置保护。
   const tracked = before.rows.find((row) => row.top >= 0)
   const trackedAfter = rowsAfterEdit.find((row) => row.id === tracked.id)
-  expect(
-    Boolean(trackedAfter) && Math.abs(trackedAfter.top - tracked.top) <= 2,
-    `[${label}][1c] 进入编辑态不移动阅读位置`,
-    `${tracked.id} ${tracked.top} → ${trackedAfter?.top}`
-  )
+  if (isMobile) {
+    const geometry = await textarea.evaluate(el => {
+      const viewport = window.__probe.scroller().getBoundingClientRect()
+      const field = el.getBoundingClientRect()
+      const box = el.parentElement.getBoundingClientRect()
+      return {
+        offset: (field.top + field.bottom - viewport.top - viewport.bottom) / 2,
+        visible: box.top >= viewport.top && box.bottom <= viewport.bottom,
+      }
+    })
+    expect(geometry.visible && Math.abs(geometry.offset) <= 2,
+      `[${label}][1c] 输入区域居中，编辑操作完整可见`, JSON.stringify(geometry))
+  } else {
+    expect(Boolean(trackedAfter) && Math.abs(trackedAfter.top - tracked.top) <= 2,
+      `[${label}][1c] 进入编辑态不移动阅读位置`,
+      `${tracked.id} ${tracked.top} → ${trackedAfter?.top}`)
+  }
 
   await page.evaluate(() => {
     window.__probe.keys.length = 0
@@ -437,7 +449,7 @@ const scenario = async ({ label, width, height, isMobile }) => {
   await waitEditingClosed(page)
 
   // ---------- [5] 上滑看历史 + 内容变化：阅读位置不许被弹走 ----------
-  // 打视口上方、但仍挂在窗口里的那条用户消息（内容变化发生在阅读位置之上）。
+  // 增高视口上方仍挂载的行，单独触发行高回填和阅读位置补偿。
   // 挂载窗口只有视口 ± overscan，窄视口上不一定已经有「上方」的行 —— 必要时再多滑几档把它挂上来。
   let above = null
   for (let attempt = 0; attempt < 6 && !above; attempt += 1) {
@@ -458,8 +470,14 @@ const scenario = async ({ label, width, height, isMobile }) => {
     first: window.__probe.firstVisible(),
     scrollTop: window.__probe.scrollTop(),
   }))
-  const changed = await page.evaluate((id) => window.__probe.clickEdit(id), above.id)
-  expect(changed, `[${label}][5b] 内容变化真的发生了（上方那条进入编辑）`, above.id)
+  const changed = await page.evaluate((id) => {
+    const row = document.querySelector(`[data-row-id="${CSS.escape(id)}"]`)
+    if (!row) return false
+    const before = row.getBoundingClientRect().height
+    row.style.minHeight = `${before + 80}px`
+    return row.getBoundingClientRect().height >= before + 79
+  }, above.id)
+  expect(changed, `[${label}][5b] 上方消息实测增高了 80px`, above.id)
   // 等布局与锚定都落定：连续三次采样里被跟踪行的位置不再变化
   let settled = null
   let previousTop = null

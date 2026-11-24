@@ -185,6 +185,9 @@ export const managedKeyEnsureFailureReason = (
   if (failure.kind === 'transport') {
     return t('settingsManagedKeyFailNetwork')
   }
+  if (failure.kind === 'storage') {
+    return t('settingsManagedKeyFailStorage')
+  }
   if (failure.kind === 'empty') {
     return t('settingsManagedKeyFailEmpty')
   }

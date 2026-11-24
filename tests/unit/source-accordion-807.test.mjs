@@ -542,9 +542,10 @@ test('[接线] 页面用同一份状态机与视图，且**只有运行时**能�
   assert.match(page, /onConfirm=\{onConfirmSourceRow\}/u, '「确认使用」接在页面上')
   // 内置服务那一行是「行即动作」：展开的同时按 plan 做一件事
   assert.match(page, /planBuiltinClick\(/u)
-  // 运行时才是唯一的切换点（两处：领取成功 / 确认使用）
+  // 手动领取与登录自动领取共享一次操作，另外两个显式操作直接切换。
   const rt = codeOf('src/components/settings/sourceAccordionRuntime.ts')
-  assert.equal((rt.match(/setProviderKind\(/gu) ?? []).length, 3, '运行时里只有 selectBuiltin / 领取成功 / 确认使用 三处写它')
+  assert.match(rt, /await ensureDeviceBuiltinKey\('select'\)/u)
+  assert.equal((rt.match(/setProviderKind\(/gu) ?? []).length, 2, '只有已有内置密钥时的选择、手动确认其它来源会直接切换')
   assert.match(rt, /if \(!options\.signedIn\)/u, '未登录必须在最前面拦下（不调接口）')
 })
 

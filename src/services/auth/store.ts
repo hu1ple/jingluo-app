@@ -420,6 +420,9 @@ let refreshInFlight: Promise<SessionRefreshOutcome> | null = null
  */
 let sessionEpoch = 0
 
+/** 登录、注册或退出会更换会话，正常续期保留这一代。 */
+export const getSessionEpoch = (): number => sessionEpoch
+
 /**
  * 刷新失败的性质判定：**只有「凭据本身不认」才清态**（#740 ①）。
  *

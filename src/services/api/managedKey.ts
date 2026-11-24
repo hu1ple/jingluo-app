@@ -48,6 +48,10 @@ import type { ProviderKind } from './providers.js'
 /** 哪些渠道的 Key 由服务端管理。今天只有 `ours` 一条，写成函数是为了将来加渠道时只有一个改动点。 */
 export const usesManagedKey = (kind: ProviderKind): boolean => kind === 'ours'
 
+/** 内置服务需要对齐密钥。其它来源只在还没有配置密钥时才自动选用内置服务。 */
+export const shouldSyncManagedKey = (kind: ProviderKind, apiKey: string): boolean =>
+  usesManagedKey(kind) || apiKey.trim() === ''
+
 /** 本机 Key 与服务端下发标记的关系（判据见文件头） */
 export type ManagedKeyVerdict = 'ok' | 'unclaimed' | 'stale'
 
@@ -210,7 +214,7 @@ export const retireManagedKey = async (
  */
 export const syncManagedKey = (
   source: ManagedKeySource,
-  options: { deviceId: string; refresh?: () => Promise<ManagedKeyRefreshOutcome> }
+  options: ManagedKeyEnsureOptions
 ): Promise<ManagedKeyEnsureResult> => ensureManagedKey(source, options)
 
 // ---------------------------------------------------------------- 「确保有 Key」的完整流程（#803）
@@ -248,6 +252,7 @@ export type ManagedKeyFailureKind =
   | 'http'
   /** 回了 2xx，但响应里**没有 Key 值** —— 拿不到能用的 Key 就是失败，不许当成功 */
   | 'empty'
+  | 'storage'
 
 /** 失败的细节：进日志、也进界面（界面只取 `kind` / `status` 决定说哪句话） */
 export type ManagedKeyFailure = {
@@ -257,7 +262,7 @@ export type ManagedKeyFailure = {
   /** 服务端给的码（`UNAUTHORIZED` / `HTTP_500` / `TIMEOUT` …）；没有就是空串 */
   code: string
   /** 失败发生在哪一步，排查用 */
-  step: 'list' | 'create'
+  step: 'list' | 'create' | 'save'
   /** 一句可读原因（**不含 Key 与 token 原文**，与 #484 §7 同一条红线） */
   detail: string
 }
@@ -286,7 +291,9 @@ export type ManagedKeyEnsureFailure = {
    *  - `attempts-exhausted`：重试那一次也用完了（#803 第 5 条：交给界面提示 + 重试按钮）
    *  - `refresh-failed`   ：401 之后没换成新凭据（会话失效 / 网络）→ **不许**拿旧 token 再试
    */
-  stop: 'attempts-exhausted' | 'refresh-failed'
+  stop: 'attempts-exhausted' | 'refresh-failed' | 'superseded' | 'save-failed'
+  /** 行内手动领取沿用消费层的错误分类。 */
+  error?: Sub2ApiError
   /** 这次是否真的换到过新凭据（只有 401 分支会变成 true） */
   refreshed: boolean
 }
@@ -303,6 +310,13 @@ export const MANAGED_KEY_MAX_ATTEMPTS = 2
 
 /** 换凭据的结局（与 `auth/store.ts` 的 `SessionRefreshOutcome` 同形；本层不 import 身份层） */
 export type ManagedKeyRefreshOutcome = 'refreshed' | 'expired' | 'retryable'
+
+type ManagedKeyEnsureOptions = {
+  deviceId: string
+  refresh?: () => Promise<ManagedKeyRefreshOutcome>
+  retry?: boolean
+  isCurrent?: () => boolean
+}
 
 /**
  * 「先查重」那一次查询（#803 第 2 条）：`GET /api/v1/keys?page=1&page_size=20&search=app-<设备前缀>`。
@@ -380,7 +394,7 @@ const emptyKeyFailure = (step: 'list' | 'create', status: number): ManagedKeyFai
 /** 一次尝试的结局（内部用；外面的 {@link ensureManagedKey} 负责重试与换凭据） */
 type ManagedKeyAttempt =
   | { ok: true; key: string; id: number; name: string; created: boolean }
-  | { ok: false; failure: ManagedKeyFailure }
+  | { ok: false; failure: ManagedKeyFailure; error?: Sub2ApiError }
 
 /**
  * **尝试一次**「确保这台设备有一把 Key」：先查重，没有才建。
@@ -388,8 +402,15 @@ type ManagedKeyAttempt =
  * 顺序不能换（#803 第 2/3 条）：先 `POST` 再查重没有意义 —— `POST /keys` 没有幂等键，
  * 重发一次就是多一把 Key、多一份额度入口（#484 §4.3）。
  */
-const ensureOnce = async (source: ManagedKeySource, name: string): Promise<ManagedKeyAttempt> => {
+const ensureOnce = async (
+  source: ManagedKeySource,
+  name: string,
+  isCurrent?: () => boolean
+): Promise<ManagedKeyAttempt | undefined> => {
   const listed = await source.keys.list(managedKeyLookupQuery(name))
+  if (isCurrent?.() === false) {
+    return undefined
+  }
   if (listed.ok) {
     // 命中的那一把**必须连明文一起取回**（#812）：列表每项的 `key` 是完整明文，
     // 少了这一步就只是「名字存在」—— 本机仍然没有能用的 Key，请求照旧 401「Key 无效」。
@@ -404,14 +425,14 @@ const ensureOnce = async (source: ManagedKeySource, name: string): Promise<Manag
       return { ok: false, failure: emptyKeyFailure('list', listed.status) }
     }
   } else {
-    return { ok: false, failure: managedKeyFailureOf('list', listed.error) }
+    return { ok: false, failure: managedKeyFailureOf('list', listed.error), error: listed.error }
   }
   // 查重确认「同名不存在」才建：body 只有 `name`（不传 group_id，见 #803 第 3 条）。
   // `dedupe: false` = 「查重这件事本层刚做过」的显式声明（#484 §4.3 要求真要第二把时必须显式说明意图）；
   // 不传就是再查一遍，一次领取会打两次同样的 GET（重试时也一样白跑）。
   const created = await source.keys.create({ name }, { dedupe: false })
   if (!created.ok) {
-    return { ok: false, failure: managedKeyFailureOf('create', created.error) }
+    return { ok: false, failure: managedKeyFailureOf('create', created.error), error: created.error }
   }
   const key = created.data.key.trim()
   if (key === '') {
@@ -434,13 +455,17 @@ const ensureOnce = async (source: ManagedKeySource, name: string): Promise<Manag
  */
 export const ensureManagedKey = async (
   source: ManagedKeySource,
-  options: { deviceId: string; refresh?: () => Promise<ManagedKeyRefreshOutcome> }
+  options: ManagedKeyEnsureOptions
 ): Promise<ManagedKeyEnsureResult> => {
   const name = managedKeyName(options.deviceId)
   const failures: ManagedKeyFailure[] = []
+  const maxAttempts = options.retry === false ? 1 : MANAGED_KEY_MAX_ATTEMPTS
   let refreshed = false
-  for (let attempt = 1; attempt <= MANAGED_KEY_MAX_ATTEMPTS; attempt += 1) {
-    const outcome = await ensureOnce(source, name)
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const outcome = await ensureOnce(source, name, options.isCurrent)
+    if (outcome === undefined || options.isCurrent?.() === false) {
+      return { ok: false, failures, attempts: attempt, stop: 'superseded', refreshed }
+    }
     if (outcome.ok) {
       return {
         ok: true,
@@ -452,8 +477,8 @@ export const ensureManagedKey = async (
       }
     }
     failures.push(outcome.failure)
-    if (attempt >= MANAGED_KEY_MAX_ATTEMPTS) {
-      return { ok: false, failures, attempts: attempt, stop: 'attempts-exhausted', refreshed }
+    if (attempt >= maxAttempts) {
+      return { ok: false, failures, attempts: attempt, stop: 'attempts-exhausted', refreshed, error: outcome.error }
     }
     if (outcome.failure.status === 401) {
       let next: ManagedKeyRefreshOutcome = 'expired'
@@ -465,8 +490,11 @@ export const ensureManagedKey = async (
           next = 'retryable'
         }
       }
+      if (options.isCurrent?.() === false) {
+        return { ok: false, failures, attempts: attempt, stop: 'superseded', refreshed }
+      }
       if (next !== 'refreshed') {
-        return { ok: false, failures, attempts: attempt, stop: 'refresh-failed', refreshed: false }
+        return { ok: false, failures, attempts: attempt, stop: 'refresh-failed', refreshed: false, error: outcome.error }
       }
       refreshed = true
     }

@@ -41,6 +41,7 @@ import {
 import {
   claimManagedKey,
   retireManagedKey,
+  shouldSyncManagedKey,
   syncManagedKey,
   usesManagedKey,
   type ManagedKeyClaim,
@@ -49,7 +50,7 @@ import {
 } from '../../services/api/managedKey.js'
 import type { ConsumeCallResult } from '../../services/consume/index.js'
 import { getConsumeClient } from '../../services/consumeClient.js'
-import { getAccessToken, refreshSessionOnce } from '../../services/auth/store.js'
+import { getAccessToken, getSessionEpoch, refreshSessionOnce } from '../../services/auth/store.js'
 import { registerSessionCache } from '../../services/auth/sessionCache.js'
 import { recordAction } from '../../services/diagnostics/collector.js'
 import { ensureDeviceId } from '../../services/invite/device.js'
@@ -105,7 +106,16 @@ export const claimManagedKeyForDevice = async (
     })
     return result
   }
-  applyManagedKey(result.data.key, result.data.id)
+  if (!applyManagedKey(result.data.key, result.data.id)) {
+    return {
+      ok: false,
+      raw: result.raw,
+      error: {
+        kind: 'key', code: 'KEY_NOT_SAVED', status: 0, message: '',
+        retryable: true, envelope: 'none', i18nKey: 'consumeErrUnknown',
+      },
+    }
+  }
   if (result.data.rotated) {
     void retireManagedKey(managedKeySource(), previousId)
   }
@@ -118,13 +128,18 @@ export const claimManagedKeyForDevice = async (
 }
 
 /**
- * 一次「确保有 Key」的结局。四种都有人用，别折成布尔：
+ * 一次「确保有 Key」的结局：
  *  - `updated`    ：拿到的与服务端那把一致，本机被（重新）写成服务端那把；
  *  - `unchanged`  ：本机早就是那一把、标记也在 —— 什么都没动（幂等命中的常态）；
  *  - `signed-out` ：没有登录态（领取链路要 JWT，此时发请求只会拿 401）；
+ *  - `superseded` ：用户已切换账号或配置，丢弃旧请求；
  *  - `failed`     ：两次尝试都没拿到 —— 原因在 `managedKeyEnsureState` 与诊断日志里，界面必须说话。
  */
-export type ManagedKeySyncOutcome = 'updated' | 'unchanged' | 'signed-out' | 'failed'
+type DeviceKeyResult =
+  | { outcome: 'updated' | 'unchanged' | 'signed-out' | 'superseded' }
+  | { outcome: 'failed'; failure: ManagedKeyEnsureFailure }
+
+export type ManagedKeySyncOutcome = DeviceKeyResult['outcome']
 
 /**
  * 「进行中」标记（#803 第 8 条）：**进程级单飞**。
@@ -133,28 +148,32 @@ export type ManagedKeySyncOutcome = 'updated' | 'unchanged' | 'signed-out' | 'fa
  * 各跑一遍就是两次 `POST /api/v1/keys`（服务端允许同名，于是长出两把 Key）。
  * 这里让后来的调用**等同一个 promise**：只发一轮请求，两边拿到同一个结局。
  */
-let ensureInFlight: Promise<ManagedKeySyncOutcome> | null = null
+let ensureInFlight: { isCurrent: () => boolean; promise: Promise<DeviceKeyResult> } | null = null
 
-/** 真正的执行体（只从 {@link ensureManagedKeyForDevice} 进，否则单飞就漏了） */
-const runManagedKeyEnsure = async (): Promise<ManagedKeySyncOutcome> => {
-  if (!canClaimManagedKey()) {
-    // 未登录不该留下「失败」提示：那不是用户能修的错，登录之后这条流程会自己再跑一次
-    return 'signed-out'
+const runManagedKeyEnsure = async (
+  isCurrent: () => boolean,
+  mode: 'automatic' | 'select',
+  showProgress: boolean
+): Promise<DeviceKeyResult> => {
+  if (showProgress) {
+    markManagedKeyEnsureRunning()
   }
-  if (!usesManagedKey(getProviderKind())) {
-    // 别的渠道的 Key 是**用户自己的**（#608）：这条流程一旦跑起来就会把用户手填的那把覆盖成
-    // 服务端的 Key，所以渠道判定放在这里而不是只放在触发点 —— 任何入口调进来都拦住。
-    return 'unchanged'
-  }
-  markManagedKeyEnsureRunning()
   const result = await syncManagedKey(managedKeySource(), {
     deviceId: ensureDeviceId(),
     // #803 第 6 条：401 时**先换凭据再重试**。这里注入的是身份层的单飞刷新（同一个时刻只发一次
     // `/auth/refresh`），换不到就以 `refresh-failed` 收场，绝不拿旧 token 再打一次。
     refresh: refreshSessionOnce,
+    retry: mode === 'automatic',
+    isCurrent,
   })
+  if (!isCurrent() || (!result.ok && result.stop === 'superseded')) {
+    if (ensureInFlight?.isCurrent === isCurrent) {
+      resetManagedKeyEnsure()
+    }
+    return { outcome: 'superseded' }
+  }
   if (!result.ok) {
-    return recordEnsureFailure(result)
+    return recordEnsureFailure(result, showProgress)
   }
   /**
    * #812：「拿到」的唯一判据是**本机现在真的能用这把 Key**，不是「这次是新建还是查到」。
@@ -165,25 +184,33 @@ const runManagedKeyEnsure = async (): Promise<ManagedKeySyncOutcome> => {
    * 判据 `getManagedKeyVerdict() === 'ok'` 才算「已经生效」，否则**一律走既有的 `applyManagedKey`**
    * （Key + 标记同一个入口写，不出现「界面尾号来自 A、请求用的是 B」的中间态）。
    */
-  const alreadyApplied = getManagedKeyVerdict() === 'ok' && getApiKey().trim() === result.key.trim()
-  if (!alreadyApplied) {
-    applyManagedKey(result.key, result.id)
+  const builtin = usesManagedKey(getProviderKind())
+  const alreadyApplied = getManagedKeyVerdict() === 'ok' && builtin && getApiKey().trim() === result.key
+  if (!alreadyApplied && !applyManagedKey(result.key, result.id, { selectBuiltin: true })) {
+    const failure: ManagedKeyEnsureFailure = {
+      ok: false,
+      stop: 'save-failed',
+      attempts: result.attempts,
+      refreshed: false,
+      failures: [{ kind: 'storage', step: 'save', status: 0, code: 'KEY_NOT_SAVED', detail: '' }],
+    }
+    return recordEnsureFailure(failure, showProgress)
   }
-  const changed = !alreadyApplied
   markManagedKeyEnsureOk(result.attempts)
+  const outcome = alreadyApplied ? 'unchanged' : 'updated'
   recordAction('config_change', 'ours-managed-key-ensure', {
-    result: changed ? 'updated' : 'unchanged',
+    result: outcome,
     attempts: result.attempts,
     created: result.created,
     // #812：`created: false` 时这一条就是「从列表里取回明文并生效」那条路，日志要能分开数
     adopted: !result.created,
     length: result.key.length,
   })
-  return changed ? 'updated' : 'unchanged'
+  return { outcome }
 }
 
 /**
- * 两次都失败：写诊断（**带状态码**，这是 #803 第 5 条的原文要求）与可见状态，然后返回 `failed`。
+ * 将失败交给触发领取的调用方。当前配置适合自动领取时，也在账号页显示原因和重试。
  *
  * 失败原因只留「性质 + 状态码 + 码」，不留响应体原文（里面可能有别的账号的信息）。
  *
@@ -191,9 +218,9 @@ const runManagedKeyEnsure = async (): Promise<ManagedKeySyncOutcome> => {
  * 说不清「用的是哪把 Key、打到哪个地址」。而 #812 的现场正是这两条决定的 ——
  * 提示「Key 无效」时，一眼就能看出是不是 Key 与环境对不上（staging 的 Key 打到生产网关）。
  */
-const recordEnsureFailure = (result: ManagedKeyEnsureFailure): 'failed' => {
+const recordEnsureFailure = (result: ManagedKeyEnsureFailure, showProgress: boolean): DeviceKeyResult => {
   const last = result.failures[result.failures.length - 1]
-  if (last !== undefined) {
+  if (showProgress && last !== undefined) {
     const context = ensureFailureContext()
     recordAction('config_change', 'ours-managed-key-ensure', {
       result: 'failed',
@@ -209,7 +236,7 @@ const recordEnsureFailure = (result: ManagedKeyEnsureFailure): 'failed' => {
     })
     markManagedKeyEnsureFailed(last, result.attempts, context)
   }
-  return 'failed'
+  return { outcome: 'failed', failure: result }
 }
 
 /**
@@ -225,7 +252,7 @@ const ensureFailureContext = (): ManagedKeyEnsureContext => {
   const key = getApiKey().trim()
   let requestUrl = ''
   try {
-    requestUrl = getMessagesUrl()
+    requestUrl = getMessagesUrl('ours')
   } catch {
     // 渠道表 / 注入值异常时不该让「报错」再炸一次：地址留空，界面只少一行
     requestUrl = ''
@@ -240,27 +267,40 @@ const ensureFailureContext = (): ManagedKeyEnsureContext => {
  * 单飞（见 `ensureInFlight`）：并发调用只跑一轮请求；结束后立刻放槽，
  * 下一次真需要（例如用户点「重试」）会重新跑一次完整的「查重 → 建 → 重试一次」。
  */
-export const ensureManagedKeyForDevice = (): Promise<ManagedKeySyncOutcome> => {
-  if (ensureInFlight !== null) {
-    return ensureInFlight
+export const ensureDeviceBuiltinKey = (mode: 'automatic' | 'select'): Promise<DeviceKeyResult> => {
+  const kind = getProviderKind()
+  const key = getApiKey()
+  const autoEligible = shouldSyncManagedKey(kind, key)
+  if (mode === 'automatic' && !autoEligible) {
+    return Promise.resolve({ outcome: 'unchanged' })
   }
-  ensureInFlight = runManagedKeyEnsure().finally(() => {
-    ensureInFlight = null
+  if (!canClaimManagedKey()) {
+    return Promise.resolve({ outcome: 'signed-out' })
+  }
+  if (ensureInFlight?.isCurrent()) {
+    return ensureInFlight.promise
+  }
+
+  const epoch = getSessionEpoch()
+  const isCurrent = () =>
+    epoch === getSessionEpoch() && canClaimManagedKey() && kind === getProviderKind() && key === getApiKey()
+  const promise = runManagedKeyEnsure(isCurrent, mode, autoEligible).finally(() => {
+    if (ensureInFlight?.promise === promise) {
+      ensureInFlight = null
+    }
   })
-  return ensureInFlight
+  ensureInFlight = { isCurrent, promise }
+  return promise
 }
+
+export const ensureManagedKeyForDevice = async (): Promise<ManagedKeySyncOutcome> =>
+  (await ensureDeviceBuiltinKey('automatic')).outcome
 
 /**
  * 登录 / 注册成功后的自动领取（#803 第 1 条）。由 `main.tsx` 挂进身份层的会话钩子。
- *
- * 为什么只认 `ours` 渠道：其它三个渠道的 Key 是**用户自己的**（同一格 `chat-demo:api-key`），
- * 自动下发会把用户手填的那把覆盖掉 —— 那正是 #608「只拿一把自己的 Key 也能用」的反面。
- * 内置服务（内测包默认渠道）才是「Key 由服务端下发」的那一个。
- *
- * 渠道不对时**不留失败提示**：这不是失败，是这条流程不适用于当前渠道。
  */
 export const ensureManagedKeyAfterAuth = (reason: string): Promise<ManagedKeySyncOutcome> => {
-  if (!usesManagedKey(getProviderKind())) {
+  if (!shouldSyncManagedKey(getProviderKind(), getApiKey())) {
     return Promise.resolve('unchanged')
   }
   recordAction('config_change', 'ours-managed-key-ensure', {

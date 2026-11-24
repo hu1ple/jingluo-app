@@ -517,6 +517,7 @@ export const zh = {
   settingsManagedKeyFailNetwork: '网络超时或连接不上',
   settingsManagedKeyFailHttp: '服务端返回 {status}',
   settingsManagedKeyFailEmpty: '服务端回了成功，但响应里没有 Key 值',
+  settingsManagedKeyFailStorage: '此设备未能保存内置服务配置，请检查存储空间后重试',
   /**
    * #812：失败提示里的**现场** —— 用的是哪把 Key（前 6 位）+ 打到哪个地址。
    * 这两条并排放在一起才能一眼看出「Key 与环境对不上」（staging 的 Key 打到生产网关 → 401）。

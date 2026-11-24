@@ -19,6 +19,12 @@
 #                      显式允许「回环地址」出包（只给本地联调，Issue #601）。不设时，只要
 #                      consume/pay/migration 的 base 是 127.0.0.1 / localhost / ::1 就构建失败。
 #                      设了之后产物会打上 LOOPBACK_CONSUME=true 标记 → 传不上 dl（400 拒收）。
+#   BUILD_VARIANT=standard|staging
+#                      发布变体（默认 standard = 对外）。staging = 预发布联调包：
+#                      web 层走 `pnpm run build:staging`（`--staging --allow-insecure`，产物落 dist/），
+#                      gradle 侧自动带 `-PconsumeBase=<config/endpoints.staging.json 的 consume.baseUrl>`
+#                      与 `-PallowInsecureConsume=true`（闸 0 交叉核对 + 闸 1b 明文放行）。
+#                      产物带 INSECURE_CONSUME=true 自证标记 → staging-only，禁止公开分发（#601）。
 #
 # 说明: 本脚本不依赖交互式 shell 环境，自行 export ANDROID_HOME / PATH；
 #       首次运行会自动生成 keystore（若 android/keystore/keystore.properties 缺失）。
@@ -31,8 +37,17 @@ MODE="${1:-debug}"                 # debug | release
 EXTRA_ARG="${2:-}"
 case "$MODE" in
   debug|release) ;;
-  -h|--help|help) sed -n '2,27p' "$0"; exit 0 ;;
+  -h|--help|help) sed -n '2,33p' "$0"; exit 0 ;;
   *) echo "[build-apk] 未知模式: $MODE （只支持 debug / release）" >&2; exit 2 ;;
+esac
+
+# 发布变体（Issue #601 / #651）：standard = 对外发布（默认，与加这个变量之前逐字一致）；
+# staging = 预发布联调包（明文后端，staging-only）。一个变量贯通 web 层与原生层，
+# 不复制两份构建逻辑 —— 变体只决定「web 用哪条 pnpm 脚本」与「gradle 多带哪几个 -P」。
+BUILD_VARIANT="${BUILD_VARIANT:-standard}"
+case "$BUILD_VARIANT" in
+  standard|staging) ;;
+  *) echo "[build-apk][ERROR] 未知 BUILD_VARIANT: $BUILD_VARIANT （只支持 standard / staging）" >&2; exit 2 ;;
 esac
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -169,7 +184,16 @@ fi
 
 # ------------------------------------------------------------ 3. 前端构建产物
 if [ "${SKIP_WEB_BUILD:-0}" = "1" ] && [ -f "$PROJECT_ROOT/dist/index.html" ]; then
-  log "SKIP_WEB_BUILD=1，复用现有 dist/"
+  log "SKIP_WEB_BUILD=1，复用现有 dist/（请自行确认这份 dist/ 就是 $BUILD_VARIANT 变体的产物）"
+elif [ "$BUILD_VARIANT" = "staging" ]; then
+  # staging：`pnpm run build:staging` = `node scripts/build.mjs --staging --allow-insecure`
+  #   · --staging        读 config/endpoints.staging.json（预发布明文 consume 地址）
+  #   · --allow-insecure 等价于 ALLOW_INSECURE_CONSUME=true（web 层注入 insecureConsume=true，
+  #                      否则 src/services/consume/http.ts 在模块级就抛错 → 装上白屏，#601）
+  #   · DIST_OUT=dist **必须显式给**：build.mjs 对 staging 默认落 dist-pre（避免顶掉发版用的 dist/），
+  #     而 capacitor 的 webDir 是 dist/、本脚本也只认 dist/ —— 不给就会把上一份 standard 产物 sync 进 APK。
+  log "步骤 1/3：pnpm run build:staging（staging 变体 → dist/）"
+  ALLOW_INSECURE_CONSUME=true DIST_OUT=dist pnpm run build:staging
 else
   log "步骤 1/3：pnpm build（产物 -> dist/）"
   pnpm build
@@ -200,6 +224,19 @@ if [ "${ALLOW_LOOPBACK_CONSUME:-0}" = "1" ]; then
   printf '\033[1;33m[build-apk][警告] ALLOW_LOOPBACK_CONSUME=1：本次产物是「回环地址」本地联调包，禁止上传 dl / 禁止分发（#601）\033[0m\n' >&2
 fi
 
+# staging 变体的原生侧（Issue #601 / #651）：这三个开关必须与 web 层同值/同源，否则 gradle 的闸 0
+# 会直接 BUILD FAILED（-PconsumeBase 只写原生侧，web 层在 pnpm build 时就注入了地址）。
+#   · -PconsumeBase=<staging consume base>：与 dist/build-info.json 的自述值同源（都读 config/endpoints.staging.json）
+#   · -PallowInsecureConsume=true         ：闸 1b 放行「明文非回环」+ 写 INSECURE_CONSUME=true 自证标记
+#   · ALLOW_INSECURE_CONSUME=true         ：web 侧同一个开关的另一入口（gradle 也认），免得出半套包
+if [ "$BUILD_VARIANT" = "staging" ]; then
+  STAGING_CONSUME_BASE="$(node -p "require('./config/endpoints.staging.json').consume.baseUrl" 2>/dev/null || true)"
+  [ -n "$STAGING_CONSUME_BASE" ] || die "读不到 config/endpoints.staging.json 的 consume.baseUrl（staging 变体必须有这份配置）"
+  export ALLOW_INSECURE_CONSUME=true
+  GRADLE_ARGS+=("-PconsumeBase=$STAGING_CONSUME_BASE" "-PallowInsecureConsume=true")
+  printf '\033[1;33m[build-apk][警告] BUILD_VARIANT=staging：产物指向预发布后端 %s（明文），带 INSECURE_CONSUME 标记 → 只许内网联调，禁止公开分发\033[0m\n' "$STAGING_CONSUME_BASE" >&2
+fi
+
 log "步骤 3/3：./gradlew ${GRADLE_ARGS[*]}"
 ./gradlew "${GRADLE_ARGS[@]}"
 
@@ -212,6 +249,7 @@ APK_BYTES="$(stat -c %s "$APK_PATH")"
 printf '\n\033[1;32m================ BUILD OK (%s) ================\033[0m\n' "$MODE"
 printf 'APK 绝对路径 : %s\n' "$APK_PATH"
 printf 'APK 大小     : %s (%s bytes)\n' "$APK_SIZE" "$APK_BYTES"
+printf '构建变体     : %s%s\n' "$BUILD_VARIANT" "$([ "$BUILD_VARIANT" = staging ] && echo '（staging-only，禁止公开分发）' || echo '')"
 printf 'build-tools  : %s（钉住档位，不走通配）\n' "$BUILD_TOOLS_VERSION"
 # aapt2 只从钉住档位取：人工核对的工具与出包工具必须是同一个（Issue #273 现状第 4 条）
 if [ -x "$AAPT2_BIN" ]; then

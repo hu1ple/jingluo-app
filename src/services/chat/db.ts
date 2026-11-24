@@ -260,7 +260,30 @@ const forgetConnection = (connection: Promise<IDBPDatabase<ChatDB>>) => {
   }
 }
 
+/**
+ * 能力探测：宿主到底有没有 IndexedDB（#209 口径 —— 能力探测替代一切假设）。
+ *
+ * 三种环境会没有它：Safari 无痕窗口、WebView 关闭了存储、第三方 iframe 的分区存储被拦。
+ * 不探测的后果不是「慢」，而是**反复失败**：每次读写都会再 `openDB()` 一次、必然抛错，
+ * 横幅永远消不掉、日志被刷满 —— 根因是「这台机器没有这个能力」，重试一万次也一样。
+ */
+export class StorageUnavailableError extends Error {
+  constructor() {
+    super('IndexedDB is not available in this environment')
+    this.name = 'StorageUnavailableError'
+  }
+}
+
+/** 运行期能力探测：宿主有没有 IndexedDB。每次调用都问一遍，成本可忽略 */
+export const isIndexedDBAvailable = (): boolean => typeof indexedDB !== 'undefined'
+
 export const getChatDB = (): Promise<IDBPDatabase<ChatDB>> => {
+  // 缺能力时**不**写进 `dbPromise`：能力是环境属性、不是瞬时故障，
+  // 缓存一个 rejected promise 只会让这里变成永久的坑，而每次新建一个
+  // rejected promise 既不尝试打开、也不会被后来的消费者误当成"可用连接"。
+  if (!isIndexedDBAvailable()) {
+    return Promise.reject(new StorageUnavailableError())
+  }
   if (dbPromise) {
     return dbPromise
   }

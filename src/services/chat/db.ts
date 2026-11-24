@@ -2,6 +2,7 @@ import {
   openDB,
   type DBSchema,
   type IDBPDatabase,
+  type IDBPObjectStore,
   type IDBPTransaction,
   type StoreNames,
 } from 'idb'
@@ -194,7 +195,7 @@ const abortTransaction = (tx: { abort(): void }) => {
 /**
  * 库结构升级回调：**只新增、不迁移、不清空**（#399 起的口径，v12→v13、v13→v14 都是这样）。
  *
- * 为什么从 `getDB()` 里提出来单独导出：迁移不变量用例（
+ * 为什么从 `getChatDB()` 里提出来单独导出：迁移不变量用例（
  * `tests/unit/memory-session-scope-399.test.mjs` 的 T7）需要在**一个历史版本的真库**上跑
  * **同一个**回调，才能证明「旧 store / 旧数据一条不动」。用例里另写一份 schema 就等于把被验的
  * 东西换成替身 —— 那份替身漂移时不会报错，只会让用例在「库长得和真机不一样」的前提下变绿
@@ -253,31 +254,75 @@ export const upgradeChatDB = (
   }
 }
 
-// 每个操作拿到连接后立即创建事务；IndexedDB 按创建顺序执行范围重叠的事务，读取总能看到之前发起的写入。
-const getDB = () =>
-  (dbPromise ??= openDB<ChatDB>(DB_NAME, DB_VERSION, { upgrade: upgradeChatDB }).catch(
-    (error: unknown) => {
-      // 打开失败后允许界面重试，避免一直复用已拒绝的 Promise。
-      dbPromise = null
-      throw error
+const forgetConnection = (connection: Promise<IDBPDatabase<ChatDB>>) => {
+  if (dbPromise === connection) {
+    dbPromise = null
+  }
+}
+
+export const getChatDB = (): Promise<IDBPDatabase<ChatDB>> => {
+  if (dbPromise) {
+    return dbPromise
+  }
+  const opening = openDB<ChatDB>(DB_NAME, DB_VERSION, {
+    upgrade: upgradeChatDB,
+    terminated: () => forgetConnection(opening),
+  }).catch((error: unknown) => {
+    forgetConnection(opening)
+    throw error
+  })
+  dbPromise = opening
+  return opening
+}
+
+// 显式 close() 没有 terminated 事件。只在创建事务时重连，已经开始的业务事务不会重放。
+export const openChatTransaction = async <
+  const Names extends readonly StoreNames<ChatDB>[],
+  Mode extends 'readonly' | 'readwrite' = 'readonly',
+>(stores: Names, mode?: Mode) => {
+  for (let attempt = 0; ; attempt++) {
+    const opening = getChatDB()
+    const db = await opening
+    try {
+      return db.transaction(stores, mode)
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === 'InvalidStateError')) {
+        throw error
+      }
+      forgetConnection(opening)
+      if (attempt === 1) {
+        throw error
+      }
     }
-  ))
+  }
+}
 
-/**
- * 同一份 `chat-demo` 连接给库内其它存储层复用（#480 的 `attachments/store.ts`）：
- * 附件数据与会话数据在同一个数据库里，升级只能有一个 `upgrade` 回调，不能各自 openDB。
- */
-export const getChatDB = getDB
+/** 单表请求也走同一事务入口，并把提交失败传给调用方。 */
+export const runChatStoreRequest = async <
+  Name extends StoreNames<ChatDB>,
+  Mode extends 'readonly' | 'readwrite',
+  Result,
+>(
+  name: Name,
+  mode: Mode,
+  request: (store: IDBPObjectStore<ChatDB, readonly [Name], Name, Mode>) => Promise<Result>
+): Promise<Result> => {
+  const tx = await openChatTransaction([name], mode)
+  const [result] = await Promise.all([request(tx.store), tx.done])
+  return result
+}
 
-export const loadSessionSummaries = async (): Promise<SessionSummary[]> =>
-  (await (await getDB()).getAll('sessionSummaries')).map(toSessionSummary)
+export const loadSessionSummaries = async (): Promise<SessionSummary[]> => {
+  const rows = await runChatStoreRequest('sessionSummaries', 'readonly', (store) => store.getAll())
+  return rows.map(toSessionSummary)
+}
 
 export const loadSession = async (id: string): Promise<Session | undefined> =>
-  (await getDB()).get('sessions', id)
+  runChatStoreRequest('sessions', 'readonly', (store) => store.get(id))
 
 export const saveSession = async (session: Session, files: StoredFile[] = []): Promise<void> => {
   const summary = storedSummary(session)
-  const tx = (await getDB()).transaction(['sessions', 'sessionSummaries', 'files'], 'readwrite')
+  const tx = await openChatTransaction(['sessions', 'sessionSummaries', 'files'], 'readwrite')
   await Promise.all([
     (async () => {
       try {
@@ -297,7 +342,7 @@ export const saveSession = async (session: Session, files: StoredFile[] = []): P
 
 /** 未打开的会话也可重命名，只读取该会话，原子更新详情和列表。 */
 export const pinSession = async (id: string, pinnedAt: number | undefined): Promise<void> => {
-  const tx = (await getDB()).transaction(['sessions', 'sessionSummaries'], 'readwrite')
+  const tx = await openChatTransaction(['sessions', 'sessionSummaries'], 'readwrite')
   await Promise.all([
     (async () => {
       try {
@@ -319,7 +364,7 @@ export const pinSession = async (id: string, pinnedAt: number | undefined): Prom
 }
 
 export const renameSession = async (id: string, title: string): Promise<void> => {
-  const tx = (await getDB()).transaction(['sessions', 'sessionSummaries'], 'readwrite')
+  const tx = await openChatTransaction(['sessions', 'sessionSummaries'], 'readwrite')
   await Promise.all([
     (async () => {
       try {
@@ -349,7 +394,7 @@ export const renameSession = async (id: string, title: string): Promise<void> =>
  * `tests/unit/memory-session-scope-399.test.mjs` 的 T5 钉住。
  */
 export const deleteSession = async (sessionId: string): Promise<void> => {
-  const tx = (await getDB()).transaction(
+  const tx = await openChatTransaction(
     ['sessions', 'sessionSummaries', 'files', 'sessionMemory'],
     'readwrite'
   )
@@ -388,18 +433,18 @@ export const deleteSession = async (sessionId: string): Promise<void> => {
 }
 
 const putFiles = async (store: 'files' | 'filesStaging', files: StoredFile[]) => {
-  const tx = (await getDB()).transaction(store, 'readwrite')
+  const tx = await openChatTransaction([store], 'readwrite')
   await Promise.all([...files.map((file) => tx.store.put(file)), tx.done])
 }
 
 export const saveFiles = (files: StoredFile[]): Promise<void> => putFiles('files', files)
 
 export const loadFile = async (id: string): Promise<Blob | undefined> =>
-  (await (await getDB()).get('files', id))?.blob
+  (await runChatStoreRequest('files', 'readonly', (store) => store.get(id)))?.blob
 
 /** 清空导入暂存：开始导入前清除上次中断（如关闭页面）遗留的数据，导入失败后清除本次写入。 */
 export const clearStaging = async (): Promise<void> => {
-  const tx = (await getDB()).transaction(['sessionsStaging', 'filesStaging'], 'readwrite')
+  const tx = await openChatTransaction(['sessionsStaging', 'filesStaging'], 'readwrite')
   await Promise.all([
     tx.objectStore('sessionsStaging').clear(),
     tx.objectStore('filesStaging').clear(),
@@ -408,7 +453,7 @@ export const clearStaging = async (): Promise<void> => {
 }
 
 export const addStagingSession = async (session: Session): Promise<void> => {
-  await (await getDB()).add('sessionsStaging', session)
+  await runChatStoreRequest('sessionsStaging', 'readwrite', (store) => store.add(session))
 }
 
 export const saveStagingFiles = (files: StoredFile[]): Promise<void> =>
@@ -416,7 +461,7 @@ export const saveStagingFiles = (files: StoredFile[]): Promise<void> =>
 
 /** 图片位于会话 JSON 之后；全部读完后回填具体 MIME，保留归档给出的 isImage 标识。 */
 export const updateStagingFileTypes = async (types: ReadonlyMap<string, string>): Promise<void> => {
-  const tx = (await getDB()).transaction('sessionsStaging', 'readwrite')
+  const tx = await openChatTransaction(['sessionsStaging'], 'readwrite')
   await Promise.all([
     (async () => {
       for (let cursor = await tx.store.openCursor(); cursor; cursor = await cursor.continue()) {
@@ -452,7 +497,7 @@ export const updateStagingFileTypes = async (types: ReadonlyMap<string, string>)
  */
 export const commitStaging = async (): Promise<SessionSummary[]> => {
   const summaries: SessionSummary[] = []
-  const tx = (await getDB()).transaction(
+  const tx = await openChatTransaction(
     // #399：整包替换会换掉**全部**会话（连 id 一起换），旧会话的记忆全部失去归属，
     // 所以在同一个事务里一起清空 `sessionMemory` —— 这是「不留孤儿」的另一半：
     // 删单个会话走 `deleteSession`，整包替换走这里，两条路都清在同一事务里，不另造清扫机制。
@@ -532,7 +577,7 @@ type StagedRef = SessionRef & { files: string[] }
  * 会话、摘要、原件仍然在同一个事务里写，中途失败整体回滚，本地数据保持导入前的样子。
  */
 export const mergeStaging = async (policy: MergePolicy): Promise<MergePlan> => {
-  const tx = (await getDB()).transaction(
+  const tx = await openChatTransaction(
     ['sessions', 'sessionSummaries', 'files', 'sessionsStaging', 'filesStaging'],
     'readwrite'
   )
@@ -609,13 +654,15 @@ export const reportStorageError = (action: string) => (error: unknown) => {
 
 /** 读取应用素材（如聊天背景）：未设置时返回 undefined。 */
 export const loadAppAsset = async (key: string): Promise<StoredAsset | undefined> =>
-  (await getDB()).get('appAssets', key)
+  runChatStoreRequest('appAssets', 'readonly', (store) => store.get(key))
 
 /** 写入/覆盖应用素材；固定 key 保证全局只有一份背景图。 */
 export const saveAppAsset = async (key: string, blob: Blob): Promise<void> => {
-  await (await getDB()).put('appAssets', { key, blob, updatedAt: Date.now() })
+  await runChatStoreRequest('appAssets', 'readwrite', (store) =>
+    store.put({ key, blob, updatedAt: Date.now() })
+  )
 }
 
 export const deleteAppAsset = async (key: string): Promise<void> => {
-  await (await getDB()).delete('appAssets', key)
+  await runChatStoreRequest('appAssets', 'readwrite', (store) => store.delete(key))
 }

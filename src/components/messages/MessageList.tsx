@@ -77,10 +77,10 @@ const readRowSpans = (
   scroll: HTMLElement,
   content: HTMLElement,
   anchorId: string | null
-): RowSpan[] => {
+): (RowSpan & { index: number })[] => {
   // 内容坐标原点：滚动容器自身的内容顶部（rect.top 是视口坐标，加回 scrollTop 即内容坐标）
   const base = scroll.getBoundingClientRect().top - scroll.scrollTop
-  const spans: RowSpan[] = []
+  const spans: (RowSpan & { index: number })[] = []
   let foundAnchor = anchorId === null
   let foundVisible = false
   for (const row of content.querySelectorAll<HTMLElement>('[data-row-id]')) {
@@ -89,7 +89,7 @@ const readRowSpans = (
       continue
     }
     const box = row.getBoundingClientRect()
-    spans.push({ id, top: box.top - base, height: box.height })
+    spans.push({ id, index: Number(row.dataset.rowIndex), top: box.top - base, height: box.height })
     if (id === anchorId) {
       foundAnchor = true
     }
@@ -135,7 +135,8 @@ export const MessageList = ({
    * #610：上一次提交时「第一条可见行」的锚点（id + 内容坐标系偏移）。
    * 行高实测回填 / 估值变化会改动上方占位，靠它把阅读位置钉住，见文件末尾那条 layout effect。
    */
-  const anchorRef = useRef<ScrollAnchor | null>(null)
+  const measureAnchorRef = useRef<(ScrollAnchor & { index: number }) | null>(null)
+  const anchorRef = useRef<(ScrollAnchor & { index: number; scrollTop: number }) | null>(null)
   /** #610：本帧的滚动位置是「故意挪的」（版本切换定位），不要被锚点修正拉回去。 */
   const skipAnchorRef = useRef(false)
   const sessionIdRef = useRef(session.id)
@@ -143,17 +144,52 @@ export const MessageList = ({
   const [, setMeasureVersion] = useState(0)
   const [metrics, setMetrics] = useState({ top: 0, viewport: 0 })
   const [editingIds, setEditingIds] = useState(() => new Set<string>())
-  const onEditingChange = useCallback((id: string, editing: boolean) => {
-    setEditingIds((previous) => {
-      const next = new Set(previous)
-      if (editing) {
-        next.add(id)
-      } else {
-        next.delete(id)
+  const openingEditor = useRef<{ id: string; textarea: HTMLTextAreaElement } | null>(null)
+  const onEditingChange = useCallback(
+    (id: string, editing: boolean, textarea?: HTMLTextAreaElement | null) => {
+      if (editing && textarea) {
+        openingEditor.current = { id, textarea }
+      } else if (openingEditor.current?.id === id) {
+        openingEditor.current = null
       }
-      return next
-    })
-  }, [])
+      setEditingIds((previous) => {
+        const next = new Set(previous)
+        if (editing) {
+          next.add(id)
+        } else {
+          next.delete(id)
+        }
+        return next
+      })
+    },
+    []
+  )
+  // 键盘弹出会改变消息区高度，虚拟行实测会改变编辑框位置。两者都按当前 DOM 定位。
+  const positionOpeningEditor = useCallback(() => {
+    const scroll = scrollRef.current
+    const textarea = openingEditor.current?.textarea
+    const editor = textarea?.parentElement
+    if (!isMobile || !scroll || !textarea || !editor || document.activeElement !== textarea) {
+      return false
+    }
+    const viewport = scroll.getBoundingClientRect()
+    const field = textarea.getBoundingClientRect()
+    const box = editor.getBoundingClientRect()
+    const centered = (viewport.top + viewport.bottom - field.height) / 2
+    // 让输入区域居中，同时给下方的取消、发送按钮留出空间。
+    const target = Math.max(
+      viewport.top + (field.top - box.top),
+      Math.min(centered, viewport.bottom - (box.bottom - field.top))
+    )
+    const shift = field.top - target
+    stickyRef.current = false
+    jumpRef.current = false
+    if (Math.abs(shift) >= 1) {
+      scroll.scrollTop += shift
+      scrollTopRef.current = scroll.scrollTop
+    }
+    return true
+  }, [isMobile])
   const messages = getVisibleMessages(session)
   const [previousVersions, setPreviousVersions] = useState(() =>
     buildMessageVersions(session, new Map())
@@ -257,14 +293,28 @@ export const MessageList = ({
           ? previous
           : { ...previous, viewport: scroll.clientHeight }
       )
-      scrollToBottom()
+      if (!positionOpeningEditor()) {
+        scrollToBottom()
+      }
       // 内容长高而用户已经翻上去时不会触发 scroll 事件，只能在这里补一次判断（#386）
       syncToBottom(entries.some((entry) => entry.target === content))
     })
     observer.observe(content)
     observer.observe(scroll)
-    return () => observer.disconnect()
-  }, [isMobile, scrollToBottom, syncToBottom])
+    const releaseEditor = () => {
+      openingEditor.current = null
+    }
+    const events = ['touchstart', 'wheel', 'pointerdown', 'input', 'focusout']
+    for (const event of events) {
+      scroll.addEventListener(event, releaseEditor, { passive: true })
+    }
+    return () => {
+      observer.disconnect()
+      for (const event of events) {
+        scroll.removeEventListener(event, releaseEditor)
+      }
+    }
+  }, [positionOpeningEditor, scrollToBottom, syncToBottom])
 
   // 单例行高实测：挂载/卸载行时订阅、退订，高度变化（流式增长、版本切换）时重算占位。
   useLayoutEffect(() => {
@@ -291,6 +341,20 @@ export const MessageList = ({
         }
       }
       if (changed) {
+        const scroll = scrollRef.current
+        const content = contentRef.current
+        if (scroll && content && !stickyRef.current && !jumpRef.current) {
+          const previous = anchorRef.current
+          if (previous && previous.scrollTop === scroll.scrollTop) {
+            // 用户停在原处时用上次布局的坐标，保留上方行自身长高之前的阅读位置。
+            measureAnchorRef.current = previous
+          } else {
+            const rows = readRowSpans(scroll, content, null)
+            measureAnchorRef.current = rows.find(row =>
+              row.top + row.height > scroll.scrollTop && row.top < scroll.scrollTop + scroll.clientHeight
+            ) ?? null
+          }
+        }
         setMeasureVersion((version) => version + 1)
       }
     })
@@ -367,25 +431,26 @@ export const MessageList = ({
     [session.id, streaming]
   )
 
+  const syncMetrics = useCallback((el: HTMLElement) => {
+    const top = el.scrollTop
+    const viewport = el.clientHeight
+    setMetrics((previous) =>
+      previous.top === top && previous.viewport === viewport ? previous : { top, viewport }
+    )
+  }, [])
+
   // 跨移动端断点时切换滚动层，并保持输入框及当前阅读位置。
   useLayoutEffect(() => {
     const el = scrollRef.current
     if (!el) {
       return
     }
-    const sync = () => {
-      setMetrics((previous) =>
-        previous.top === el.scrollTop && previous.viewport === el.clientHeight
-          ? previous
-          : { top: el.scrollTop, viewport: el.clientHeight }
-      )
-    }
     if (stickyRef.current) {
       scrollToBottom()
     } else {
       el.scrollTop = scrollTopRef.current
     }
-    sync()
+    syncMetrics(el)
     const onScroll = () => {
       const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < STICKY_THRESHOLD
       // 仅在用户向上滚动时停止跟随底部，布局或内容增高时保持跟随状态。
@@ -398,13 +463,13 @@ export const MessageList = ({
         jumpRef.current = false
       }
       scrollTopRef.current = el.scrollTop
-      sync()
+      syncMetrics(el)
       // 用户翻到离底部超过阈值 → 按钮浮现；回到贴底区 → 按钮与「有新内容」圆点一起收掉
       syncToBottom(false)
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
-  }, [isMobile, scrollToBottom, syncToBottom])
+  }, [isMobile, scrollToBottom, syncToBottom, syncMetrics])
 
   /**
    * #610（症状二）：把阅读位置钉住。
@@ -426,16 +491,23 @@ export const MessageList = ({
     }
     const skip = skipAnchorRef.current
     skipAnchorRef.current = false
-    const rows = readRowSpans(scroll, content, anchorRef.current?.id ?? null)
-    if (!skip && !stickyRef.current && !jumpRef.current) {
-      const shift = anchorShift(anchorRef.current, rows)
+    const anchor = measureAnchorRef.current ?? anchorRef.current
+    measureAnchorRef.current = null
+    const rows = readRowSpans(scroll, content, anchor?.id ?? null)
+    if (!skip && !positionOpeningEditor() && !stickyRef.current && !jumpRef.current) {
+      const shift = anchorShift(anchor, rows)
       if (Math.abs(shift) >= 0.5) {
         scroll.scrollTop += shift
         scrollTopRef.current = scroll.scrollTop
+        syncMetrics(scroll)
       }
     }
     // 下一次提交的参照：本帧第一条可见行（内容坐标，滚动不会让它失效）
-    anchorRef.current = pickAnchor(rows, scroll.scrollTop)
+    const first = pickAnchor(rows, scroll.scrollTop)
+    const visible = rows.find(row => row.id === first?.id)
+    anchorRef.current = visible && visible.top < scroll.scrollTop + scroll.clientHeight
+      ? { ...visible, scrollTop: scroll.scrollTop }
+      : null
   })
 
   const lastIndex = messages.length - 1
@@ -484,6 +556,7 @@ export const MessageList = ({
                 items={messages}
                 retainedIds={editingIds}
                 measured={measured}
+                measureAnchor={measureAnchorRef.current}
                 estimate={estimate}
                 scrollTop={metrics.top}
                 viewport={metrics.viewport}

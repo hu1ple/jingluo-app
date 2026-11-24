@@ -33,6 +33,16 @@ export type ApiErrorCondition =
    */
   | 'badRequest'
   /**
+   * 上游**内容层**拒答：模型 / 网关认定「这条提问的内容」不能答，但 HTTP 状态码
+   * 往往就是 400（newcode.work 实测：400 + `type:"upstream_error"` + 中文拒答原文）。
+   *
+   * 为什么必须与 badRequest 分开：两者状态码一样，用户能做的事却完全不同 ——
+   * 参数错要去改设置，内容拒答改设置**一点用都没有**（换说法 / 重新生成才有意义）。
+   * 改前这条落到 badRequest，界面上就是「红色报错 + 打开设置」，把一次内容拒绝
+   * 说成了「你的配置有问题」，用户被引去乱改模型与接口地址。
+   */
+  | 'upstreamRefusal'
+  /**
    * 其余「上游明确拒绝」的 4xx（#347）：403 权限 / 404 路径 / 405 方法 / 409 冲突 / 415 媒体类型。
    * 它们既不是参数问题（说「检查模型与接口配置」是误导），也不是临时故障（重发一样被拒），
    * 文案只说「上游拒绝了请求」并把上游原文放进折叠区。
@@ -166,6 +176,46 @@ export const isModelInvalidText = (text: string | undefined): boolean =>
     : false
 
 /**
+ * 上游「内容层拒答」的原文特征：模型 / 网关拒绝回答**这条提问的内容**（不是参数写错）。
+ *
+ * 实测（newcode.work，HTTP 400 + `type:"upstream_error"`）：
+ *   「抱歉，我无法提供关于您提问内容的建议。作为 AI 编程助手，我不能…」
+ *   `sensitive_words_detected` / `user sensitive words detected`
+ * 英文网关常见写法是 `can't respond to this question` / `I'm unable to provide …` /
+ * `unable to help with that`。
+ *
+ * 这是一组**内容**判据，和 `CONTENT_FILTER_PATTERNS`（安全审核 API 的 code 形态）分开写：
+ * 这边的样本全是模型自己的拒答措辞，正则在 `classifyErrorSignature` 里只对 400 / 422 生效，
+ * 避免把 5xx 的一页网关错误认成「上游拒答」。
+ */
+export const UPSTREAM_REFUSAL_PATTERNS: RegExp[] = [
+  /无法提供关于您提问内容/,
+  /作为\s*ai\s*编程助手/i,
+  /sensitive_words_detected/i,
+  /user sensitive words detected/i,
+  /can'?t respond to this question/i,
+  /cannot respond to this question/i,
+  /i'?m unable to provide/i,
+  /unable to help with that/i,
+]
+
+/** 这段文字是不是「上游拒答了这条提问的内容」（大小写不敏感） */
+export const isUpstreamRefusalText = (text: string | undefined): boolean =>
+  typeof text === 'string' && text.length > 0
+    ? UPSTREAM_REFUSAL_PATTERNS.some((pattern) => pattern.test(text))
+    : false
+
+/**
+ * 后端（同批改动）承诺给的机器可读 code：`{"error":{"type":"upstream_refusal","code":"upstream_refusal"}}`。
+ * 有它就**不必**依赖上面的正则 —— 正则只是老上游（只给一段中文原文）的兜底。
+ */
+export const UPSTREAM_REFUSAL_CODE = 'upstream_refusal'
+
+/** 这个上游 code 是不是「上游拒答」 */
+export const isUpstreamRefusalCode = (code: string | undefined): boolean =>
+  typeof code === 'string' && /^upstream[_\s-]?refusal$/i.test(code.trim())
+
+/**
  * 上游「可用模型列表」那句话（#339）。
  *
  * 官方端点原文：`The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed X.`
@@ -233,8 +283,7 @@ export const isParamInvalidText = (text: string | undefined): boolean =>
   typeof text === 'string' && text.length > 0 ? PARAM_INVALID_PATTERNS.some((p) => p.test(text)) : false
 
 /**
- * 上游用机器可读的 code 表示「API Key 无效 / 过期」（#347）。
- *
+ * 上游用机器可读的 code 表示「API Key 无效 / 过期」（#347）。 *
  * 以前只认 401 状态码。但中转与自建网关常用的写法是 403 + `invalid_api_key` /
  * `authentication_error`（甚至 400），这类请求界面以前落到「未知错误」，
  * 用户看不出问题出在自己填的 Key 上 —— 本该点一下就换 Key，却只能去翻日志。
@@ -421,14 +470,17 @@ export const classifyStatus = (status: number | undefined): ApiErrorCondition =>
  * 2. 额度用完再判：402 是标准写法，`insufficient_quota` 一类 code 是网关的常见写法，
  *    都必须在 429（限流）与 400（泛化业务错误）之前认出来——否则额度问题会被说成
  *    「请求过于频繁」并进入退避重试，或者干脆变成「未知错误」（#299）；
- * 3. 内容拦截 / 模型不存在只按**文案**判，且只在「没有状态码或 4xx」时看（#324）：
+ * 3. 上游**拒答提问内容**（`upstreamRefusal`）紧跟其后、且**优先于 badRequest**：
+ *    它最常见的外壳就是 400 / 422（和参数错同一个状态码），但用户该做的是换说法 / 重新生成，
+ *    不是改设置。判据是后端给的 `upstream_refusal` code，或 400 / 422 报文里的拒答原文；
+ * 4. 内容拦截 / 模型不存在只按**文案**判，且只在「没有状态码或 4xx」时看（#324）：
  *    官方端点这两类的 `error.type` 都是 `invalid_request_error`，code 分不开，只能看 message；
  *    限定状态范围是为了让 502 / 503 这类网关故障**永远不会**被认成内容拦截；
- * 4. Key 无效 / 参数不合法按**状态码或 code** 判（#347）：401 之外，网关还会用 403 / 400
+ * 5. Key 无效 / 参数不合法按**状态码或 code** 判（#347）：401 之外，网关还会用 403 / 400
  *    配 `invalid_api_key` / `authentication_error` / `invalid_parameter`，这两种都能让用户
  *    点一下入口就处理掉（换 Key / 打开设置），不该掉进泛化档；
- * 5. 2xx 却走到错误分类 = 上游给了「成功」的壳子却没有内容 → emptyStream（#324）；
- * 6. 400 / 422 归 badRequest（参数档），其余被拒绝的 4xx 归 upstreamRejected（#347），
+ * 6. 2xx 却走到错误分类 = 上游给了「成功」的壳子却没有内容 → emptyStream（#324）；
+ * 7. 400 / 422 归 badRequest（参数档），其余被拒绝的 4xx 归 upstreamRejected（#347），
  *    最后才按状态码走原有的网络 / 业务分类。
  */
 export const classifyErrorSignature = ({
@@ -455,6 +507,18 @@ export const classifyErrorSignature = ({
   // 文案类判定只在「可能来自上游拒绝」的状态范围内做：5xx / 2xx 不参与，
   // 免得上游随便一句英文把故障认成内容问题（#324 的负向口径）
   const textScoped = status === undefined || (status >= 400 && status < 500)
+  /**
+   * 上游**拒答这条提问的内容**先判，而且优先于 badRequest —— 400 是它的常见外壳。
+   * 两条路：后端给的 `upstream_refusal` code（决定性，不依赖正则），
+   * 或 400 / 422 里的拒答原文（老上游只给一段中文）。
+   */
+  if (
+    isUpstreamRefusalCode(code) ||
+    (PARAM_STATUSES.includes(status ?? -1) &&
+      (isUpstreamRefusalText(code) || isUpstreamRefusalText(message)))
+  ) {
+    return 'upstreamRefusal'
+  }
   if (textScoped) {
     if (isContentFilterText(code) || isContentFilterText(message)) {
       return 'contentFilter'
@@ -560,13 +624,16 @@ export const isRetryableApiError = (error: unknown): boolean => {
   if (condition === 'insufficientBalance') {
     return false
   }
-  // 内容拦截 / 模型不存在 / 参数错误（#324）/ 其余被拒 4xx（#347）：都是「同一条请求再发一次
-  // 也是同样结果」，自动重试只会让用户多等几轮再看到同一句话。文案里也明说「不要重试」。
+  // 内容拦截 / 模型不存在 / 参数错误（#324）/ 其余被拒 4xx（#347）/ 上游拒答内容：都是
+  // 「同一条请求再发一次也是同样结果」，**自动**重试只会让用户多等几轮再看到同一句话。
+  // （`upstreamRefusal` 界面上仍给「重新生成」按钮 —— 那是用户主动换说法 / 换池再试，
+  //   与「无人值守地重发同一条请求」不是一回事。）
   if (
     condition === 'contentFilter' ||
     condition === 'modelInvalid' ||
     condition === 'badRequest' ||
-    condition === 'upstreamRejected'
+    condition === 'upstreamRejected' ||
+    condition === 'upstreamRefusal'
   ) {
     return false
   }

@@ -143,6 +143,8 @@ export type VirtualRowsProps<T> = {
   scrollTop?: number
   /** 滚动容器的可见高度；量不到先给 0，窗口会退化成只有 overscan。 */
   viewport?: number
+  /** 实测回填前可见的消息及其原内容坐标。 */
+  measureAnchor?: { index: number; id: string; top: number } | null
   /** 贴底时按「滚到底」算窗口。 */
   anchorEnd?: boolean
   overscan?: number
@@ -163,12 +165,18 @@ export const VirtualRows = <T,>({
   scrollTop = 0,
   viewport = 0,
   anchorEnd = false,
+  measureAnchor,
   overscan = OVERSCAN_PX,
   getId,
   renderItem,
 }: VirtualRowsProps<T>): ReactElement => {
   const layout = buildLayout(measured, estimate)
-  const window = findWindow({ layout, scrollTop, viewport, overscan, anchorEnd })
+  // 按新的内容坐标选择窗口，让旧锚点在父组件补偿 scrollTop 时仍在 DOM 中。
+  const shift = measureAnchor && measureAnchor.index >= 0 && measureAnchor.index < items.length &&
+    getId(items[measureAnchor.index], measureAnchor.index) === measureAnchor.id
+    ? layout.offsets[measureAnchor.index] - measureAnchor.top
+    : 0
+  const window = findWindow({ layout, scrollTop: scrollTop + shift, viewport, overscan, anchorEnd })
 
   const children: ReactNode[] = []
   let cursor = 0

@@ -54,9 +54,9 @@
 | `src/components/consume/walletAutoRedeem.ts:276` | localStorage 在无痕 / 配额满 / 分区存储受限时抛错，写入必须自带 try…catch | 3 | 低 | 已有兜底 |
 | `src/components/messages/MessageFile.tsx:22` | URL.createObjectURL 引入于 Chrome 8，83 必有 | 3 | 低 | 已有兜底 |
 | `src/components/messages/MessageFile.tsx:29` | URL.revokeObjectURL 引入于 Chrome 8，83 必有 | 3 | 低 | 已有兜底 |
-| `src/components/messages/MessageList.tsx:254` | ResizeObserver 引入于 Chrome 64，83 必有（启动守卫也把它列进 REQUIRED） | 3 | 低 | 已有兜底 |
-| `src/components/messages/MessageList.tsx:271` | ResizeObserver 引入于 Chrome 64，83 必有（启动守卫也把它列进 REQUIRED） | 3 | 低 | 已有兜底 |
-| `src/components/messages/MessageList.tsx:341` | CSS.escape 引入于 Chrome 46，83 必有（启动守卫也把它列进 REQUIRED） | 3 | 低 | 已有兜底 |
+| `src/components/messages/MessageList.tsx:290` | ResizeObserver 引入于 Chrome 64，83 必有（启动守卫也把它列进 REQUIRED） | 3 | 低 | 已有兜底 |
+| `src/components/messages/MessageList.tsx:321` | ResizeObserver 引入于 Chrome 64，83 必有（启动守卫也把它列进 REQUIRED） | 3 | 低 | 已有兜底 |
+| `src/components/messages/MessageList.tsx:405` | CSS.escape 引入于 Chrome 46，83 必有（启动守卫也把它列进 REQUIRED） | 3 | 低 | 已有兜底 |
 | `src/components/messages/ReadingBars.tsx:104` | matchMedia 引入于 Chrome 9，83 必有 | 3 | 低 | 已有兜底 |
 | `src/components/messages/ReadingBars.tsx:106` | matchMedia 引入于 Chrome 9，83 必有 | 3 | 低 | 已有兜底 |
 | `src/components/settings/AppUpdateField.tsx:111` | registerPlugin 一定返回代理对象，但原生侧没注册时调用只会 reject；插件在不在要探测（#412 手动下载入口用 `registerPlugin('Browser')`，失败走 `catch` 给可读提示） | 3 | 中 | 需动态验证 |

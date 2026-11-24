@@ -10,6 +10,7 @@ import { getBaseUrl, getProviderKind } from '../api/apiConfig.js'
 import { classifyKeyFailure, type KeyFailure, type KeyFailureKind } from '../api/keyFailure.js'
 import { getSpec } from '../api/providers.js'
 import {
+  errorNoticeAction,
   errorNoticeRegenerate,
   pickErrorNotice,
   type ErrorNoticeContext,
@@ -27,6 +28,8 @@ export type Notice = {
    * - `topUp`：充值 / 卡密；
    * - `settings`：打开设置（模型与接口配置都在「数据管理」）——#347 / #353 补的入口，
    *   参数错误与模型不可用这两档以前只会「叫你去看设置」，却没有任何能点的东西。
+   *   **只在真有参数证据时才给**（`errorNotice.ts` 的 `hasParamEvidence`）；
+   *   上游拒答内容那一档**一定不给**：那是内容问题，把人引去改配置只会越改越乱。
    */
   action?: 'apiKey' | 'topUp' | 'settings'
   /**
@@ -160,6 +163,18 @@ export const describeReply = (reply: AssistantMessage): Notice | null => {
         : ''
     const message = localized || reply.error.message
     /**
+     * **上游原文**（不含我们自己落盘的那句本地化文案）：分类与字段解析只许看它。
+     *
+     * 为什么要分一份：`message` 优先取落盘的 `localMessage`，那是**我们自己的话**
+     * （「上游模型拒绝了这条请求…」）。拿它去分类，第二次渲染时上游的拒答特征已经不在里面了
+     * ——分类会退回「参数错」，`upstreamRefusal` 这一档在真实界面上根本走不到
+     * （本地单测却是绿的，因为测试只喂了一次上游原文）。口径与 `errorNotice.ts` 一致：
+     * 我们自己写的文案**不作为**判据证据。
+     */
+    const upstreamMessage = [reply.error.message, reply.error.detail ?? '']
+      .filter((part) => typeof part === 'string' && part.length > 0)
+      .join('\n')
+    /**
      * 上游自己写了中文（日/韩同理）：**原话比任何固定文案都具体**，直接展示。
      *
      * 像「当前模型不支持图片输入」这种句子，哪一档固定文案（参数错误 / 模型不可用）
@@ -210,7 +225,7 @@ export const describeReply = (reply: AssistantMessage): Notice | null => {
       code:
         reply.error.upstreamCode ??
         (reply.error.code === UPSTREAM_HTML_CODE ? UPSTREAM_HTML_CODE : undefined),
-      message,
+      message: upstreamMessage,
     })
     /**
      * #771：文案 / 「能不能重试」/「要不要给重新生成」不再散在这里的 if 里，
@@ -224,7 +239,8 @@ export const describeReply = (reply: AssistantMessage): Notice | null => {
       upstreamCode: reply.error.upstreamCode,
       condition,
       providerKind: providerKindOf(),
-      field: parseErrorField(message),
+      // 字段证据只认上游原文（我们自己那句文案里的词不算证据）
+      field: parseErrorField(upstreamMessage),
       // 只有「能给人看的中文原话」才算自证（#324）：英文内部报错只进折叠区，不改变分类。
       hasReadableText: Boolean(readable),
     }
@@ -244,7 +260,7 @@ export const describeReply = (reply: AssistantMessage): Notice | null => {
       return { text: translate('replyNetworkUnreachable'), regenerate }
     }
     // 上游说「上下文太长」（#122）：这不是重试能解决的，给能照着做的建议
-    if (status === 413 || isContextLimitMessage(message)) {
+    if (status === 413 || isContextLimitMessage(upstreamMessage)) {
       return { text: localized || translate('replyContextLimit'), regenerate: false }
     }
     switch (condition) {
@@ -291,7 +307,7 @@ export const describeReply = (reply: AssistantMessage): Notice | null => {
         // 只说「去设置里换模型」对内置渠道是死路（那里根本没有模型行，见 #339），
         // 所以把**实际发出的模型名**与**上游列出的可用模型**一起摆出来：
         // 用户/客服一眼就能看出「发的是残留值」，而不用再去翻诊断。
-        const models = parseSupportedModels(message)
+        const models = parseSupportedModels(upstreamMessage)
         const modelName = reply.model?.trim()
         return {
           ...(readable ?? {
@@ -306,18 +322,36 @@ export const describeReply = (reply: AssistantMessage): Notice | null => {
           regenerate: false,
         }
       }
+      case 'upstreamRefusal':
+        /**
+         * 上游拒答**这条提问的内容**（400 / 422 + 拒答原文，或 code=upstream_refusal）。
+         *
+         * 以前它和参数错同档：界面是我们自己的红色提示里塞着上游原文，还挂着
+         * 「打开设置」—— 于是一次内容拒绝被说成「你的配置有问题」，用户被引去乱改模型与地址。
+         * 现在只说三件事：**与设置无关**、可以换说法、或者直接重新生成。
+         *
+         * 上游原文**不进折叠区**：它是模型对内容的态度，不是可排查的配置线索，
+         * 再糊回去只会让用户以为界面上那句话是报错原因；要排查请用「复制诊断信息」。
+         */
+        return {
+          text: localized || translate('replyUpstreamRefusal'),
+          // 没有 action:'settings'（这是内容问题，不是配置问题）
+          regenerate: true,
+          diagnostics: diagnosticsOf(),
+        }
       case 'badRequest': {
         // 参数 / 字段不合法（400 / 422，#324 / #347 / #353）：重试不会有变化。
         //
-        // 这一档以前只有一句「请检查设置里的模型与接口配置」：说不出是哪个字段、看不到上游原文、
-        // 也没有能点的入口。现在三件事都补齐：字段名（`parseErrorField`）、可展开的上游原文、
-        // 「打开设置」按钮（模型与地址就在那里面）。
-        const field = parseErrorField(message)
-        // 上游写了中文就照抄原话（#324 口径）：比任何固定文案都具体；入口与诊断照给
+        // 「打开设置」**只在真有参数证据时**才给（`errorNotice.ts` 的 `hasParamEvidence`：
+        // `parseErrorField` 点出字段，或上游 code 就在说参数层）。改前这一档无条件给按钮，
+        // 于是上游一句「我无法回答」也会长出一个「打开设置」，把人引到没有要改的配置上。
+        const field = parseErrorField(upstreamMessage)
+        const settingsEntry = errorNoticeAction(noticeCtx)
+        // 上游写了中文就照抄原话（#324 口径）：比任何固定文案都具体；诊断照给
         if (readable) {
           return {
             text: readable.text,
-            action: 'settings',
+            ...(settingsEntry ? { action: settingsEntry } : {}),
             regenerate: false,
             diagnostics: diagnosticsOf(),
           }
@@ -326,7 +360,7 @@ export const describeReply = (reply: AssistantMessage): Notice | null => {
           text: field
             ? translate('replyParamInvalid', { status: statusLabel(status), field })
             : translate('replyBadRequest', { status: statusLabel(status) }),
-          action: 'settings',
+          ...(settingsEntry ? { action: settingsEntry } : {}),
           // 参数错重发不会有变化（#771）：先改设置，再重新生成
           regenerate: false,
           upstream: upstreamOf(),

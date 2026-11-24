@@ -118,7 +118,9 @@ const ROWS = [
     condition: 'badRequest',
     key: 'replyBadRequest',
     params: { status: 'HTTP 400' },
-    action: 'settings',
+    // 2026-11-24：「上游拒答」修复后，`action` 只在**拿到字段级证据**时才给。
+    // 这行上游既没点名字段、也没有 invalid_parameter 类 code → 不再摆「打开设置」误导用户去改配置。
+    action: undefined,
     showsStatus: true,
     fold: true,
     copy: true,
@@ -248,7 +250,8 @@ const ROWS = [
     condition: 'badRequest',
     key: '',
     params: {},
-    action: 'settings',
+    // 同上：这句话里没有可解析的字段名（`parseErrorField` 拿不到），不再给「打开设置」
+    action: undefined,
     showsStatus: false,
     fold: false,
     copy: true,

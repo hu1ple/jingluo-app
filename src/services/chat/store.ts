@@ -1495,7 +1495,8 @@ const prepareInlineImages = async (
 const markUnavailableAttachments = (
   sessionId: string,
   messageId: string,
-  unavailable: UnavailableAttachment[]
+  unavailable: UnavailableAttachment[],
+  sendable: FileAttachment[]
 ) => {
   const session = getSession(sessionId)
   const message = session?.messages.find((item) => item.id === messageId)
@@ -1503,9 +1504,21 @@ const markUnavailableAttachments = (
     return
   }
   const current = message.unavailable ?? []
+  if (!current.length && !unavailable.length) {
+    return
+  }
+  const available = new Map<string, string>()
+  if (unavailable.length) {
+    for (const file of sendable) {
+      available.set(file.id, file.name)
+    }
+  }
+  const previous = message.availableAtSend
   const unchanged =
+    previous !== undefined && previous.length === available.size &&
+    previous.every((file) => available.get(file.id) === file.name) &&
     current.length === unavailable.length &&
-    current.every((item, index) => item.id === unavailable[index]?.id)
+    current.every((item, index) => item.id === unavailable[index]?.id && item.name === unavailable[index]?.name)
   if (unchanged) {
     return
   }
@@ -1517,10 +1530,15 @@ const markUnavailableAttachments = (
       }
       if (unavailable.length === 0) {
         const cleared: UserMessage = { ...item }
+        delete cleared.availableAtSend
         delete cleared.unavailable
         return cleared
       }
-      return { ...item, unavailable: unavailable.map((entry) => ({ ...entry })) }
+      return {
+        ...item,
+        unavailable: unavailable.map((entry) => ({ ...entry })),
+        availableAtSend: Array.from(available, ([id, name]) => ({ id, name })),
+      }
     }),
   }))
   persist(sessionId)
@@ -1694,7 +1712,7 @@ const prepareFiles = async (sessionId: string, request: Request, signal: AbortSi
   }
   // #379：源缺失的附件已经跳过（不重传、不阻断），但**不许静默** —— 把清单落到这条 user 消息上，
   // 界面在消息里点名提示（哪个附件、为什么没发）。清单为空时顺手清掉旧提示（附件又可用时不留假话）。
-  markUnavailableAttachments(sessionId, request.question.id, audit.unavailable)
+  markUnavailableAttachments(sessionId, request.question.id, audit.unavailable, audit.sendable)
   if (audit.unavailable.length > 0) {
     record('chat_send', 'warn', 'attachments unavailable at send', {
       ...buildMeta({ flow: 'chat', stage: 'chat.request', status: 'error' }),

@@ -436,8 +436,10 @@ export const en = {
   uploadFailedTooLarge: 'Failed to upload "{name}": the file is over the size limit',
   uploadFailedNetwork: 'Failed to upload "{name}": network error. Please retry',
   uploadFailedUnknown: 'Failed to upload "{name}"',
-  attachUnavailableSent:
-    '{names} unavailable on this device (imported conversations keep file details only). This message was sent as text.',
+  attachUnavailableSent: 'Attachment details · skipped {count}',
+  attachAvailableList: 'Available at send time ({count})',
+  attachMissingList: 'Missing file, skipped ({count})',
+  attachOlderNotice: 'Only skipped attachments were recorded for this older message.',
   attachUnavailableNoText:
     'The attachments are unavailable on this device and this message has no text, so nothing was sent',
   uploadChannelUnsupported: 'This channel does not support file uploads',

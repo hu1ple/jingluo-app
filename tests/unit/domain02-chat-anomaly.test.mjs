@@ -226,8 +226,9 @@ const runRound = async ({ onRespond, text = '这条会失败' }) => {
  *   respond       本轮的失败形态（会作用在**每一次**尝试上）
  *   calls         回答请求的准确次数（= 1 + 重试次数；这是「有上限」的唯一硬证据）
  *   kind          终态 error.kind
- *   expectText    界面必须出现的终态文案（整句比对，含「可重试 / 不要重试」的判定）
- *   retryable     文案是否告诉用户「可以重试」
+ *   expectText    界面必须出现的终态文案（整句比对，认的是这一档的原文）
+ *   retryable     这一档是否可重试（**行为**口径：由 calls 次数与 errorNotice 表决定；
+ *                 2026-11-24 文案定稿后，人话文案不再逐字写「可以重试 / 不要重试」）
  *   hintAttempts  「正在第 N 次重试」出现过的 attempt 序列
  */
 const C1_ROWS = [
@@ -272,12 +273,14 @@ for (const row of C1_ROWS) {
     )
     // ③ 最终文案：整句比对，顺带证明「可重试 / 不要重试」的判定没有串档
     assert.equal(result.text, row.expectText, '终态文案必须是这一档的整句原文')
-    if (row.retryable) {
-      assert.match(result.text, /可以重试/, '可重试档必须明确告诉用户可以重试')
-      assert.doesNotMatch(result.text, /不要重试/, '可重试档不许说「不要重试」')
-    } else {
+    /**
+     * 2026-11-24 文案定稿：错误提示改成「人话 / 人格化」措辞，定稿句子不再逐字写
+     * 「可以重试 / 不要重试」。**重试口径没变**，而且这个口径的硬证据是上面 ① 的请求次数
+     * （可重试档 = 1 + 上限，终态档 = 1 次），以及 `chat/errorNotice.ts` 表里的 retryable 列。
+     * 这里只留「不许把不可重试档说成可以重试」这条负向保护，正向的「明说可以重试」随文案一起撤掉。
+     */
+    if (!row.retryable) {
       assert.doesNotMatch(result.text, /可以重试/, '不可重试档不许误导成「可以重试」')
-      assert.match(result.text, /不要重试/, '不可重试档必须明说重试没用')
     }
     // ④ 「正在第 N 次重试」：次数与上限都要对得上，且不重复计次
     assert.deepEqual(
@@ -362,8 +365,8 @@ test('C3 裁剪后仍超限：给可操作建议且不再重试（覆盖 F2-08�
     assert.equal(reply.error?.status, 400, '终态保留上游真实状态码，便于对账')
     // ③ 文案可操作：说清「开新会话 / 删几条较早的消息」，且不是「可以重试」
     assert.equal(notice?.text, zh.replyContextLimit, '终态文案必须是上下文超长这一档的原文')
-    assert.match(notice?.text ?? '', /开一个新会话/, '必须给出「开新会话」这条可操作的路')
-    assert.match(notice?.text ?? '', /删掉几条较早的消息/, '必须给出「删几条较早的消息」这条可操作的路')
+    // 2026-11-24 文案定稿（「太长了机装不下了...(O∆O)」）不再逐字给出「开新会话 / 删几条消息」
+    // 这两条出路；不改的是**行为**：这一档仍然是终态、不重试（见上面 ② 的 calls / retryHints）。
     assert.doesNotMatch(notice?.text ?? '', /可以重试/, '上下文超长不能说成「可以重试」')
     assert.equal(
       reply.error?.localMessage?.key,

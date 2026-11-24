@@ -13,8 +13,7 @@ export const en = {
   sessionLoading: 'Loading chats...',
   sessionListLoadFailed: 'Unable to load the chat list. Please try again.',
   sessionLoadFailed: 'Unable to load this chat. Please try again.',
-  sessionSaveFailed:
-    'Chats or attachments have not been saved locally. Retry before closing this page.',
+  sessionSaveFailed: 'Not saved to your phone yet (っ °Д °;)っ closing the page now might lose it',
   sessionDeleteFailed: 'Unable to delete this chat. Please try again.',
   settings: 'Settings',
   appName: '鲸落',
@@ -37,7 +36,7 @@ export const en = {
   sessionHistoryTimelineLabel30days: '30 Days',
   copy: 'Copy',
   copied: 'Copied',
-  copyFailed: 'Copy failed. Please long-press or select the text to copy.',
+  copyFailed: 'It didn’t copy (｡•́︿•̀｡)',
   copyTooLargeTitle: 'Content too long to copy',
   copyTooLargeBody:
     'This content is about {size} KiB, past the {limit} KiB the clipboard handles reliably. Copying would truncate or silently fail — save it as a TXT file instead.',
@@ -105,7 +104,7 @@ export const en = {
   toolFindIntro: 'Find keyword',
   toolFindFailTooltip: 'No related content found',
   readingLink: 'Reading',
-  commonNetworkErrorToast: 'Network Error. Please check your network status.',
+  commonNetworkErrorToast: 'Lost the connection, but I still want to talk to you (ΩДΩ)',
   /**
    * Key rejected (#374): previously the only sentence for every 401. It is now the
    * fallback for "the upstream rejected the key without saying why"; the specific
@@ -114,8 +113,7 @@ export const en = {
   replyInvalidApiKey:
     'The upstream rejected this API Key without saying why (it may be invalid, expired, or not belong to this endpoint).',
   /** Key format problem (#374): detectable locally, the request never left the app */
-  replyApiKeyFormatWrong:
-    'The API Key you entered is malformed (it contains spaces or line breaks, or is not key-length), so the request was never sent.',
+  replyApiKeyFormatWrong: 'This key’s shape is wrong (っ °Д °;)っ I can’t make it out',
   /** Key does not exist / was deleted on the server (#374) */
   replyApiKeyNotFound:
     'This API Key is invalid or has been deleted (the upstream cannot find it: it was never bound, or the server deleted it).',
@@ -139,45 +137,40 @@ export const en = {
     'Changing the API Key affects which account the quota belongs to; check the current account in the quota panel before switching.',
   /** "Check quota" entry inside the key notice (#374): opens the quota panel without touching the key */
   openQuotaPanel: 'Check quota',
-  replyInsufficientBalance:
-    'Insufficient balance or quota. Cannot continue generating (do not retry; top up first).',
+  replyInsufficientBalance: 'Were you waiting all along for the quota to run out so you could go find another AI… (╥﹏╥)',
   /** Top-up entry inside the quota notice (#299): reuses the quota & card dialog */
   quotaTopUpEntry: 'Top up / Redeem a card',
   /**
-   * Rate limit (#347: the status code now shows): 429 is a **retryable** temporary failure,
-   * and this copy must stay distinguishable from the terminal "do not retry" errors.
+   * Rate limit (#347 added the status code; 2026-11-24 copy final): 429 is a **retryable**
+   * temporary failure and must stay distinguishable from the terminal errors — that
+   * distinction now lives in the behaviour (`chat/errorNotice.ts` retryable column,
+   * `isRetryableApiError`), so the final copy no longer spells out the code or "retryable".
    */
-  replyRateLimited:
-    'Too many requests (HTTP 429, temporary rate limit, retryable). Please try again later.',
-  completionServerBusyToast: 'Server busy, please try again later.',
-  /** Server-busy error in a reply (#324): states explicitly that retrying may work */
-  replyServerBusy:
-    'Server busy — a temporary failure, the reply did not finish. You can retry (tap regenerate).',
+  replyRateLimited: 'You’re going faster than I can follow (ᗒᗣᗕ)՞ take a little breather before the next one',
+  completionServerBusyToast: 'They’re a bit busy (´･_･`) give me a moment, then try again',
+  /** Server-busy tier in a reply (#324): retryable; the retry contract is owned by `errorNotice` */
+  replyServerBusy: 'They’re spinning plates over there, this one didn’t finish (╥﹏╥) tap “Regenerate” to try again',
   replyUnknownError: 'The reply did not finish due to an unknown error. Please regenerate.',
-  /** Context over the model limit (#122): retrying will not help, offer two ways out */
-  replyContextLimit:
-    'This conversation is over the model’s context limit, so the request was not sent. Start a new session to continue, or delete a few older messages and try again.',
+  /** Context over the model limit (#122): still terminal, never retried; the final copy lists no ways out */
+  replyContextLimit: 'Too long, my little head can’t hold it all…(O∆O)',
   /**
    * Network unreachable / DNS / CORS (#771 case 2): the request never reached the upstream.
-   * Say explicitly that the upstream is NOT slow — users mistake a local network problem
-   * for a slow model and keep regenerating while nothing can change.
+   * 2026-11-24 copy final: 「这条消息没发出去呜…」 — the attribution is unchanged (still the
+   * network tier, not a slow upstream), the sentence just no longer spells that out.
    */
-  replyNetworkUnreachable:
-    'The request never left the app (offline, DNS failure, or blocked by CORS) — the upstream is not slow. Check your network or proxy, then tap “regenerate”.',
-  replyStreamInterrupted:
-    'The connection was interrupted and the reply is incomplete. What was received is kept — a temporary failure, you can retry (tap regenerate).',
+  replyNetworkUnreachable: 'This message didn’t go out (´；ω；`) tap “Regenerate” and let’s try once more',
+  replyStreamInterrupted: 'The network ran off mid-answer (´；ω；`) everything that arrived is still here — tap “Regenerate” to try again',
   /** Empty stream (#324): the upstream returned 200 but no content at all */
-  replyEmptyStream:
-    'The upstream returned no content this time (empty response). A temporary failure — you can retry (tap regenerate).',
-  /** Content safety block (#324): resending the same text will be blocked again */
-  replyContentFiltered:
-    'This content was blocked by the upstream safety review. Rephrase it or remove the sensitive part; do not retry the same text — it will be blocked again.',
+  replyEmptyStream: 'They said nothing this time and just left ( •̥́ ˍ •̀ू ) tap “Regenerate” to call them back',
+  /** Content safety block (#324): resending the same text gets blocked again — non-retryable via `errorNotice` */
+  replyContentFiltered: 'Hey hey hey, this one can’t go out (￣^￣)',
   /**
-   * Model missing / retired (#324 / #339): name the model that was actually sent plus the
-   * upstream's list. Built-in channels have no model row in settings, so point at upgrading.
+   * Model missing / retired (#324 / #339): name the model that was actually sent (`{model}`).
+   * 2026-11-24 copy final leaves `{model}` as the only placeholder — the available list
+   * (`{models}`), "built-in model" and "do not retry" are no longer in the main copy.
+   * Params are still passed; tier and non-retryability are unchanged.
    */
-  replyModelInvalid:
-    'The current model “{model}” is unavailable upstream (its name may have been retired). Models available upstream: {models}. The DeepSeek Official channel uses a built-in model and has no row for it in settings — upgrading to the fixed version is enough; on other channels, pick another model in settings. Retrying the same request will not help (do not retry).',
+  replyModelInvalid: 'Hmph, I already shooed “{model}” away! Only look for me! (*¯︶¯*)',
   /** Upstream did not list usable models (#339) */
   replyModelInvalidNoModels: 'not listed by the upstream',
   /** The reply did not record a model name (imported history, #339) */
@@ -195,9 +188,13 @@ export const en = {
    */
   replyBadRequest:
     'Invalid request parameters ({status}): the upstream refused this request (not a network problem, not an outage on our side). It did not name a specific field, and retrying will not help (do not retry) — tap “Copy diagnostics” and send it to us.',
-  /** Invalid field, and the upstream named which one (#347 / #353) */
-  replyParamInvalid:
-    'Invalid request parameters ({status}): the upstream rejected the field “{field}” — this request was refused upstream (not a network problem, not an outage on our side). Retrying will not help (do not retry).',
+  /**
+   * Invalid field, and the upstream named which one (#347 / #353).
+   * 2026-11-24 copy final: 「有地方填错啦…」 — `{field}` / `{status}` no longer appear in the
+   * main copy (still passed as params and shown in the upstream-message fold); the
+   * "open settings" action is unchanged.
+   */
+  replyParamInvalid: 'Something is filled in wrong (｡•́︿•̀｡)',
   /** Other rejected 4xx (#347): 403 / 404 / 405 / 409 / 415 — no guessing at the cause */
   replyUpstreamRejected:
     'The upstream rejected this request ({status}): retrying will not help (do not retry). Expand the upstream message below to see why, or tap “Copy diagnostics” and send it to us.',
@@ -213,11 +210,13 @@ export const en = {
   replyWaitingFirstToken: 'Waiting for the response',
   replyWaitingSlow: 'The service is responding slowly. Still waiting…',
   replyWaitingStalled: 'This is taking unusually long. You can stop and regenerate.',
-  /** Staged timeouts (#568): one line per stage, so the user can tell where it hung */
-  replyIdleTimeout:
-    'Taking too long: no new content for {seconds}s. You can stop and regenerate.',
-  replyFirstTokenTimeout:
-    'Connected upstream, but no first token within {seconds}s (the upstream may be queueing or overloaded). Tap “regenerate” to send it again, or try later.',
+  /**
+   * Staged timeouts (#568): still three distinct keys (tiering lives in `errorNotice`).
+   * 2026-11-24 copy final: all three are persona copy and no longer embed `{seconds}`;
+   * the thresholds are still injected, logged and kept in diagnostics.
+   */
+  replyIdleTimeout: 'Stuck, huh? Tap “Regenerate” and give me one more chance QAQ',
+  replyFirstTokenTimeout: 'Almost there, cross my heart ( •̥́ ˍ •̀ू ) just a tiny bit more',
   /** Stage names before the first token (#328); the seconds come from waitElapsed, never hardcoded */
   waitStagePreparing: 'Preparing the request',
   waitStageUploading: 'Uploading attachments',
@@ -296,7 +295,7 @@ export const en = {
   apiKeyPlaceholder: 'Enter API Key',
   apiKeyVerifying: 'Verifying...',
   confirm: 'Confirm',
-  apiKeyInvalid: 'Invalid API Key. Please check it and try again.',
+  apiKeyInvalid: 'That key looks a bit off (｡•́︿•̀｡)',
   apiKeyVerificationFailed: 'Verification failed: {message}',
   historyImport: 'Import chat history',
   historyImportConfirm: 'Import',
@@ -398,7 +397,7 @@ export const en = {
   historyImportUrlDownloading: 'Downloading...',
   historyImportUrlDownloadingHint:
     'Downloading and importing. A ~20MB export can take tens of seconds; please keep this screen open.',
-  historyImportFromUrlFailed: 'Import from link failed: {message}',
+  historyImportFromUrlFailed: 'The import didn’t go through (´；ω；`): {message}',
   historyImportUrlInvalid: 'Enter a link starting with http:// or https://',
   historyImportUrlNativeOnly:
     'Link import is unavailable on the web. Download the ZIP and upload it.',
@@ -418,8 +417,7 @@ export const en = {
   historyExportSaved: 'Saved to the location you chose: {name}',
   historyExportFailedStart: 'Export failed: could not open the save location. Please try again.',
   historyExportFailedWrite: 'Export failed: could not write the file. Check free storage and try again.',
-  historyExportFailedTooLarge:
-    'Export failed: the archive exceeds the 200MB export limit (same as the import limit). Delete some chats and try again.',
+  historyExportFailedTooLarge: 'The file is too big, I can’t move it (╥﹏╥)',
   historyExportTooLarge:
     'This history is about {actual}, over the {size}MB export limit. Delete chats you no longer need, or remove large images from messages, and try again.',
   historyExporting: 'Exporting…',
@@ -444,7 +442,7 @@ export const en = {
     '"{name}" has no local copy left (imported conversations keep file details only), so it was skipped',
   uploadFailedEndpointMissing: 'Failed to upload "{name}": this channel has no upload endpoint (404)',
   uploadFailedTooLarge: 'Failed to upload "{name}": the file is over the size limit',
-  uploadFailedNetwork: 'Failed to upload "{name}": network error. Please retry',
+  uploadFailedNetwork: '“{name}” slipped away before it got up there (´；ω；`) tap retry to send it again',
   uploadFailedUnknown: 'Failed to upload "{name}"',
   attachUnavailableSent: 'Attachment details · skipped {count}',
   attachAvailableList: 'Available at send time ({count})',
@@ -452,7 +450,7 @@ export const en = {
   attachOlderNotice: 'Only skipped attachments were recorded for this older message.',
   attachUnavailableNoText:
     'The attachments are unavailable on this device and this message has no text, so nothing was sent',
-  uploadChannelUnsupported: 'This channel does not support file uploads',
+  uploadChannelUnsupported: 'This channel can’t carry files (´･_･`)',
   uploadRetry: '{message}. Click to retry',
   chatInputPlaceholderChat: 'Enter a message',
   deactivatedThinkTooltip: 'Think before responding to solve reasoning problems',
@@ -464,11 +462,10 @@ export const en = {
   uploadMaxMBSize: 'File exceeds the size limit ({size} MB). Please adjust and try again.',
   uploadMaxFiles: 'You can upload up to {count} files',
   uploadFileStatusUploading: 'Uploading...',
-  uploadServerBusy: 'Server busy',
-  uploadParseFailed: 'Parsing failed',
+  uploadServerBusy: 'They’re a bit busy (´･_･`) give me a moment, then try again',
+  uploadParseFailed: 'I can’t read this file ( •̥́ ˍ •̀ू )',
   /** `{formats}` 由白名单派生（见 zh.ts 同 key 的注释 / #580） */
-  imageUnsupportedFormat:
-    'Unsupported image format: only {formats} are accepted (convert HEIC to JPEG first).',
+  imageUnsupportedFormat: 'I can’t eat this image format (｡•́︿•̀｡)',
   imageDecodeFailed: 'This image cannot be opened. Try another file, or convert it to PNG / JPEG.',
   imageTooLarge: 'The image is still over {size} MB after compression. Compress or crop it first.',
   imageAnimatedTooLarge:
@@ -480,7 +477,7 @@ export const en = {
   imagePreviewOpen: 'View full size',
   imageTotalTooLarge: 'Images in this message exceed {size} MB in total. Please send fewer images.',
   uploadImageOnly: 'This channel can only send images. Switch to a supported channel for documents.',
-  visionUnsupported: 'This channel does not support images. Switch to a channel or model that does.',
+  visionUnsupported: 'This channel has no eyes, it can’t see pictures (｡•́︿•̀｡)',
   uploadFileCountLimit: 'Uploaded file limit reached ({limit} files). ',
   uploadStorageLimit: 'Uploaded file storage limit reached ({limit} GB). ',
   uploadDeleteFiles: 'Delete files',
@@ -490,10 +487,9 @@ export const en = {
   voiceInputTimer: 'Recording {seconds}s',
   voiceInputStop: 'Stop recording and transcribe',
   voiceInputCancel: 'Transcribing. Click to cancel',
-  voiceInputPermissionDenied:
-    'Microphone access is blocked. Please allow it in your browser settings.',
+  voiceInputPermissionDenied: 'Hello hello? What are you saying? I can’t hear you oAo',
   voiceInputNoDevice: 'No microphone detected',
-  voiceInputFailed: 'Speech recognition failed. Please try again later.',
+  voiceInputFailed: 'I couldn’t make out what you said QAQ',
   voiceInputEmpty: 'No speech detected',
   voiceInputLimitReached: 'Maximum recording length reached',
   voiceInputRequiresHttps: 'Voice input requires HTTPS',
@@ -505,10 +501,10 @@ export const en = {
    * #596 / #800: there is nothing to re-enter on our channel — the only way out is for the server to
    * issue the key again. Since #800 that recovery is automatic (alignment on start and after sign-in,
    * plus one more attempt in Settings when a send is blocked), so the copy no longer points at the
-   * removed "Re-claim" button.
+   * removed "Re-claim" button. 2026-11-24 copy final: 「出了点小问题，我正在自己修…」 — the
+   * recovery path is unchanged, the sentence just no longer spells out "automatic".
    */
-  apiKeyRejectedOurs:
-    'The built-in service key is no longer valid. The app re-aligns it with the server automatically — retry in a moment (reopening the app also triggers an alignment).',
+  apiKeyRejectedOurs: 'A little hiccup, I’m patching it up myself ( •̥́ ˍ •̀ू ) give me a moment',
   insufficientBalance: 'Insufficient balance',
   rateLimited: 'Too many requests. Please try again later.',
   ttsPlay: 'Read aloud',
@@ -528,8 +524,7 @@ export const en = {
    * Pre-send local block (#451): the key exists but is clearly malformed, so the message was
    * NOT sent. Saying so explicitly matters — otherwise people keep retrying and blame the network.
    */
-  settingsApiKeyFormatBlocked:
-    'The saved API Key looks malformed (it contains spaces or line breaks, or is not key-length), so this message was not sent. Clear the field, paste the whole key again (no spaces or line breaks), then send.',
+  settingsApiKeyFormatBlocked: 'This key’s shape is wrong (っ °Д °;)っ I can’t make it out',
   /** A suspicious key is stored but no send has been attempted yet: keep it calm, no red text */
   settingsApiKeyFormatHint:
     'This value does not look like an API Key (stray spaces or line breaks, or an incomplete paste). Sending will be blocked until it is fixed.',
@@ -722,7 +717,7 @@ export const en = {
   // #234: server now rewards the inviter only; the invitee just binds the relationship (reward_points: 0),
   // so the success copy no longer reports earned credit; rule numbers always come from invite_rules
   oursPlansLoading: 'Loading plans…',
-  oursPlansFailed: 'Plans failed to load, try again',
+  oursPlansFailed: 'The plans went into hiding (´･_･`) tap retry to call them back',
   oursBuyAction: 'Pay',
   // Purchase entry (Issue #331): plans are all retired, open the shop checkout page instead
   oursPayTitle: 'Purchase',
@@ -797,8 +792,7 @@ export const en = {
   oursPayRecordsCopied: 'Card code copied',
   // Issue #45: unified request timeout notice (kept apart from network failure and 4xx/5xx)
   /// #568: this stage only covers "request sent → response headers", hence "connect"
-  requestTimeout:
-    'Connect timeout (no response headers within {seconds}s — the request never connected upstream, so this is not an upstream error). Check your network or proxy, then tap “regenerate” to send it again.',
+  requestTimeout: 'Knocked for ages and nobody opened (っ °Д °;)っ try once again?',
   // Issue #106: double-tap the mobile title bar to jump back to the first message
   scrollToFirstMessage: 'Back to the first message (double-tap the title)',
   scrollToFirstMessageHint: 'Double-tap to top',
@@ -1115,7 +1109,7 @@ export const en = {
   /** Used while checking the redeem history after a timeout: never invite a second submit */
   consumeRedeemConfirming: 'Checking the redemption result, do not submit again',
   consumeRedeemSuccess: 'Redeemed',
-  consumeRedeemFailed: 'Redemption failed, try again later',
+  consumeRedeemFailed: 'Huh? Looks like the card code didn’t go through o-o',
   consumeRedeemCodeUsed: 'This card key was already used',
   consumeRedeemCodeInvalid: 'Invalid card key',
   // Auto-redeem right after returning from the payment page (#784)
@@ -1272,9 +1266,8 @@ export const en = {
   legacyMigrateAlreadyUnsettled: 'Already migrated; if it has not arrived, please contact support',
   legacyMigrateRetryAnyway: 'Migrate anyway',
   attachPickButton: 'Attach document (TXT / DOCX / PDF)',
-  attachPickUnsupported:
-    '"{name}" is not a supported document type. Only TXT, DOCX and PDF are supported',
-  attachPickTooLarge: '"{name}" is {size}, over the limit of {limit} for this type',
+  attachPickUnsupported: 'I can’t chew on “{name}” — that format is too tough for me ( •̥́ ˍ •̀ू )',
+  attachPickTooLarge: '“{name}” is too big, I can’t lift it (っ °Д °;)っ',
   attachPickEmpty: '"{name}" is empty, so there is nothing to parse',
   attachPickTooMany: 'A message can hold at most {limit} documents; {count} extra were rejected',
   attachUnavailable: 'The attachment manager is not ready, so no document was added',
@@ -1290,7 +1283,7 @@ export const en = {
   attachStatusParsingPlain: 'Parsing…',
   attachStatusSuccess: 'Ready',
   attachStatusPartial: 'Partly ready · warnings: {count}',
-  attachStatusFailed: 'Parsing failed. Tap for the reason',
+  attachStatusFailed: 'I can’t read this file ( •̥́ ˍ •̀ू )',
   attachStatusCancelled: 'Parsing cancelled',
   attachCancel: 'Cancel parsing',
   attachRetry: 'Parse again',
@@ -1316,11 +1309,10 @@ export const en = {
   attachFailNoParser: 'The parser for this format is not ready yet, so it cannot be parsed',
   attachFailUnknown: 'Something unexpected went wrong while parsing',
   // PDF parser hard-failure codes (#574): one plain sentence per cause, plus the next step.
-  attachPdfErrNoTextLayer:
-    'This PDF has no extractable text. Scanned PDFs are not supported yet, so please upload a PDF with a text layer',
+  attachPdfErrNoTextLayer: 'I can’t make out the letters in this PDF (╥﹏╥)',
   attachPdfErrTooManyPages: 'This PDF has {pages} pages, over the {limit}-page limit. Split it and upload again',
   attachPdfErrTooManyPagesPlain: 'This PDF is over the {limit}-page limit. Split it and upload again',
-  attachPdfErrEncrypted: 'Encrypted PDFs are not supported yet. Remove the password protection and upload again',
+  attachPdfErrEncrypted: 'This PDF is locked (´･_･`) I can’t get it open',
   attachPdfErrNotPdf:
     'This file is not a valid PDF (its content does not match the extension). Check the file and upload again',
   attachPdfErrFileTooLarge: 'This PDF is over the size limit for its type. Compress or split it and upload again',
@@ -1346,16 +1338,14 @@ export const en = {
     'The service address is empty, so this message was not sent. Fill in an address first.',
   sendBlockedBaseUrlNoProtocol:
     'The service address is missing http:// or https://, so this message was not sent. Add the protocol and try again.',
-  sendBlockedBaseUrlEndpointPath:
-    'The service address points at a concrete endpoint (e.g. …/chat/completions), so this message was not sent. Use the host only, a /v1 suffix is fine.',
+  sendBlockedBaseUrlEndpointPath: 'That address is filled in too long (´･_･`)',
   sendBlockedModelEmpty:
     'The model name is empty, so this message was not sent. Fill in a model name first.',
   sendBlockedModelSpace:
     'The model name contains a space, so this message was not sent. A model name must be one continuous string.',
   // Pre-send guard for a missing identity (#793): not signed in and no usable key — the request would
   // only carry empty credentials. The second line is the toast button (straight to Settings → Service → Provider)
-  sendBlockedNoCredentials:
-    'You are not signed in and no model provider is available, so this message was not sent. Sign in or pick a model provider first.',
+  sendBlockedNoCredentials: 'I don’t know you yet (｡•́︿•̀｡)',
   sendBlockedPickProvider: 'Choose provider',
   // Pre-send guard for a required update (startup update check + read-only mode): the server raised
   // the minimum supported version above this build, or declared mode:"forced"

@@ -175,7 +175,7 @@ const closeSettings = async (dialog) => {
   await page.waitForTimeout(400)
 }
 
-// 触发器按整串匹配（#368）：`/渠道/` 子串会命中「当前渠道不支持文件上传…」那个禁用按钮，
+// 触发器按整串匹配（#368）：`/渠道/` 子串会命中「这个渠道不能传文件呢…」那个禁用按钮，
 // 详见 tests/helpers/helpers.mjs 的 providerKindTrigger 注释。
 const channelLabel = async (dialog) => (await providerKindTrigger(dialog).innerText()).trim()
 

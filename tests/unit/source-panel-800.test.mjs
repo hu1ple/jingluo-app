@@ -179,8 +179,13 @@ test('[4] 内置服务不再有「重新领取」：401 / 未领取的出路是�
     false,
     `ours 的 401 文案还在指「重新领取」，但那个按钮已经不渲染了：${zh.apiKeyRejectedOurs}`
   )
-  assert.match(zh.apiKeyRejectedOurs, /自动/u, '必须说清恢复是自动的（否则用户没有下一步可做）')
-  assert.match(en.apiKeyRejectedOurs, /automatic/iu, 'en 同步改成自动恢复的口径')
+  /**
+   * 2026-11-24 文案定稿：ours 401 那句换成「出了点小问题，我正在自己修 ( •̥́ ˍ •̀ू ) 等我一下下」，
+   * 不再逐字写「自动重新对齐」。**恢复路径没变**（启动 / 登录 / 发送被拦时各自动对齐一次），
+   * 这里只保留「不许指路到已删除按钮」的负向断言 + 中英成对的断言。
+   */
+  assert.ok(zh.apiKeyRejectedOurs.trim() !== '', 'zh 必须有人话文案')
+  assert.notEqual(zh.apiKeyRejectedOurs, en.apiKeyRejectedOurs, 'en 必须真的翻译一份')
 
   // 2) 这一页要自己说明「Key 从哪来」—— 否则用户只会觉得那一行不见了
   for (const key of ['settingsBuiltinKeyAuto', 'settingsBuiltinKeySyncing', 'settingsBuiltinKeySynced']) {

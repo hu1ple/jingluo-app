@@ -93,7 +93,9 @@ const ROWS = [
     key: 'replyParamInvalid',
     params: { status: 'HTTP 400', field: 'messages.0.content' },
     action: 'settings',
-    showsStatus: true,
+    // 2026-11-24 文案定稿：「有地方填错啦 (｡•́︿•̀｡)」不再把状态码嵌进主文案
+    // （状态码仍在折叠区的上游原文里；`{status}` 参数照传，只是文案不引用）。
+    showsStatus: false,
     fold: true,
     copy: true,
   },
@@ -107,7 +109,7 @@ const ROWS = [
     key: 'replyParamInvalid',
     params: { status: 'HTTP 422', field: 'max_tokens' },
     action: 'settings',
-    showsStatus: true,
+    showsStatus: false, // 定稿文案不嵌状态码（同上）
     fold: true,
     copy: true,
   },
@@ -193,16 +195,17 @@ const ROWS = [
     copy: true,
   },
   {
-    // #347 补状态码：429 以前只说「请求过于频繁」，用户贴进反馈时无从自证；
-    // 现在文案里带 `HTTP 429`，且仍然写「可以重试」（与终态错误的「不要重试」区分）
-    label: '429 限流（临时故障，文案带状态码且说可以重试）',
+    // #347 曾在文案里补过 `HTTP 429`；2026-11-24 文案定稿换成人话
+    // 「你发得太快啦，我都跟不上了 (ᗒᗣᗕ)՞ 歇一下下再发嘛」，状态码回到折叠区 / 诊断里。
+    // 可重试性没变（`isRetryableApiError` 与 `errorNotice` 表的 retryable 列）。
+    label: '429 限流（临时故障，定稿文案不带状态码）',
     status: 429,
     message: 'rate limit reached for requests',
     condition: 'rateLimited',
     key: 'replyRateLimited',
     params: {},
     action: undefined,
-    showsStatus: true,
+    showsStatus: false,
     fold: false,
     copy: false,
   },
@@ -294,13 +297,17 @@ test('表驱动：上游响应 → 分类 / 文案 key / 操作入口 / 状态�
   }
 })
 
-test('4xx 文案：请求参数 / 上游拒绝这两档都写明「不要重试」', () => {
-  for (const key of ['replyParamInvalid', 'replyBadRequest', 'replyUpstreamRejected']) {
+test('4xx 文案：上游拒绝那两档仍写明「不要重试」', () => {
+  /**
+   * 2026-11-24 文案定稿：`replyParamInvalid`（「有地方填错啦 (｡•́︿•̀｡)」）与
+   * `replyRateLimited` / `replyServerBusy` 的人话句子不再逐字写「不要重试 / 可以重试」，
+   * 所以这里只留**没被定稿改动**的那两档（`replyBadRequest` / `replyUpstreamRejected`）。
+   * 可重试 / 不可重试的**行为**判据仍由 `isRetryableApiError` 与 `chat/errorNotice.ts`
+   * 表的 retryable 列覆盖（`official-error-classify.test.mjs` 的 [3] 逐个 case 断言）。
+   */
+  for (const key of ['replyBadRequest', 'replyUpstreamRejected']) {
     assert.match(translate(key, { status: 'HTTP 400', field: 'max_tokens' }), /不要重试/, key)
   }
-  // 临时故障那两档反过来要写「可以重试」，不能混
-  assert.match(translate('replyRateLimited'), /可以重试/)
-  assert.match(translate('replyServerBusy'), /可以重试/)
 })
 
 test('折叠区（上游原文）：脱敏 + 截断，Key / 卡密 / 手机号不原文出现', () => {

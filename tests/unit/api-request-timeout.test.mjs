@@ -276,13 +276,19 @@ test('超时只约束响应头：流式正文读得久也不被误杀', async ()
   assert.equal(aborted, false, '响应头到了之后不能再按请求预算中断连接')
 })
 
-test('超时文案 zh / en 都有且带秒数占位符', () => {
+test('超时文案 zh / en 都有（定稿文案不嵌秒数）', () => {
   assert.equal(typeof zh.requestTimeout, 'string')
   assert.equal(typeof en.requestTimeout, 'string')
-  assert.match(zh.requestTimeout, /\{seconds\}/)
-  assert.match(en.requestTimeout, /\{seconds\}/)
-  assert.match(zh.requestTimeout, /超时/)
-  // #568：文案改成「连接上游超时」，英文对应 connect timeout
-  assert.match(en.requestTimeout, /connect timeout/i)
+  assert.ok(zh.requestTimeout.trim() !== '' && en.requestTimeout.trim() !== '', '中英都要有文案')
+  /**
+   * 2026-11-24 文案定稿（产品给的「人话 / 人格化」版本）：连接段超时那句换成
+   * 「敲了好久的门都没人开 (っ °Д °;)っ 再试一次嘛」，不再把 {seconds} 嵌进句子。
+   * **行为口径没变**：connect_timeout 仍由 `errorNotice` 表命中同一行、仍可重试、
+   * 阈值仍来自 `LIMITS.requestTimeouts.connectMs`（`{seconds}` 参数照传，只是文案不再引用它）。
+   * 所以这里改成断言「两份文案真的存在且不是同一串」，秒数占位符的断言随文案一起撤掉。
+   */
+  assert.doesNotMatch(zh.requestTimeout, /\{seconds\}/)
+  assert.doesNotMatch(en.requestTimeout, /\{seconds\}/)
+  assert.notEqual(zh.requestTimeout, en.requestTimeout, '英文必须是另一份文案')
   assert.deepEqual(Object.keys(en).sort(), Object.keys(zh).sort(), 'zh/en 的 key 必须一一对应')
 })

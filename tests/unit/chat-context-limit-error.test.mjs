@@ -136,9 +136,12 @@ test('文案：上下文超限的提示必须和「未知错误」兜底不同�
   assert.ok(typeof en.replyContextLimit === 'string' && en.replyContextLimit.length > 0, 'en 必须有 replyContextLimit')
   assert.notEqual(limitText, unknownText, '上下文超限的文案不能和未知错误一样')
   assert.notEqual(en.replyContextLimit, en.replyUnknownError, '英文同样不能一样')
-  // 可操作：告诉用户要么开新会话，要么删几条较早的消息
-  assert.match(limitText, /新会话|新的会话/, '中文文案要给出「开新会话」这条路')
-  assert.match(limitText, /删|清理/, '中文文案要给出「删几条消息」这条路')
+  /**
+   * 2026-11-24 文案定稿：这一档的句子换成「太长了机装不下了...(O∆O)」，不再逐字写出
+   * 「开新会话 / 删几条较早的消息」两条出路。**行为口径没变**：413 / context_length_exceeded
+   * 仍归这一档、仍是终态不重试（下面 413 那条用例与 domain02-chat-anomaly 的 C3 覆盖）。
+   * 所以这里撤掉「文案里必须有出路字样」的两条断言，只留下面的档位与去重断言。
+   */
 
   const reply = (status, message) => ({
     id: 'r1',
@@ -158,8 +161,9 @@ test('文案：上下文超限的提示必须和「未知错误」兜底不同�
     .replace('{status}', 'HTTP 400')
     .replace('{field}', 'temperature')
   assert.equal(otherNotice.text, paramCopy, `无关 400 应走参数错误文案，实际：${otherNotice.text}`)
-  assert.match(otherNotice.text, /HTTP 400/, '状态码要摆到界面上（#347）')
-  assert.match(otherNotice.text, /temperature/, '上游点名了字段：文案要带出来（#347 / #353）')
+  // 2026-11-24 文案定稿：「有地方填错啦 (｡•́︿•̀｡)」不再把 {status} / {field} 嵌进句子，
+  // 状态码与字段仍随参数传给 translate()（折叠区里的上游原文照旧），只是主文案不再展示。
+  assert.doesNotMatch(otherNotice.text, /\{\w+\}/, '占位符不许漏到界面上')
   assert.equal(otherNotice.action, 'settings', '参数错误要给出「打开设置」入口（#347 / #353）')
   assert.notEqual(otherNotice.text, unknownText, '普通 400 不该再被说成「未知错误」')
   assert.notEqual(limitNotice.text, otherNotice.text, '两种失败的措辞必须能区分')

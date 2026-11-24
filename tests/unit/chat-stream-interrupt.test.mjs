@@ -10,7 +10,7 @@
 //   [2] 读到一半响应体报错（真断网/断流）：同样是断流，原始原因保留在 detail 里给日志
 //   [3] 断流错误码独立，与上游返回 HTML、普通网络错误的分类互不冲突
 //   [4] 已收到的半句正文不丢，重试入口（status=error）仍在
-//   [5] 界面提示是 i18n 文案、含「连接中断」，中英各自本地化
+//   [5] 界面提示是 i18n 文案、说清是网络中断，中英各自本地化
 //   [6] 未知错误的英文原文不上界面，改走 i18n 兜底；中文可读原文原样展示
 //   [7] 正常结束的流不受影响（不误判断流、不产生提示）
 import { test } from 'node:test'
@@ -36,7 +36,7 @@ const { zh } = await import('../../src/i18n/zh.ts')
 const { en } = await import('../../src/i18n/en.ts')
 const { pinLocale } = await import('../helpers/locale.mjs')
 
-// 断流提示的断言看的是中文渲染结果（「连接中断」），而 settings.ts 的默认语言跟随
+// 断流提示的断言看的是中文渲染结果（中文汉字），而 settings.ts 的默认语言跟随
 // navigator.language（Node 里来自 shell 的 LANG）：不钉死就会 LANG=en_US 红、LANG=zh_CN 绿。
 // 默认钉在中文；需要英文的用例自己在局部切 locale（见下面的 localized 判定）。
 assert.equal(pinLocale(useSettings), 'zh-CN', '界面语言必须钉在中文，不能跟随 shell 的 LANG')
@@ -172,10 +172,11 @@ test('断流：没有 message_stop 就结束，抛可识别的断流错误', asy
   assert.equal(classifyApiError(error), 'interrupted', 'classifyApiError 单独归类断流')
   assert.notEqual(classifyApiError(error), 'network', '断流不能冒充普通网络错误')
 
-  // [4][5] 提示：有解释、含「连接中断」、已经收到的正文还在
+  // [4][5] 提示：有解释、说清是网络中断、已经收到的正文还在
+  // （2026-11-24 文案定稿：「连接中断，回答没有接收完整…」→「网络中途跑掉啦 (´；ω；`) …」）
   const notice = describeReply(settled)
   assert.ok(notice, '断流后必须有提示，不能 alerts=[]')
-  assert.match(notice.text, /连接中断/, '提示要说清楚是连接中断')
+  assert.match(notice.text, /网络|中断/, '提示要说清楚是网络中断')
   assert.equal(textOf(settled), '服务端已经发了半句', '已经收到的正文不能丢')
   assert.equal(settled.status, 'error', '断流后仍是可重试的 error 状态')
 })
@@ -192,7 +193,7 @@ test('断流：读到一半响应体报错，同样是断流且原文留给日�
 
   const notice = describeReply(settled)
   assert.ok(notice, '断流后必须有提示')
-  assert.match(notice.text, /连接中断/, '提示要说清楚是连接中断')
+  assert.match(notice.text, /网络|中断/, '提示要说清楚是网络中断')
   assert.doesNotMatch(notice.text, /network|error/i, '提示里不泄露英文原文')
   assert.equal(textOf(settled), '服务端已经发了半句', '已经收到的正文不能丢')
 })
@@ -260,7 +261,7 @@ test('本地化：中英文案各自落地，未知英文原文不上界面', as
       useSettings.setState({ locale: 'zh-CN' })
     }
   }
-  assert.match(localized('zh-CN'), /连接中断/, '中文环境显示中文')
+  assert.match(localized('zh-CN'), /[\u4e00-\u9fa5]/, '中文环境显示中文')
   assert.doesNotMatch(localized('en-US'), /[\u4e00-\u9fa5]/, '英文环境不显示中文')
 
   // [6] 未知错误：英文内部错误只进日志，界面走 i18n 兜底

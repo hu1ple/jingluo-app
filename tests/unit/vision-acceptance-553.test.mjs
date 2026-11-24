@@ -418,17 +418,21 @@ test('[2] 白名单外（heic）：入口就明确拒绝，并给出可读原因
   )
   assert.ok(
     imageSource.IMAGE_FORMAT_LABELS.includes('GIF'),
-    '提示语里的格式清单必须从白名单派生（GIF 在白名单里就必须出现，见 #580 缺口 1）'
+    '格式清单来自白名单（GIF 在白名单里，见 #580 缺口 1）'
   )
-  // 真渲染一遍：清单填进去了、模板占位符没有漏到界面上
+  /**
+   * 真渲染一遍：模板占位符不许漏到界面上。
+   *
+   * 2026-11-24 文案定稿：这句换成「这种图片格式我吃不了啦 (｡•́︿•̀｡)」，不再枚举 {formats}
+   * ——所以「清单必须出现在提示语里」这条断言随文案撤掉。**行为口径没变**：白名单仍是唯一判据
+   * （`IMAGE_FORMAT_LABELS`），HEIC 仍在入口被拦、仍不可重试，`{formats}` 参数照旧由草稿层传下去。
+   */
   const { translate } = await import('../../src/i18n/index.ts')
   const rendered = translate('imageUnsupportedFormat', {
     formats: imageSource.IMAGE_FORMAT_LABELS,
   })
-  assert.ok(
-    rendered.includes('GIF') && rendered.includes('HEIC') && !rendered.includes('{formats}'),
-    `文案要既写全白名单、又给出 HEIC 的动作：${rendered}`
-  )
+  assert.ok(rendered.trim() !== '', '文案不能是空串')
+  assert.ok(!rendered.includes('{'), `模板占位符不许漏到界面上：${rendered}`)
   assert.equal(drafts.getDraft(null).attachments.length, 0, '被拒的文件不许留在草稿里')
 
   // ③ 最要命的一种：文件名 / MIME 都装成 png，字节是 HEIC —— 只有 magic bytes 能抓住它。

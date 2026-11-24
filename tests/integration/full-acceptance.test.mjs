@@ -292,7 +292,8 @@ const closeSettings = async () => {
 }
 const selectKind = async (nameRe) => {
   // 选择器必须落在设置弹窗里、且是**渠道行**本身：`/渠道|Channel/` 这类宽松名字会命中附件入口
-  // 按钮的 aria-label（「当前渠道不支持文件上传，附件入口已不可用」），点它必超时（#406 复核）。
+  // 按钮的 aria-label（2026-11-24 定稿：「这个渠道不能传文件呢…」，原句「当前渠道不支持文件上传，
+  // 附件入口已不可用」），点它必超时（#406 复核）。
   // #555：文案换成「当前渠道不支持文档附件…」之后同一个坑又出现过一次，所以选择器不再本地重写，
   // 一律走 helpers.mjs 的 `providerKindTrigger`（整串锚定，是同一个判定口）。
   await providerKindTrigger(page.getByRole('dialog').first()).first().click()

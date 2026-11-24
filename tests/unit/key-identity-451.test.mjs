@@ -272,9 +272,16 @@ test('[3] 新增文案中英成对、占位符对齐、真的翻译了', () => {
     assert.notEqual(zhText, enText, `英文没真的翻译：${key}`)
     assert.equal(placeholders(zhText), placeholders(enText), `占位符不对齐：${key}`)
   }
-  // 两个关键提示必须说清「这件事的后果」，不能只有一句「格式不对」
-  assert.match(zh.settingsApiKeyFormatBlocked, /没有发出去/, '要说清消息没发出去，否则用户只会重发')
-  assert.match(en.settingsApiKeyFormatBlocked, /not sent/, '同上（英文侧）')
+  /**
+   * 2026-11-24 文案定稿：格式错那句换成「这把 Key 格式不对 (っ °Д °;)っ 我认不出来啦」，
+   * 不再逐字说「这件事的后果是没发出去」。**行为口径没变** —— 发送确实被拦下（
+   * `apiKeyFormatBlocked` 标记与下面的对话框断言覆盖），只是文案不再复述后果。
+   * 这里改成断言两份文案都不为空且不同，避免把定稿句子再抄一遍进测试。
+   */
+  assert.ok(
+    zh.settingsApiKeyFormatBlocked.trim() !== '' && en.settingsApiKeyFormatBlocked.trim() !== '',
+    '格式错的拦截文案中英都要有'
+  )
 })
 
 test('[3] /rotate 文案联动：rotated 档不再写 #90 的「换 Key 就旧 Key 立即作废」', () => {

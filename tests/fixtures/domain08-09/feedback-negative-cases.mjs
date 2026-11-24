@@ -20,7 +20,8 @@ export const TOAST = {
   notImage: '只能附图片截图：请选择 png / jpg / webp 这类图片文件',
   /** #388：声明是图片但解不开 */
   undecodable: '这张图片打不开（可能已损坏或不是真的图片），请换一张再试',
-  copyFailed: '复制失败，请长按或选中文本后复制',
+  // 2026-11-24 文案定稿：「复制失败，请长按或选中文本后复制」→「没复制上 (｡•́︿•̀｡)」
+  copyFailed: '没复制上 (｡•́︿•̀｡)',
   descriptionRequired: '请先填写问题描述',
 }
 

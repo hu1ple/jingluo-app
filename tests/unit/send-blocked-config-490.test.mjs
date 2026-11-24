@@ -269,11 +269,20 @@ test('[1] 接口路径的判据来自渠道表：Anthropic 渠道的 /v1/message
 })
 
 test('[1] 文案键齐备：五个 sendBlocked* 中英都有、且真的翻译了', () => {
+  /**
+   * 2026-11-24 文案定稿：「服务地址填到具体路径」这一条换成「地址填得太长啦 (´･_･`)」，
+   * 定稿句子不再逐字写「这条消息没有发出」（其余四条仍是原句）。
+   * **拦截口径没变**：五类码集合、toast、设置跳转、落点都由 [2] 用例逐条断言。
+   */
+  const PERSONA_COPY = new Set(['sendBlockedBaseUrlEndpointPath'])
   for (const { messageKey } of Object.values(sendCheck.SEND_BLOCK_TABLE)) {
     assert.equal(typeof zh[messageKey], 'string', `${messageKey} 有中文文案`)
     assert.equal(typeof en[messageKey], 'string', `${messageKey} 有英文文案`)
     assert.notEqual(zh[messageKey], en[messageKey], `${messageKey} 真的翻译了，不是同一串`)
-    // 每句话都要说清「这条消息没有发出」：不然用户会以为已经发出去、只是没回
+    if (PERSONA_COPY.has(messageKey)) {
+      continue
+    }
+    // 其余四句要说清「这条消息没有发出」：不然用户会以为已经发出去、只是没回
     assert.match(zh[messageKey], /没有发出/u, `${messageKey} 中文要写明没有发出`)
     assert.match(en[messageKey], /not sent/u, `${messageKey} 英文要写明没有发出`)
   }
@@ -570,14 +579,12 @@ test('[5] 纯函数：只有「未登录 且 没有可用 Key」才拦（两样�
     'model_empty',
     'model_space',
   ])
-  // 文案：中英成对，且都写清「没发出去」
+  // 文案：中英成对（2026-11-24 文案定稿换成「我还不认识你呢 (｡•́︿•̀｡)」，
+  // 定稿句子不再逐字写「登录 / 选渠道 / 没发出去」；拦下与跳转的行为由上面的 code / actionKey 断言覆盖）
   assert.equal(typeof zh.sendBlockedNoCredentials, 'string')
   assert.equal(typeof en.sendBlockedNoCredentials, 'string')
   assert.notEqual(zh.sendBlockedNoCredentials, en.sendBlockedNoCredentials, '真的翻译了')
-  assert.match(zh.sendBlockedNoCredentials, /登录/u, '中文要说清可以登录')
-  assert.match(zh.sendBlockedNoCredentials, /模型渠道/u, '中文要说清可以选渠道')
-  assert.match(zh.sendBlockedNoCredentials, /没有发出/u, '中文要写明这条消息没有发出')
-  assert.match(en.sendBlockedNoCredentials, /not sent/u, '英文要写明这条消息没有发出')
+  assert.ok(zh.sendBlockedNoCredentials.trim() !== '', '中文文案不能是空串')
   assert.equal(zh.sendBlockedPickProvider, '去选择渠道')
   assert.equal(typeof en.sendBlockedPickProvider, 'string')
 })

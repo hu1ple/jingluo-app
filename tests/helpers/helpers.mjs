@@ -265,8 +265,9 @@ export const openSettingsDataTab = openSettingsDataSection
  * 「渠道」下拉的触发器（1.4.0-beta.3 起叫「渠道」，旧文案「服务类型」保留兼容）。
  *
  * #368：这里**必须是整串匹配**。用 `name: /渠道/` 子串匹配时，聊天页里那个
- * `aria-disabled="true"`、`aria-label="当前渠道不支持文件上传，附件入口已不可用"` 的附件按钮
- * （`src/i18n/zh.ts:269`）也含「渠道」二字且 DOM 顺序在前，`.first()` 会点到它 →
+ * `aria-disabled="true"`、`aria-label="这个渠道不能传文件呢 (´･_･`)"`（2026-11-24 定稿文案，
+ * 原句「当前渠道不支持文件上传，附件入口已不可用」）的附件按钮也含「渠道」二字且 DOM 顺序在前，
+ * `.first()` 会点到它 →
  * `locator.click` 卡在「element is not enabled」重试到 30s 超时才抛错。
  *
  * #555：同一个坑换了一句文案又回来了一次 —— #480/#538 之后 DeepSeek 渠道的**文档**入口是禁用态

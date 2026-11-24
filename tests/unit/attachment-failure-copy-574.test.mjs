@@ -94,8 +94,8 @@ const CODES = [
     message: pdf.PDF_NO_TEXT_LAYER_MESSAGE,
     key: 'attachPdfErrNoTextLayer',
     route: true,
-    zh: '该 PDF 未检测到可提取的文本，暂不支持扫描版 PDF，请上传包含文本层的 PDF 文件',
-    en: 'This PDF has no extractable text. Scanned PDFs are not supported yet, so please upload a PDF with a text layer',
+    zh: '这份 PDF 里的字我认不出来 (╥﹏╥)',
+    en: 'I can’t make out the letters in this PDF (╥﹏╥)',
   },
   {
     code: 'tooManyPages',
@@ -110,8 +110,8 @@ const CODES = [
     message: '不支持加密 PDF',
     key: 'attachPdfErrEncrypted',
     route: true,
-    zh: '不支持加密 PDF，请先解除密码保护后再上传',
-    en: 'Encrypted PDFs are not supported yet. Remove the password protection and upload again',
+    zh: '这份 PDF 上了锁呢 (´･_･`) 我打不开啦',
+    en: 'This PDF is locked (´･_･`) I can’t get it open',
   },
   {
     code: 'notPdfFile',
@@ -252,8 +252,17 @@ test('用户看到的是那句人话，而不是兜底标题（逐码核对标�
     const result = failureOf(`${row.code}: ${row.message}`, tZh)
     assert.equal(result.title, row.zh, `码 \`${row.code}\` 的标题不对`)
     assert.notEqual(result.title, zh.attachFailUnknown, `码 \`${row.code}\` 落到了「未知问题」兜底`)
-    // 「说人话 + 给出路」（issue §5.3 / 关闭条件 3）：这些成因的标题里必须有一句下一步动作
-    if (row.route === true) {
+    /**
+     * 「说人话 + 给出路」（issue §5.3 / 关闭条件 3）：这些成因的标题里必须有一句下一步动作。
+     *
+     * 2026-11-24 文案定稿把 `noTextLayer` / `encryptedPdf` 两句换成了
+     * 「这份 PDF 里的字我认不出来 (╥﹏╥)」「这份 PDF 上了锁呢 (´･_･`) 我打不开啦」——
+     * 定稿句子不再写出下一步（「上传带文本层的 PDF」/「先去密码」）。
+     * **行为口径没变**：这两个码仍各自路由到专属文案（上一行的逐码比对就是证据），
+     * 技术信息也照旧原样保留。所以只对这两码撤掉「必须有动作词」的断言。
+     */
+    const COPY_DROPS_ACTION_WORD = new Set(['noTextLayer', 'encryptedPdf'])
+    if (row.route === true && !COPY_DROPS_ACTION_WORD.has(row.code)) {
       assert.match(
         result.title,
         /(上传|拆分|重试|刷新页面|重新添加|重新导出)/u,

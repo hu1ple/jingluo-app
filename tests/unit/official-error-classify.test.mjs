@@ -122,8 +122,10 @@ const apiErrorOf = ({ status, code, message }, kind = 'http') =>
   new ApiError(kind, message, status, undefined, undefined, code)
 
 /**
- * #339 起 `replyModelInvalid` 带两个占位符：实际发出的模型名 + 上游可用模型列表。
- * 这里按真实 translate() 口径拼期望值 —— noticeOf 造的回复没有 model 快照，模型名落到「未记录」。
+ * #339 起 `replyModelInvalid` 曾带两个占位符（模型名 + 可用列表）。
+ * 2026-11-24 文案定稿后只剩 `{model}`（定稿句子：「哼哼，我已经把「{model}」赶走啦！…」），
+ * `{models}` 参数照旧传进来但不入句 —— 期望值仍按真实 translate() 口径拼，不手写字符串。
+ * noticeOf 造的回复没有 model 快照，模型名落到「未记录」。
  */
 const MODEL_LIST = 'deepseek-flash, deepseek-v4-pro'
 const modelInvalidCopy = (model = '未记录') =>
@@ -137,8 +139,11 @@ test('[1] 真实样本：400 非法模型名 → 模型不存在档，不再落�
   const notice = noticeOf(apiErrorOf(MODEL_NOT_FOUND))
   assert.equal(notice.text, modelInvalidCopy(), '用「模型不可用」的专用文案（带实际模型名与可用列表）')
   assert.notEqual(notice.text, zh.replyUnknownError, '绝不能再是「未知错误」')
-  assert.match(notice.text, /不要重试/, '模型不存在是终态：文案要说清不要重试')
-  assert.match(notice.text, /模型/, '文案要指出是模型的问题')
+  /**
+   * 2026-11-24 文案定稿：这句不再逐字写「不要重试 / 模型」。
+   * 终态（不可重试）这条口径改由行为断言兜住 —— `isRetryableApiError` 仍是 false。
+   */
+  assert.equal(isRetryableApiError(apiErrorOf(MODEL_NOT_FOUND)), false, '模型不存在是终态')
   assert.equal(notice.diagnostics, undefined, '已识别的场景不需要额外诊断文本')
 })
 
@@ -150,7 +155,7 @@ test('[1] 上游可用模型列表可解析（#339）：原文 → 列表，脏�
     ['deepseek-flash', 'deepseek-v4-pro'],
     '列表要在「but you passed」之前结束'
   )
-  for (const dirty of ['', undefined, 'model not found', '当前模型在上游不可用']) {
+  for (const dirty of ['', undefined, 'model not found', '哼哼，我已经把「m」赶走啦']) {
     assert.deepEqual(parseSupportedModels(dirty), [], `脏文本不该解析出模型名：${String(dirty)}`)
   }
 })
@@ -167,7 +172,8 @@ test('[1] 真实样本：400 空 messages / 422 max_tokens 非法 → 参数错�
     assert.equal(classifyErrorSignature(sample), 'badRequest', `${label} 是请求被拒绝`)
     const notice = noticeOf(apiErrorOf(sample))
     assert.equal(notice.text, paramCopy(sample.status, field), `${label} 用参数错误文案（带字段）`)
-    assert.match(notice.text, /不要重试/, `${label} 是 4xx：文案要说清不要重试`)
+    // 2026-11-24 文案定稿后主文案不再写「不要重试」：4xx 的终态口径由行为断言保证
+    assert.equal(isRetryableApiError(apiErrorOf(sample)), false, `${label} 是 4xx：不可重试`)
     assert.equal(notice.action, 'settings', `${label} 要给出「打开设置」入口（#347 / #353）`)
     assert.match(notice.upstream ?? '', /HTTP \d{3}/, `${label} 的折叠区里有上游原文（#347）`)
   }
@@ -212,7 +218,13 @@ test('[2] 流内 error 帧（没有 HTTP 状态码）也能分类：内容拦截
     upstreamCode: 'content_filter',
   })
   assert.equal(filteredNotice.text, zh.replyContentFiltered)
-  assert.match(filteredNotice.text, /不要重试/, '内容拦截重发一定还是被拦：明说不要重试')
+  // 2026-11-24 文案定稿：「哎哎哎这个不能发（￣^￣）」不再逐字写「不要重试」/「审核」；
+  // 「重发同样会被拦」这条口径由 `classifyErrorSignature` → contentFilter 档 + 不可重试保证。
+  assert.equal(
+    isRetryableApiError(apiErrorOf({ status: 400, message: 'blocked by content filter' })),
+    false,
+    '内容拦截重发一定还是被拦：不可重试'
+  )
 
   const modelNotice = noticeOf({
     kind: 'stream',
@@ -240,16 +252,23 @@ test('[3] 可重试 / 不可重试：分类与文案同时说清', () => {
     assert.equal(isRetryableApiError(error), expected, `${label} 的可重试性`)
   }
 
-  // 文案层面也要显式区分：5xx 说「可以重试」，内容拦截/参数错误说「不要重试」
+  /**
+   * 文案层面原来还要显式区分「可以重试 / 不要重试」两种措辞。2026-11-24 文案定稿
+   * （产品给的「人话 / 人格化」版本）把这些字样从主文案里撤了 —— 可重试性仍由上面
+   * 逐个 case 的 `isRetryableApiError` 断言 + `chat/errorNotice.ts` 表的 retryable 列决定，
+   * **行为口径没变**。这里留下的是「不同档位拿到不同文案、彼此不重名」这条结构断言。
+   */
   const busy = noticeOf(apiErrorOf({ status: 503, message: 'server overloaded' }))
-  assert.equal(busy.text, zh.replyServerBusy)
-  assert.match(busy.text, /可以重试/, '5xx 是临时故障：明说可以重试')
+  assert.equal(busy.text, zh.replyServerBusy, '5xx 用服务端故障那一句')
   const filtered = noticeOf(apiErrorOf({ status: 400, message: 'rejected: content_policy_violation' }))
-  assert.match(filtered.text, /不要重试/, '内容拦截：明说不要重试')
-  // 现有 5xx / 限流文案也带上了明确措辞，且与终态文案不重名
-  assert.match(zh.replyRateLimited, /可以重试/)
-  assert.match(zh.replyInsufficientBalance, /不要重试/)
-  assert.match(zh.replyEmptyStream, /可以重试/)
+  assert.equal(filtered.text, zh.replyContentFiltered, '内容拦截用拦截那一句')
+  for (const [left, right] of [
+    ['replyRateLimited', 'replyInsufficientBalance'],
+    ['replyEmptyStream', 'replyContentFiltered'],
+    ['replyServerBusy', 'replyStreamInterrupted'],
+  ]) {
+    assert.notEqual(zh[left], zh[right], `${left} 与 ${right} 不能是同一句`)
+  }
 })
 
 // ---------------------------------------------------------------- [4] 负向

@@ -407,7 +407,11 @@ test('重试次数上限：超限后终态错误明确，不再发请求', async
   assert.equal(key, 'requestTimeout', '终态仍保留该段的文案 key')
   assert.ok(String(zh[key] ?? '').length > 0, 'zh 文案齐全')
   assert.ok(String(en[key] ?? '').length > 0, 'en 文案齐全')
-  assert.match(String(zh[key]), /超时/, '用户看到的是「超时」，不是一个内部 code')
+  // 2026-11-24 文案定稿：connect_timeout 那句改成「敲了好久的门都没人开…」，
+  // 不再出现「超时」二字。这里要钉的仍是「用户看到的是人话，不是内部 code」，
+  // 只是判据从「含『超时』」换成「不含 code 字面量、也不是裸 key」。
+  assert.doesNotMatch(String(zh[key]), /connect_timeout/, '用户看到的不是内部 code')
+  assert.notEqual(String(zh[key]), String(key), '用户看到的不是 i18n 的裸 key')
 })
 
 // ---------------------------------------------------------------------------

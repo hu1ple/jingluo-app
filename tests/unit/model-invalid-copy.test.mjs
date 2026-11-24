@@ -83,33 +83,37 @@ test('parseSupportedModels：从上游原文里取出可用模型列表', () => 
     '',
     undefined,
     'model not found',
-    '当前模型在上游不可用（模型名可能已下线）',
+    '哼哼，我已经把「gpt-nope」赶走啦！你只许找我！(*¯︶¯*)',
     'supported API model names are',
   ]) {
     assert.deepEqual(parseSupportedModels(dirty), [], `脏文本要返回空数组：${String(dirty)}`)
   }
 })
 
-test('modelInvalid 文案：带实际模型名 + 上游可用列表 + 内置渠道的出路', () => {
+test('modelInvalid 文案：带**实际发出的**模型名（定稿文案不再列可用模型）', () => {
   const notice = describeReply(replyOf({ model: 'deepseek-v4.1-flash' }))
   assert.ok(notice, 'modelInvalid 必须给出一条提示')
   assert.match(notice.text, /deepseek-v4\.1-flash/, '文案里要出现**实际发出的**模型名')
-  assert.match(notice.text, /deepseek-flash/, '文案里要出现上游可用模型之一')
-  assert.match(notice.text, /deepseek-v4-pro/, '文案里要出现上游可用模型之二')
-  assert.match(notice.text, /内置模型/, '要说清官方渠道用的是内置模型')
-  assert.match(notice.text, /不要重试/, '模型不存在是终态：文案要说清不要重试')
+  /**
+   * 2026-11-24 文案定稿：这一档换成「哼哼，我已经把「{model}」赶走啦！你只许找我！(*¯︶¯*)」，
+   * 只保留 {model} 这一个占位符 —— 定稿句子不再列「上游可用模型：{models}」、也不再写
+   * 「内置模型 / 不要重试」。**行为口径没变**，且各有独立断言兜着：
+   *   · 不可重试 → 下面的「模型不存在仍然不可重试」用例（`isRetryableApiError === false`）；
+   *   · 档位归属 → `chat/errorNotice.ts` 表 + 本文件顶部的分类用例；
+   *   · 上游原文里的可用列表仍被解析（`parseSupportedModels` 用例）。
+   */
   assert.doesNotMatch(notice.text, /\{model\}|\{models\}/, '占位符必须都被替换掉')
   assert.equal(notice.diagnostics, undefined, '已识别的场景不需要额外诊断文本')
 })
 
 test('modelInvalid 文案：回复里没记录模型名时退回「未记录」而不是留空', () => {
   const notice = describeReply(replyOf({ model: null }))
-  assert.match(notice.text, /未记录/, '导入的历史回复可能没有模型快照')
-  assert.match(notice.text, /deepseek-v4-pro/, '可用列表仍然要带上')
+  assert.match(notice.text, /未记录/, '导入的历史回复可能没有模型快照（{model} 位置照样有值）')
   assert.doesNotMatch(notice.text, /null|undefined/)
+  assert.doesNotMatch(notice.text, /\{model\}/, '占位符不许漏到界面')
 })
 
-test('modelInvalid 文案：上游没给列表时明说「上游未提供列表」', () => {
+test('modelInvalid 文案：上游没给可用列表时仍带出实际模型名', () => {
   const notice = describeReply(
     replyOf({
       model: 'no-such-model',
@@ -118,7 +122,9 @@ test('modelInvalid 文案：上游没给列表时明说「上游未提供列表�
     })
   )
   assert.match(notice.text, /no-such-model/, '仍然要带出实际发出的模型名')
-  assert.match(notice.text, /上游未提供列表/)
+  // 2026-11-24 文案定稿后主文案里不再有 {models} 位置，`replyModelInvalidNoModels`
+  // 只保留在参数与日志侧（key 仍在用，不删）；这里只钉「不许把占位符端给用户」。
+  assert.doesNotMatch(notice.text, /\{model\}|\{models\}/, '占位符不许漏到界面')
 })
 
 test('模型不存在仍然不可重试（自动重试不会白等几轮）', () => {
@@ -135,8 +141,9 @@ test('模型不存在仍然不可重试（自动重试不会白等几轮）', ()
 
 test('zh / en 两份文案成对：占位符一一对应，且真的翻译了', () => {
   const placeholders = (text) => [...text.matchAll(/\{(\w+)\}/g)].map((match) => match[1]).sort()
-  assert.deepEqual(placeholders(zh.replyModelInvalid), ['model', 'models'])
-  assert.deepEqual(placeholders(en.replyModelInvalid), ['model', 'models'])
+  // 2026-11-24 文案定稿：这一档只剩 {model} 一个占位符（{models} 随「上游可用模型：…」一起撤下）
+  assert.deepEqual(placeholders(zh.replyModelInvalid), ['model'])
+  assert.deepEqual(placeholders(en.replyModelInvalid), ['model'])
   assert.notEqual(zh.replyModelInvalid, en.replyModelInvalid, '英文必须是另一份文案')
   for (const key of ['replyModelInvalidNoModels', 'replyModelUnknownName']) {
     assert.equal(typeof zh[key], 'string', `${key} 有中文文案`)
@@ -146,7 +153,7 @@ test('zh / en 两份文案成对：占位符一一对应，且真的翻译了', 
   // 渲染路径用真实 translate()，不是手写字符串
   assert.match(
     translate('replyModelInvalid', { model: 'm-1', models: 'm-2' }),
-    /m-1[\s\S]*m-2/,
-    '参数要按顺序进到句子里'
+    /m-1/,
+    '参数要进到句子里'
   )
 })

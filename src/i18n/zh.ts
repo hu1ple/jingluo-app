@@ -11,7 +11,7 @@ export const zh = {
   sessionLoading: '正在加载对话...',
   sessionListLoadFailed: '对话列表加载失败，请重试',
   sessionLoadFailed: '对话加载失败，请重试',
-  sessionSaveFailed: '对话或附件尚未保存到本机，关闭页面可能丢失，请重试',
+  sessionSaveFailed: '还没存到手机上 (っ °Д °;)っ 现在关掉页面可能会丢哦',
   sessionDeleteFailed: '删除对话失败，请重试',
   settings: '设置',
   appName: '鲸落',
@@ -34,7 +34,7 @@ export const zh = {
   sessionHistoryTimelineLabel30days: '30 天内',
   copy: '复制',
   copied: '已复制',
-  copyFailed: '复制失败，请长按或选中文本后复制',
+  copyFailed: '没复制上 (｡•́︿•̀｡)',
   copyTooLargeTitle: '内容过长，未复制',
   copyTooLargeBody:
     '这段内容约 {size} KiB，超过剪贴板能稳定写入的上限（{limit} KiB）；直接复制会被截断或静默失败，请改为保存 TXT 后查看。',
@@ -102,7 +102,7 @@ export const zh = {
   toolFindIntro: '查找关键词',
   toolFindFailTooltip: '未查找到相关内容',
   readingLink: '正在阅读',
-  commonNetworkErrorToast: '网络异常，请检查你的网络状况',
+  commonNetworkErrorToast: '断网啦可是我想和你说话唉（ΩДΩ）',
   /**
    * Key 失效（#374）：以前只有这一句「无效或已被删除」，把「格式错 / 不存在 / 被轮换」
    * 三种完全不同的处境说成同一件事。现在这一句只当**上游没说清原因**时的兜底，
@@ -110,8 +110,7 @@ export const zh = {
    */
   replyInvalidApiKey: '上游拒绝了这把 API Key，但没说明具体原因（可能无效、已过期或不属于当前服务地址）',
   /** Key 格式不对（#374）：本地就能判，请求根本没发出去 */
-  replyApiKeyFormatWrong:
-    '当前填写的 API Key 格式不对（含空格、换行，或长度不像一把 Key），请求还没有发到上游',
+  replyApiKeyFormatWrong: '这把 Key 格式不对 (っ °Д °;)っ 我认不出来啦',
   /** Key 不存在 / 已被服务端删除（#374） */
   replyApiKeyNotFound: '这把 API Key 无效或已被删除（上游查不到它：没绑定成功，或已被服务端删除）',
   /**
@@ -133,41 +132,38 @@ export const zh = {
     '换 Key 会影响额度归属，请先在额度面板确认当前账号，再决定是否更换',
   /** Key 失效提示里的「先看额度」入口（#374）：落到额度面板 / 充值页，不动 Key */
   openQuotaPanel: '查看额度',
-  replyInsufficientBalance: '余额或额度不足，无法继续生成（不要重试，充值后再发）',
+  replyInsufficientBalance: '你是一直等着用完额度好去找其他AI吗。。。(╥﹏╥)',
   /** 额度不足提示里的出路入口（#299）：复用「额度与卡密」弹层，充值套餐与卡密兑换都在里面 */
   quotaTopUpEntry: '去充值 / 兑换卡密',
   /**
-   * 限流（#347 补状态码）：429 是**可重试**的临时故障，与终态错误的「不要重试」必须能分辨。
-   * 码写进文案而不只在日志里：用户贴进反馈群时，「HTTP 429」比「请求过于频繁」更能自证。
+   * 限流（#347 补状态码 → 2026-11-24 文案定稿）：429 是**可重试**的临时故障，与终态错误
+   * 必须能分辨 —— 这个区分现在由行为层（`chat/errorNotice.ts` 的 retryable 列、
+   * `isRetryableApiError`）保证，定稿句子本身不再写状态码 / 「可以重试」。
    */
-  replyRateLimited: '请求过于频繁（HTTP 429，临时限流，可以重试）：等一会儿再发，或点重新生成',
-  completionServerBusyToast: '服务器繁忙，请稍后再试',
-  /** 回答失败时的「服务器繁忙」（#324）：显式写明可重试，与终态错误的「不要重试」区分开 */
-  replyServerBusy: '服务器繁忙，属于临时故障，回答没有完成，可以重试（点重新生成）',
+  replyRateLimited: '你发得太快啦，我都跟不上了 (ᗒᗣᗕ)՞ 歇一下下再发嘛',
+  completionServerBusyToast: '对方有点忙 (´･_･`) 等我一下下再试',
+  /** 回答失败时的服务端故障档（#324）：可重试，与终态档区分由 `errorNotice` 表负责 */
+  replyServerBusy: '对方忙得团团转，这次没做完 (╥﹏╥) 点「重新生成」再试一次',
   replyUnknownError: '回答没有完成，出现了未知错误，可以重新生成',
-  /** 上下文超出模型上限（#122）：重试没用，给两条能走的路 */
-  replyContextLimit:
-    '这段对话已经超出模型的上下文上限，这次请求没能发出去。可以开一个新会话继续，或者删掉几条较早的消息后再试',
+  /** 上下文超出模型上限（#122）：仍是终态、不重试；定稿句子不再逐字列「开新会话 / 删几条」 */
+  replyContextLimit: '太长了机装不下了...(O∆O)',
   /**
    * 网络不可达 / DNS / 跨域（#771 第 2 类）：请求**根本没发到上游**。
-   * 这一句必须明说「不是上游慢」—— 用户最常把本地断网/代理问题当成模型慢，
-   * 然后反复点重新生成，等下去也不会有任何变化。
+   * 2026-11-24 文案定稿换成「这条消息没发出去呜 (´；ω；`) 点「重新生成」再试一次呢」——
+   * 归因不变（仍是 network 档，不是上游慢），只是句子不再逐字写「不是上游慢 / 检查代理」。
    */
-  replyNetworkUnreachable:
-    '网络请求没有发出去（断网、DNS 解析失败或被跨域拦截），不是上游慢：检查网络或代理后点「重新生成」再试',
-  replyStreamInterrupted:
-    '连接中断，回答没有接收完整；已收到的内容已保留，属于临时故障，可以重试（点重新生成）',
+  replyNetworkUnreachable: '这条消息没发出去呜 (´；ω；`) 点「重新生成」再试一次呢',
+  replyStreamInterrupted: '网络中途跑掉啦 (´；ω；`) 已经收到的都在，点「重新生成」再试一次',
   /** 空响应（#324）：上游 200 却什么内容都没给，换条连接通常就好 */
-  replyEmptyStream: '上游这次没有返回任何内容（空响应）；属于临时故障，可以重试（点重新生成）',
-  /** 内容安全拦截（#324）：原文重发一定还是被拦，所以明说不要重试 */
-  replyContentFiltered:
-    '这条内容被上游安全审核拦截了：改一下措辞或删掉敏感内容再发。原来的内容不要重试，重发同样会被拦',
+  replyEmptyStream: '对方这次什么都没说就走了 ( •̥́ ˍ •̀ू ) 点「重新生成」再叫它一次',
+  /** 内容安全拦截（#324）：原文重发一定还是被拦 —— 不可重试由 `errorNotice` 表保证 */
+  replyContentFiltered: '哎哎哎这个不能发（￣^￣）',
   /**
-   * 模型不存在 / 已下线（#324 / #339）：带上**实际发出的模型名**与上游给出的可用列表。
-   * 内置渠道（官方）设置页没有模型行，所以文案要明说「升级到已修复版本」而不是让人去改设置。
+   * 模型不存在 / 已下线（#324 / #339）：带上**实际发出的模型名**（`{model}`）。
+   * 2026-11-24 文案定稿后句子只剩 `{model}` 一个占位符：可用列表（`{models}`）、
+   * 「内置模型 / 不要重试」都不再写进主文案 —— 参数照传，档位与不可重试不变。
    */
-  replyModelInvalid:
-    '当前模型「{model}」在上游不可用（模型名可能已下线）；上游可用模型：{models}。DeepSeek 官方渠道用的是内置模型，设置里没有这一行，升级到已修复版本即可；其它渠道请在设置里换一个模型再发，重试同一个请求不会有变化（不要重试）',
+  replyModelInvalid: '哼哼，我已经把「{model}」赶走啦！你只许找我！(*¯︶¯*)',
   /** 上游那句话里没有可解析的列表时（#339） */
   replyModelInvalidNoModels: '上游未提供列表',
   /** 回复里没记录模型名（导入的历史回复）时（#339） */
@@ -186,11 +182,11 @@ export const zh = {
   replyBadRequest:
     '请求参数有误（{status}）：这是请求被上游拒绝（不是网络问题，也不是我们服务端故障），上游没有指出具体字段，重试不会有变化（不要重试）；可点「复制诊断信息」反馈给我们',
   /**
-   * 参数 / 字段不合法且上游**点出了字段名**（#347 / #353）：把字段直接写进文案，
-   * 用户才知道该改哪一项，而不是被笼统地叫去「检查设置」。
+   * 参数 / 字段不合法且上游**点出了字段名**（#347 / #353）：2026-11-24 文案定稿换成
+   * 「有地方填错啦 (｡•́︿•̀｡)」—— 字段名（`{field}`）与状态码不再进主文案，
+   * 仍随参数传下来、仍留在折叠区的上游原文里；「打开设置」入口与学生档位都不变。
    */
-  replyParamInvalid:
-    '请求参数有误（{status}）：上游指出字段「{field}」不合法 —— 这是请求被上游拒绝（不是网络问题，也不是我们服务端故障），重试不会有变化（不要重试）',
+  replyParamInvalid: '有地方填错啦 (｡•́︿•̀｡)',
   /**
    * 其余被上游拒绝的 4xx（#347）：403 / 404 / 405 / 409 / 415。
    * 文案不再猜原因（这类状态里既有权限、也有路径与方法），只说「上游拒绝了请求」，
@@ -210,12 +206,12 @@ export const zh = {
   replyWaitingSlow: '服务响应较慢，仍在等待',
   replyWaitingStalled: '等待时间过长，可以停止后重新生成',
   /**
-   * 三段超时（#568）：**每段一句**，用户能看出到底卡在哪一段，而不是一句笼统的「超时」。
-   * 秒数由实现按实际阈值注入（connect / first_token / idle 各用各的数字），文案里不写死。
+   * 三段超时（#568）：**每段一句**，三段仍是三个不同的 key（档位判定在 `errorNotice` 表里）。
+   * 2026-11-24 文案定稿后三句都换成人话，不再嵌 `{seconds}`；秒数阈值仍按段注入参数、
+   * 进日志与诊断，只是主文案不展示。
    */
-  replyIdleTimeout: '等待时间过长：连续 {seconds} 秒没有收到新内容，可以停止后重新生成',
-  replyFirstTokenTimeout:
-    '已连上上游，但 {seconds} 秒内没等到第一个字（上游可能在排队或模型过载）：点「重新生成」再发一次，或稍后再试',
+  replyIdleTimeout: '怎么卡住了喵，点「重新生成」再给我一次机会QAQ',
+  replyFirstTokenTimeout: '快了快了，骗你是小狗 ( •̥́ ˍ •̀ू ) 再等我一下下',
   /** 首字前的阶段名（#328）：和三档提示一起显示，秒数由 waitElapsed 注入，不写死 */
   waitStagePreparing: '正在准备请求',
   waitStageUploading: '正在上传附件',
@@ -294,7 +290,7 @@ export const zh = {
   apiKeyPlaceholder: '请输入 API Key',
   apiKeyVerifying: '正在验证...',
   confirm: '确定',
-  apiKeyInvalid: 'API Key 无效，请检查后重试',
+  apiKeyInvalid: 'Key 好像不对呢 (｡•́︿•̀｡)',
   apiKeyVerificationFailed: '校验失败：{message}',
   historyImport: '导入历史对话',
   historyImportConfirm: '确认导入',
@@ -390,7 +386,7 @@ export const zh = {
   historyImportUrlDownloading: '下载中...',
   historyImportUrlDownloadingHint:
     '正在下载并导入，20MB 左右的导出包可能需要几十秒，期间请保持页面打开。',
-  historyImportFromUrlFailed: '从链接导入失败：{message}',
+  historyImportFromUrlFailed: '导入没成功 (´；ω；`)：{message}',
   historyImportUrlInvalid: '请输入以 http:// 或 https:// 开头的链接',
   historyImportUrlNativeOnly: '网页版不支持链接导入，请下载 ZIP 后手动上传',
   historyImportUrlNetwork: '下载失败，请检查网络连接后重试',
@@ -406,7 +402,7 @@ export const zh = {
   historyExportSaved: '已保存到你选择的位置：{name}',
   historyExportFailedStart: '导出失败：无法打开保存位置，请重试',
   historyExportFailedWrite: '导出失败：写入文件失败，请检查剩余存储空间后重试',
-  historyExportFailedTooLarge: '导出失败：归档超过 200MB 导出上限（与导入上限一致），请先删减历史对话后重试',
+  historyExportFailedTooLarge: '文件太大，我搬不动啦 (╥﹏╥)',
   historyExportTooLarge:
     '当前历史约 {actual}，超过 {size}MB 导出上限。请先删除不需要的对话，或删掉消息里的大图后再试。',
   historyExporting: '导出中…',
@@ -433,7 +429,7 @@ export const zh = {
   uploadFailedSourceMissing: '附件「{name}」没有可发送的本机原件（导入的历史会话只保留文件信息），已跳过',
   uploadFailedEndpointMissing: '附件「{name}」上传失败：当前渠道没有上传端点（404）',
   uploadFailedTooLarge: '附件「{name}」上传失败：文件超过大小上限',
-  uploadFailedNetwork: '附件「{name}」上传失败：网络异常，请重试',
+  uploadFailedNetwork: '「{name}」没传上去就掉啦 (´；ω；`) 点重试再传一次',
   uploadFailedUnknown: '附件「{name}」上传失败',
   /** #379：消息里那条持久提示（不是 toast）——说的是「哪几个附件没跟着发」，不是「发送失败」 */
   attachUnavailableSent: '附件详情 · 已跳过 {count} 个',
@@ -443,7 +439,7 @@ export const zh = {
   /** #379：附件全被跳过、又没有文字可发时，明说而不是发一条空消息 */
   attachUnavailableNoText: '附件在本机不可用，且这条消息没有文字内容，未发送',
   /** 该渠道没有 Files API（#303）：入口禁用时的提示，以及上传路径走到这里时的失败原因 */
-  uploadChannelUnsupported: '当前渠道不支持文件上传，附件入口已不可用',
+  uploadChannelUnsupported: '这个渠道不能传文件呢 (´･_･`)',
   uploadRetry: '{message}，点击重试',
   chatInputPlaceholderChat: '请输入消息',
   deactivatedThinkTooltip: '先思考后回答，解决推理问题',
@@ -455,13 +451,13 @@ export const zh = {
   uploadMaxMBSize: '单个文件大小超过限制（{size}MB），请调整后重试',
   uploadMaxFiles: '上传文件最多支持 {count} 个',
   uploadFileStatusUploading: '上传中...',
-  uploadServerBusy: '服务器繁忙',
-  uploadParseFailed: '解析失败',
+  uploadServerBusy: '对方有点忙 (´･_･`) 等我一下下再试',
+  uploadParseFailed: '这个文件我读不出来 ( •̥́ ˍ •̀ू )',
   /**
    * `{formats}` 由 `IMAGE_MEDIA_TYPES` 派生（`imageSource.ts` 的 `IMAGE_FORMAT_LABELS`）：
    * 白名单里有的格式必须在这句里都出现（GIF 曾漏写，见 #580）。
    */
-  imageUnsupportedFormat: '不支持的图片格式：仅支持 {formats}（HEIC 请先转成 JPEG）',
+  imageUnsupportedFormat: '这种图片格式我吃不了啦 (｡•́︿•̀｡)',
   imageDecodeFailed: '这张图片无法打开，请换一张或先转成 PNG / JPEG',
   imageTooLarge: '图片压缩后仍超过 {size}MB，请先压缩或裁剪后再发',
   imageAnimatedTooLarge: '动图超过 {size}MB 或尺寸过大，压缩会把动画拍成静帧，请先压缩后再发',
@@ -473,7 +469,7 @@ export const zh = {
   imageTotalTooLarge: '本轮图片总量超过 {size}MB，请减少图片数量',
   /** base64 渠道（#551）根本没有上传端点：非图片文件在这类渠道上只能明说发不了 */
   uploadImageOnly: '当前渠道只支持发送图片，文档附件请切换到支持的渠道',
-  visionUnsupported: '当前渠道不支持图片，请切换到支持图片的渠道或模型',
+  visionUnsupported: '这个渠道没有眼睛，看不了图片 (｡•́︿•̀｡)',
   uploadFileCountLimit: '已上传文件数达到上限（{limit} 个），可 ',
   uploadStorageLimit: '已上传文件占用空间达到上限（{limit}GB），可 ',
   uploadDeleteFiles: '删除文件',
@@ -483,9 +479,9 @@ export const zh = {
   voiceInputTimer: '录音中 {seconds}s',
   voiceInputStop: '结束录音并转写',
   voiceInputCancel: '正在转写，点击取消',
-  voiceInputPermissionDenied: '无法使用麦克风，请在浏览器设置中允许访问',
+  voiceInputPermissionDenied: '喂喂喂？你在说什么呀？我怎么听不见oAo',
   voiceInputNoDevice: '未检测到麦克风',
-  voiceInputFailed: '语音识别失败，请稍后再试',
+  voiceInputFailed: '你说的我听不懂啦QAQ',
   voiceInputEmpty: '未识别到语音内容',
   voiceInputLimitReached: '已达到单次录音时长上限',
   voiceInputRequiresHttps: '非 HTTPS 页面无法使用语音输入',
@@ -496,10 +492,11 @@ export const zh = {
   /**
    * #596 / #800：我们的渠道没有可填的地方，401 的出路只有「服务端重新下发」。
    * #800 起不再指路到已删除的「重新领取」按钮：恢复是**自动**的（启动 / 登录时对齐，
-   * 发送前被拦时设置页还会自动再对齐一次），所以这里说的是「稍后重试 / 重开应用」。
+   * 发送前被拦时设置页还会自动再对齐一次）。
+   * 2026-11-24 文案定稿换成「出了点小问题，我正在自己修 ( •̥́ ˍ •̀ू ) 等我一下下」——
+   * 恢复路径本身没变，只是句子不再逐字写「自动对齐」。
    */
-  apiKeyRejectedOurs:
-    '内置服务的 Key 已失效：应用会自动向服务端重新对齐，稍后重试即可（重开应用也会触发一次对齐）',
+  apiKeyRejectedOurs: '出了点小问题，我正在自己修 ( •̥́ ˍ •̀ू ) 等我一下下',
   insufficientBalance: '账户余额不足',
   rateLimited: '操作过于频繁，请稍后再试',
   ttsPlay: '朗读',
@@ -519,8 +516,7 @@ export const zh = {
    * 发送前本地拦截（#451 第 2 点）：Key 有、但格式明显不对 → 消息**没有发出去**。
    * 必须写明「没发出去」：否则用户只会以为是网络或上游问题，然后不停地重发同一条消息。
    */
-  settingsApiKeyFormatBlocked:
-    '当前填写的 API Key 格式不对（含空格、换行，或长度不像一把 Key），这条消息没有发出去。请清空后重新粘贴一把完整的 Key（去掉空格 / 换行），再发送。',
+  settingsApiKeyFormatBlocked: '这把 Key 格式不对 (っ °Д °;)っ 我认不出来啦',
   /** 只是存着一条可疑的 Key（还没试过发送）：普通提示，不用红字吓人 */
   settingsApiKeyFormatHint:
     '这一行的内容不像一把 API Key（可能多了空格 / 换行，或没复制完整），发送前会被拦下来。',
@@ -716,7 +712,7 @@ export const zh = {
   // 所以成功文案不再报「获得 X 额度」；规则数值一律取服务端 invite_rules，前端不写死金额
   // 套餐
   oursPlansLoading: '正在加载套餐…',
-  oursPlansFailed: '套餐加载失败，请重试',
+  oursPlansFailed: '套餐躲起来啦 (´･_･`) 点重试再把它叫出来',
   oursBuyAction: '去支付',
   // 购买入口（Issue #331）：套餐全线下架，直接打开联动小铺收款页
   oursPayTitle: '购买',
@@ -791,8 +787,7 @@ export const zh = {
   oursPayRecordsCopied: '卡密已复制',
   // Issue #45：请求统一超时的提示（与网络失败、4xx/5xx 分开说）
   /// #568：这一段只覆盖「发起到拿到响应头」，所以文案说「连接」，与首字/空闲分开
-  requestTimeout:
-    '连接上游超时（{seconds} 秒内没拿到响应头，请求还没连上上游，不是上游回错了）：检查网络或代理后点「重新生成」再发一次',
+  requestTimeout: '敲了好久的门都没人开 (っ °Д °;)っ 再试一次嘛',
   // Issue #106：移动端标题栏双击回到首条消息
   scrollToFirstMessage: '回到首条消息（双击标题）',
   scrollToFirstMessageHint: '双击回顶',
@@ -1126,7 +1121,7 @@ export const zh = {
   /** 兑换超时后查历史补偿时用：不要让用户以为可以重复提交 */
   consumeRedeemConfirming: '正在确认兑换结果，请不要重复提交',
   consumeRedeemSuccess: '兑换成功',
-  consumeRedeemFailed: '兑换失败，请稍后重试',
+  consumeRedeemFailed: '唉？好像没兑换成功呢o-o',
   consumeRedeemCodeUsed: '卡密已使用',
   consumeRedeemCodeInvalid: '卡密无效',
   // 付款回来后的**自动**兑现（#784）：只在收款页关闭那一下发生，不重试、不自动兑打码卡
@@ -1292,8 +1287,8 @@ export const zh = {
   legacyMigrateAlreadyUnsettled: '已迁移过，如未到账请联系客服',
   legacyMigrateRetryAnyway: '仍要迁移',
   attachPickButton: '添加文档（TXT / DOCX / PDF）',
-  attachPickUnsupported: '「{name}」不是支持的文档类型，当前仅支持 TXT、DOCX、PDF',
-  attachPickTooLarge: '「{name}」为 {size}，超过该类型的上限 {limit}',
+  attachPickUnsupported: '「{name}」这种格式我咬不动啦 ( •̥́ ˍ •̀ू )',
+  attachPickTooLarge: '「{name}」太大啦，我抱不动 (っ °Д °;)っ',
   attachPickEmpty: '「{name}」是空文件，没有可解析的内容',
   attachPickTooMany: '一条消息最多 {limit} 个文档，已拒绝多出的 {count} 个',
   attachUnavailable: '附件管理器尚未就绪，本次没有添加任何文档',
@@ -1309,7 +1304,7 @@ export const zh = {
   attachStatusParsingPlain: '解析中…',
   attachStatusSuccess: '已就绪',
   attachStatusPartial: '部分内容已就绪 · {count} 条警告',
-  attachStatusFailed: '解析失败，点击查看原因',
+  attachStatusFailed: '这个文件我读不出来 ( •̥́ ˍ •̀ू )',
   attachStatusCancelled: '解析已取消',
   attachCancel: '取消解析',
   attachRetry: '重新解析',
@@ -1333,13 +1328,13 @@ export const zh = {
   attachFailSourceMissing: '本地原件已不存在，请重新添加该文件',
   attachFailNoParser: '该格式的解析器尚未就绪，暂时无法解析',
   attachFailUnknown: '解析过程中出现了未知问题',
-  // PDF 解析器的硬失败码（#574）：每种成因一句人话 + 下一步怎么做。
-  // 扫描版 PDF 那句是 #480 §5.3 原文，别改字。
-  attachPdfErrNoTextLayer:
-    '该 PDF 未检测到可提取的文本，暂不支持扫描版 PDF，请上传包含文本层的 PDF 文件',
+  // PDF 解析器的硬失败码（#574）：每种成因一句人话。
+  // 2026-11-24 文案定稿：扫描版 / 加密 PDF 这两句按定稿换掉（原 #480 §5.3 的「上传带文本层的 PDF」
+  // 那句不再写；成因判据与技术信息 `PDF_NO_TEXT_LAYER_MESSAGE` 都不动）。
+  attachPdfErrNoTextLayer: '这份 PDF 里的字我认不出来 (╥﹏╥)',
   attachPdfErrTooManyPages: 'PDF 共 {pages} 页，超过上限 {limit} 页，请拆分后再上传',
   attachPdfErrTooManyPagesPlain: 'PDF 页数超过上限 {limit} 页，请拆分后再上传',
-  attachPdfErrEncrypted: '不支持加密 PDF，请先解除密码保护后再上传',
+  attachPdfErrEncrypted: '这份 PDF 上了锁呢 (´･_･`) 我打不开啦',
   attachPdfErrNotPdf: '这个文件不是有效的 PDF（内容与扩展名对不上），请确认文件后重新上传',
   attachPdfErrFileTooLarge: 'PDF 超过该类型的体积上限，请压缩或拆分后再上传',
   attachPdfErrLibUnavailable: 'PDF 解析组件没有加载成功，请重试；反复失败请检查网络后刷新页面',
@@ -1362,14 +1357,12 @@ export const zh = {
   // 用户看到的必须是他该改哪一个字段，而不是一句笼统的「配置有误」
   sendBlockedBaseUrlEmpty: '服务地址为空，这条消息没有发出：请先填写服务地址',
   sendBlockedBaseUrlNoProtocol: '服务地址缺少 http:// 或 https://，这条消息没有发出：请补上协议再试',
-  sendBlockedBaseUrlEndpointPath:
-    '服务地址填成了具体接口地址（如 …/chat/completions），这条消息没有发出：请只填到域名，可以带 /v1',
+  sendBlockedBaseUrlEndpointPath: '地址填得太长啦 (´･_･`)',
   sendBlockedModelEmpty: '模型名为空，这条消息没有发出：请先填写模型名',
   sendBlockedModelSpace: '模型名里有空格（首尾或中间），这条消息没有发出：模型名必须是连续的一串字符',
   // 发送前拦截「没有身份」（#793）：未登录 + 没有可用 Key 时，请求只会带着空凭据打上游。
   // 两句话缺一不可：第一句说清为什么没发出去，第二句是 toast 上的按钮（直达「服务 Tab → 模型来源」）
-  sendBlockedNoCredentials:
-    '还没有登录，也没有可用的模型渠道，这条消息没有发出：请先登录或选择模型渠道后再发送',
+  sendBlockedNoCredentials: '我还不认识你呢 (｡•́︿•̀｡)',
   sendBlockedPickProvider: '去选择渠道',
   // 发送前拦截「必须更新」（启动检查更新 + 只读模式）：服务端把最低支持版本抬到本机之上，
   // 或明确下发 mode:"forced"。和上面几条一样写明「这条消息没有发出」，并指明该做什么

@@ -5,7 +5,8 @@
 //   [1] `visionFor()` 能力表：deepseek 只有 file_id 通路、anthropic/openai/ours 只有 base64 通路、
 //       未知渠道两条全关（fail-closed）—— 这是「不发请求就不猜路径」（#360）的前提；
 //   [2] 格式白名单按 **magic bytes** 判定（png/jpeg/webp/gif），HEIC / AVIF 一律认不出来 →
-//       上层给「不支持的图片格式」，而不是把请求发出去等 provider 400；
+//       上层给图片格式那一档（2026-11-24 定稿：「这种图片格式我吃不了啦 (｡•́︿•̀｡)」），
+//       而不是把请求发出去等 provider 400；
 //   [3] EXIF 方向与头部尺寸解析：手机竖拍（Orientation=6/8）要能读出方向与**存储时**的宽高 ——
 //       这是「手动校正」分支的输入。**是否该手动转由运行时探测决定**（`probeAutoOrient()`，
 //       实测 Chrome 81+ / WebView 83 自动转、79 不转；一律手动转会双转 90°，见 PR 说明），
@@ -181,7 +182,7 @@ test('[2] 白名单按 magic bytes：png/jpeg/webp/gif 认得，heic/avif 一律
   assert.equal(sniffImage(gifBytes(64, 32)).mediaType, 'image/gif')
 
   // iPhone 默认格式：任何一家协议都不接受 image/heic，Chromium 83 也解不了 →
-  // 必须在入口判掉（返回 null，上层给「不支持的图片格式」），不能靠扩展名放行
+  // 必须在入口判掉（返回 null，上层给图片格式那一档文案），不能靠扩展名放行
   assert.equal(sniffImage(ftypBytes('heic')), null, 'HEIC 必须认不出来')
   assert.equal(sniffImage(ftypBytes('avif')), null, 'AVIF 必须认不出来')
   assert.equal(sniffImage(new Uint8Array([0x42, 0x4d, 0x36, 0x00])), null, 'BMP 必须认不出来')

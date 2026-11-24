@@ -133,12 +133,13 @@
   overflow-wrap: anywhere;
 }
 
-/* 摘要：2 行截断。带 -webkit-line-clamp 的盒子必须是 display:-webkit-box（Chromium 83 起可用） */
+/* 摘要：3 行截断（与静态站公告块同一口径）。带 -webkit-line-clamp 的盒子必须是
+   display:-webkit-box（Chromium 83 起可用） */
 .itemBodyClamped {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
   white-space: pre-wrap;
 }
 

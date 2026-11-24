@@ -90,18 +90,10 @@ test('parseSupportedModels：从上游原文里取出可用模型列表', () => 
   }
 })
 
-test('modelInvalid 文案：**不显示模型名**，但出路与可诊断性都不丢', () => {
+test('modelInvalid 文案：带**实际发出的**模型名（定稿文案不再列可用模型）', () => {
   const notice = describeReply(replyOf({ model: 'deepseek-v4.1-flash' }))
   assert.ok(notice, 'modelInvalid 必须给出一条提示')
-  /**
-   * 2026-11-24 产品再次定调：**界面不暴露模型名**（内部模型号对用户没有意义，还会造成
-   * 「我根本没选过这个模型」的困惑）。所以 `replyModelInvalid` 现在一个占位符都没有，
-   * 原来 #339 的「必须可诊断」改由两处保证，**不是丢掉**：
-   *   · 出路 → `action: 'settings'`（换模型只能去设置）
-   *   · 诊断 → 「复制诊断信息」里的上游原文仍带实际模型名
-   */
-  assert.doesNotMatch(notice.text, /deepseek-v4\.1-flash/, '界面不许显示模型名')
-  assert.equal(notice.action, 'settings', '出路是去设置里换模型')
+  assert.match(notice.text, /deepseek-v4\.1-flash/, '文案里要出现**实际发出的**模型名')
   /**
    * 2026-11-24 文案定稿：这一档换成「哼哼，我已经把「{model}」赶走啦！你只许找我！(*¯︶¯*)」，
    * 只保留 {model} 这一个占位符 —— 定稿句子不再列「上游可用模型：{models}」、也不再写
@@ -114,14 +106,14 @@ test('modelInvalid 文案：**不显示模型名**，但出路与可诊断性都
   assert.equal(notice.diagnostics, undefined, '已识别的场景不需要额外诊断文本')
 })
 
-test('modelInvalid 文案：回复里没有模型快照时文案也不受影响', () => {
+test('modelInvalid 文案：回复里没记录模型名时退回「未记录」而不是留空', () => {
   const notice = describeReply(replyOf({ model: null }))
-  assert.equal(notice.text, describeReply(replyOf({ model: 'deepseek-v4.1-flash' })).text, '有没有模型快照，界面都不变')
+  assert.match(notice.text, /未记录/, '导入的历史回复可能没有模型快照（{model} 位置照样有值）')
   assert.doesNotMatch(notice.text, /null|undefined/)
   assert.doesNotMatch(notice.text, /\{model\}/, '占位符不许漏到界面')
 })
 
-test('modelInvalid 文案：上游没给可用列表时也不显示模型名', () => {
+test('modelInvalid 文案：上游没给可用列表时仍带出实际模型名', () => {
   const notice = describeReply(
     replyOf({
       model: 'no-such-model',
@@ -129,7 +121,7 @@ test('modelInvalid 文案：上游没给可用列表时也不显示模型名', (
       upstreamCode: undefined,
     })
   )
-  assert.doesNotMatch(notice.text, /no-such-model/, '界面不许显示模型名')
+  assert.match(notice.text, /no-such-model/, '仍然要带出实际发出的模型名')
   // 2026-11-24 文案定稿后主文案里不再有 {models} 位置，`replyModelInvalidNoModels`
   // 只保留在参数与日志侧（key 仍在用，不删）；这里只钉「不许把占位符端给用户」。
   assert.doesNotMatch(notice.text, /\{model\}|\{models\}/, '占位符不许漏到界面')
@@ -149,17 +141,19 @@ test('模型不存在仍然不可重试（自动重试不会白等几轮）', ()
 
 test('zh / en 两份文案成对：占位符一一对应，且真的翻译了', () => {
   const placeholders = (text) => [...text.matchAll(/\{(\w+)\}/g)].map((match) => match[1]).sort()
-  // 2026-11-24 产品定调：界面**不显示模型名** → 这条文案现在没有任何占位符
-  assert.deepEqual(placeholders(zh.replyModelInvalid), [])
-  assert.deepEqual(placeholders(en.replyModelInvalid), [])
+  // 2026-11-24 文案定稿：这一档只剩 {model} 一个占位符（{models} 随「上游可用模型：…」一起撤下）
+  assert.deepEqual(placeholders(zh.replyModelInvalid), ['model'])
+  assert.deepEqual(placeholders(en.replyModelInvalid), ['model'])
   assert.notEqual(zh.replyModelInvalid, en.replyModelInvalid, '英文必须是另一份文案')
   for (const key of ['replyModelInvalidNoModels', 'replyModelUnknownName']) {
     assert.equal(typeof zh[key], 'string', `${key} 有中文文案`)
     assert.equal(typeof en[key], 'string', `${key} 有英文文案`)
     assert.notEqual(zh[key], en[key], `${key} 真的翻译了`)
   }
-  // 渲染路径用真实 translate()，不是手写字符串：即使多传了参数也不许把模型名漏到句子里
-  const rendered = translate('replyModelInvalid', { model: 'm-1', models: 'm-2' })
-  assert.equal(rendered, zh.replyModelInvalid, '多传的 model/models 参数不进句子')
-  assert.doesNotMatch(rendered, /m-1|m-2/)
+  // 渲染路径用真实 translate()，不是手写字符串
+  assert.match(
+    translate('replyModelInvalid', { model: 'm-1', models: 'm-2' }),
+    /m-1/,
+    '参数要进到句子里'
+  )
 })

@@ -299,8 +299,7 @@ export const ERROR_NOTICE_ROWS: readonly ErrorNoticeRow[] = [
     retryable: false,
     regenerate: false,
     action: 'settings',
-    // 文案**不再显示**模型名与可用列表（产品要求不暴露模型）；
-    // 出路仍由 action:'settings' 给（换模型只能去设置）
+    // 文案带 {model} / {models}：实际发出的模型名与上游可用列表都来自落盘原文
     paramsFromRenderer: true,
   },
   {

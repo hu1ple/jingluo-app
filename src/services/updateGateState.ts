@@ -16,6 +16,7 @@
  *     `none`（否则用户能靠「再查一次」把只读模式绕开）。
  */
 
+import { testSeamEnabled } from '../utils/testSeam.js'
 import { create } from 'zustand'
 import { checkUpdateGate, type UpdateGate, type UpdateGateDeps } from './updateGate.js'
 import { setUpdateSnoozeUntil, useSettings } from './settings.js'
@@ -53,6 +54,12 @@ export const startUpdateGate = async (deps: UpdateGateDeps = {}): Promise<Update
     return useUpdateGate.getState().gate
   }
   started = true
+  // 测试接缝：启动期不查更新 —— 否则拉真实分发域会把黄金回归的「不连真实服务」判据打穿。
+  // 手工 `?update-check` 走的是 AppUpdateField 那条检查链，不受这里影响。
+  if (testSeamEnabled()) {
+    useUpdateGate.setState({ gate: { kind: 'none' }, checked: true })
+    return { kind: 'none' }
+  }
   let gate: UpdateGate = { kind: 'none' }
   try {
     gate = await checkUpdateGate({

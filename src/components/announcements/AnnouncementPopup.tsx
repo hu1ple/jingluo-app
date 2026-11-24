@@ -1,3 +1,4 @@
+import { testSeamEnabled } from '../../utils/testSeam.js'
 import { useEffect, useRef, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
 import { Button } from '../base/Button.js'
@@ -31,6 +32,10 @@ import styles from './Announcements.module.css'
  * （看过了，但没点确认就不替用户把红点抹掉）。两种关闭都不会让它在同一次运行里再弹。
  */
 export const AnnouncementPopup = () => {
+  // 测试接缝：黄金/L1 是「启动即操作界面」，弹窗的遮罩会把输入框点击全堵死（实测 30s 超时）
+  if (testSeamEnabled()) {
+    return null
+  }
   const t = useTranslate()
   const list = useAnnouncements()
   const settingsOpen = useSettingsDialog((state) => state.open)

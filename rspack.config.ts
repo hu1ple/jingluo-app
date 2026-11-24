@@ -499,6 +499,10 @@ export const createConfig = ({
       // 登录接缝（#510）：默认注入 `undefined` —— 见上方 `testAuthSeam` 的说明；
       // 真值只在 `TEST_AUTH_SEAM=1` 的测试构建里出现（假 token 是产物扫描的拦截标记）。
       __TEST_AUTH_STATE__: testAuthSeam ? JSON.stringify(SEAM_SESSION) : 'undefined',
+      // 测试接缝总开关（同一把 `TEST_AUTH_SEAM`）：测试构建里跳过「启动拉公告 / 弹窗 / 检查更新」，
+      // 否则 modal 遮罩会把 L1 的输入框点击全堵死，启动的网络请求也会打穿黄金回归的「不连真实服务」。
+      // 生产构建注入 undefined → 判断整段被死代码消除。见 src/utils/testSeam.ts。
+      __TEST_SEAM__: testAuthSeam ? 'true' : 'undefined',
       __API_ORIGIN__: JSON.stringify(apiOrigin),
       __INTERNAL_BUILD__: JSON.stringify(internalBuild),
       __APP_VERSION__: JSON.stringify(appVersion),

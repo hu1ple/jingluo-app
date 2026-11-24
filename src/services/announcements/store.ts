@@ -1,3 +1,4 @@
+import { testSeamEnabled } from '../../utils/testSeam.js'
 import { MOCK_ANNOUNCEMENTS, SEED_SEEN } from './mock.js'
 import { fetchAnnouncements, parseAnnouncementItem } from './remote.js'
 import type {
@@ -419,6 +420,12 @@ export const ensureLoaded = (): void => {
     return
   }
   started = true
+  // 测试接缝：启动期不自动拉公告（黄金/L1 是「启动即操作界面」，多一次弹窗会把输入框挡住）。
+  // 手工触发的 `?ann-demo` / `?ann-reset` 不走这条早退。
+  if (testSeamEnabled() && !demoMode()) {
+    settled = true
+    return
+  }
   if (demoMode()) {
     settled = true
     return

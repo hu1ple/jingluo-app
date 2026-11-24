@@ -610,3 +610,95 @@ export const IconEyeOffOutline16 = () => (
     />
   </svg>
 )
+
+/**
+ * 设置一级列表「账户与消费」那一行的图标（钱包：卡夹 + 盖 + 卡扣）。
+ *
+ * 与 `IconDocumentOutline16` 同一套画法（16 视框、1.3 描边、圆角连接）——
+ * 设置列表的图标统一 20px 渲染（CSS 放大），所以线宽按 16 设计，
+ * 放大后仍与 `IconUserOutline16` / `IconDataOutline16` 一档粗细。
+ */
+export const IconWalletOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      d="M2.05 5.55c0-1.02 0-1.53.2-1.9.16-.3.41-.55.72-.7.34-.16.85-.13 1.86-.02l6.3.7c.53.06.79.09.97.2.16.1.29.24.36.42.08.19.08.45.08 1"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinejoin="round"
+    />
+    <rect
+      x="1.95"
+      y="5.15"
+      width="12.1"
+      height="8.7"
+      rx="2.2"
+      stroke="currentColor"
+      strokeWidth="1.3"
+    />
+    <path d="M10.15 9.5h1.7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+  </svg>
+)
+
+/** 设置一级列表「公告栏」那一行的图标（喇叭）。风格同上：16 视框 + 1.3 描边。 */
+export const IconAnnounceOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      d="M3.05 5.95h1.6l5.2-2.5c.25-.12.38-.18.49-.15.1.03.16.14.16.26v8.9c0 .12-.06.23-.16.26-.11.03-.24-.03-.49-.15l-5.2-2.5h-1.6c-.7 0-1.25-.56-1.25-1.25v-1.62c0-.69.55-1.25 1.25-1.25Z"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M5.35 9.9v2.05c0 .75.61 1.35 1.35 1.35s1.35-.6 1.35-1.35V10.4"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+    />
+  </svg>
+)
+
+/** 设置一级列表「帮助与反馈」那一行的图标（问号圆环）。风格同上：16 视框 + 1.3 描边。 */
+export const IconHelpOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="8" cy="8" r="6.35" stroke="currentColor" strokeWidth="1.3" />
+    <path
+      d="M6.2 6.15a1.85 1.85 0 1 1 2.5 1.75c-.4.15-.6.42-.6.84v.26"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+    />
+    <circle cx="8" cy="11.75" r="0.85" fill="currentColor" />
+  </svg>
+)
+
+/**
+ * 「关于 → 开发团队社媒」那一行的图标：短视频平台的常见意象（圆角矩形 + 音符），
+ * 与 `IconDocumentOutline16` 同风格（16 视框、1.3 描边、圆角连接）——
+ * 不用抖音官方 logo（那是带商标的图形，界面里只做「社媒渠道」的中性提示）。
+ */
+export const IconSocialOutline16 = () => (
+  <svg width={16} height={16} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect
+      x="1.75"
+      y="2.65"
+      width="12.5"
+      height="10.7"
+      rx="3.2"
+      stroke="currentColor"
+      strokeWidth="1.3"
+    />
+    <path
+      d="M9.5 5.5v4.9a1.65 1.65 0 1 1-1.65-1.65"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M9.5 5.5c.3.85.95 1.35 1.85 1.4"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+    />
+  </svg>
+)

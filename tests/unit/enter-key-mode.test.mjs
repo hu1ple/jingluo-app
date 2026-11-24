@@ -190,11 +190,20 @@ test('F i18n 键成对、设置面板末尾追加且不动阅读设置', async (
   assert.deepEqual(Object.keys(en).sort(), Object.keys(zh).sort(), 'zh/en 键集合必须完全一致')
 
   const dialog = readSource('components/settings/SettingsDialog.tsx')
-  assert.match(dialog, /<EnterKeySettings \/>/, '通用设置里必须渲染回车键行为这一项')
-  // 追加在 #102 的阅读设置之后（末尾追加式，其他 lane 顺序 rebase 才不撞车）
-  assert.match(
-    dialog,
-    /<ReadingSettings \/>\s*<EnterKeySettings \/>/,
-    '回车键行为必须追加在阅读设置之后，不重排既有条目'
+  assert.match(dialog, /<EnterKeySettings \/>/, '设置里必须渲染回车键行为这一项')
+  // 2026-11-24 设置改版（iOS 分组列表 + 二级页）：原来这条判据要求
+  // `<ReadingSettings />` 紧跟 `<EnterKeySettings />`，目的是「末尾追加式、其他 lane 顺序 rebase 不撞车」。
+  // 新 IA 把「回车键行为」放进「应用 → 通用」页、「朗读设置」放进「应用 → 语音」页，
+  // 两者已不在同一屏，旧的相邻关系不再成立。
+  // 保留的意图换成一个更有价值的不变量：**两者各只渲染一处**（防重复，比顺序更该守）。
+  assert.equal(
+    (dialog.match(/<EnterKeySettings \/>/g) ?? []).length,
+    1,
+    '回车键行为只能渲染一处（出现在两个页面就是重复设置）'
+  )
+  assert.equal(
+    (dialog.match(/<ReadingSettings \/>/g) ?? []).length,
+    1,
+    '朗读设置只能渲染一处（出现在两个页面就是重复设置）'
   )
 })

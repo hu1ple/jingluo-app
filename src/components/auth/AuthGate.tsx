@@ -36,9 +36,17 @@ import type { AuthUser } from '../../services/auth/types.js'
 import type { LoginValues, RegisterValues } from './authForm.js'
 import { LoginPage } from './LoginPage.js'
 import { RegisterPage } from './RegisterPage.js'
+import { ResetPasswordPage } from './ResetPasswordPage.js'
+import { rateLimitSecondsOf, type SendCodeOutcome } from './submitGuard.js'
 import styles from './AuthPages.module.css'
 
-type AuthMode = 'login' | 'register'
+/**
+ * 三档：登录 / 注册 / **找回密码**。
+ *
+ * 「找回密码」不是第三个 tab，而是一条**离开当前卡**的路径：它进来后分段控件不渲染，
+ * 只有一个「‹ 返回登录」。所以它放在同一个 `mode` 里（不另开弹层、不另开路由）。
+ */
+type AuthMode = 'login' | 'register' | 'forgot'
 
 /**
  * 登录接缝（Issue #487 W1-B 后半，#510）—— **构建期常量**，不是运行期开关。
@@ -127,6 +135,13 @@ export const AuthGate = ({ children, variant = 'page', segmented = false }: Auth
   const abandonRestore = useAuthStore((state) => state.abandonRestore)
   const flags = useAuthFlags()
   const [mode, setMode] = useState<AuthMode>('login')
+  /**
+   * 刚走完「找回密码」：回到登录页时顶上挂一句 `settingsAuthResetDone`（密码已重置，请用新密码登录）。
+   *
+   * 为什么不复用 `noticeKey` 的 `expired` 那一支：那句来自**服务端判定**（`authState`），
+   * 这句来自**本地刚发生的事**；两个来源混在一个字段里，一刷新就分不清谁该在。
+   */
+  const [resetDone, setResetDone] = useState(false)
 
   useEffect(() => {
     void loadAuthFlags()
@@ -156,25 +171,41 @@ export const AuthGate = ({ children, variant = 'page', segmented = false }: Auth
 
   const switchTo = (next: AuthMode) => {
     dismissError()
+    // 换页 = 上一次「已重置」的提示不该跟着走（它是**那一次**事件的回执，不是常驻状态）
+    setResetDone(false)
     setMode(next)
   }
 
-  const handleLogin = (values: LoginValues) => {
-    void signIn(values)
+  /** 找回密码走完两步：回登录页 + 挂回执。**不碰 `signIn`** —— 重置不等于登录成功 */
+  const handleResetDone = () => {
+    dismissError()
+    setResetDone(true)
+    setMode('login')
   }
 
-  const handleRegister = (values: RegisterValues) => {
-    void signUp({
+  /**
+   * 三个出口都**返回请求的 promise**（而不是 `void` 掉）：页面的 ref 闩要用它 held 到请求结束
+   * —— 只按同一 tick 释放的话，第二次点击就得靠 `busy` 那一帧接力，慢一帧还是多发一次请求。
+   * 失败文案仍由 store 的 `error.messageKey` 负责，页面不解析结果。
+   */
+  const handleLogin = (values: LoginValues) => signIn(values)
+
+  const handleRegister = (values: RegisterValues) =>
+    signUp({
       email: values.email,
       password: values.password,
       verifyCode: values.verifyCode,
       invitationCode: values.invitationCode,
     })
-  }
 
-  const handleSendCode = async (email: string): Promise<boolean> => {
+  /** 发码：429 要能说「等 N 秒」（`Retry-After`），所以把归一化后的秒数一并交给页面 */
+  const handleSendCode = async (email: string): Promise<SendCodeOutcome> => {
     const result = await sendCode({ email })
-    return result.ok
+    if (result.ok) {
+      return { ok: true }
+    }
+    const seconds = rateLimitSecondsOf(result.error)
+    return seconds === null ? { ok: false } : { ok: false, retryAfterSeconds: seconds }
   }
 
   // 接缝生效（仅测试构建）：直接放行主界面 —— 放在所有登录态判定之前短路。
@@ -197,8 +228,11 @@ export const AuthGate = ({ children, variant = 'page', segmented = false }: Auth
     return <>{children}</>
   }
 
-  // 「登录已过期」要说清楚原因：不然用户会以为是自己密码填错了
-  const noticeKey: TranslationKey | null = authState === 'expired' ? 'sub2authSessionExpired' : null
+  // 「登录已过期」要说清楚原因：不然用户会以为是自己密码填错了。
+  // 「刚重置完密码」是另一句本地回执（见 `resetDone`），优先级低于「会话失效」——两件事同时成立时，
+  // 更该说的是「你得重新登录」。
+  const noticeKey: TranslationKey | null =
+    authState === 'expired' ? 'sub2authSessionExpired' : resetDone ? 'settingsAuthResetDone' : null
 
   /** #727：分段控件只在开关允许注册时才有第二段（`registration_enabled=false` 时整块隐藏） */
   const switcher = segmented ? (
@@ -225,6 +259,12 @@ export const AuthGate = ({ children, variant = 'page', segmented = false }: Auth
       ) : null}
     </div>
   ) : null
+
+  // 找回密码（验证码式两步）：**同一张卡内换页** —— 不渲染分段控件（它不是第三个 tab，
+  // 而是一条离开本卡的路径），也不新开弹层（宿主设置弹层的 `role="dialog"` 数量必须不变）。
+  if (mode === 'forgot') {
+    return <ResetPasswordPage embedded={inline} onBack={() => switchTo('login')} onReset={handleResetDone} />
+  }
 
   if (mode === 'register') {
     return (
@@ -255,6 +295,7 @@ export const AuthGate = ({ children, variant = 'page', segmented = false }: Auth
         error={error}
         onSubmit={handleLogin}
         onSwitchToRegister={() => switchTo('register')}
+        onSwitchToForgot={() => switchTo('forgot')}
       />
     </>
   )

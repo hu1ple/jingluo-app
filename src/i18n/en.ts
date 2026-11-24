@@ -251,6 +251,36 @@ export const en = {
   avatarMenuSettingsDialogThemeSelectLightOption: 'Light',
   avatarMenuSettingsDialogThemeSelectDarkOption: 'Dark',
   avatarMenuSettingsDialogThemeSelectSystemOption: 'System',
+  // Settings redesign (iOS-style grouped list + second-level pages): group titles and new labels.
+  // Existing strings are reused as-is; only the group names and the announcement labels are new.
+  settingsGroupAccount: 'Account',
+  settingsGroupData: 'Data',
+  settingsGroupApp: 'App',
+  settingsGroupAnnouncement: 'Announcements',
+  settingsGroupAbout: 'About',
+  settingsRowAppearance: 'Appearance',
+  settingsRowGeneral: 'General',
+  settingsRowVoice: 'Voice',
+  settingsRowFont: 'Font',
+  settingsRowAnnouncement: 'Announcement board',
+  settingsRowHelpFeedback: 'Help & feedback',
+  settingsAnnouncementEmpty: 'No announcements yet',
+  settingsAnnouncementMarkAllRead: 'Mark all as read',
+  settingsAnnouncementMarkRead: 'Mark as read',
+  // New strings for the announcement board (list / unread dot / first-run popup).
+  // Announcement titles and bodies are Chinese content owned by the product side and live in
+  // `services/announcements/mock.ts`; only UI labels belong here.
+  settingsAnnouncementUnread: 'Unread',
+  settingsAnnouncementUnreadCount: '{count} unread announcement(s)',
+  settingsAnnouncementImportant: 'Important announcement',
+  settingsAnnouncementExpand: 'Show full text',
+  settingsAnnouncementCollapse: 'Show less',
+  settingsAnnouncementPopupDismiss: 'Got it',
+  // Relative times (picked by `components/announcements/relativeTime.ts`)
+  announceTimeJustNow: 'Just now',
+  announceTimeMinutesAgo: '{count} min ago',
+  announceTimeHoursAgo: '{count} h ago',
+  announceTimeDaysAgo: '{count} d ago',
   apiKeyStart: 'Enter an API Key to get started',
   apiKeyEdit: 'Edit API Key',
   apiKeyPlaceholder: 'Enter API Key',
@@ -806,8 +836,10 @@ export const en = {
     'attachment data is damaged (image path escapes the folder, or the image is duplicated)',
   historyImportSkipReasonUnknown:
     'Unrecognized skip reason (from another version or a third-party archive)',
-  settingDouyinLabel: 'Douyin ID',
-  settingDouyinDescription: 'Tap the ID to copy it, then search for it in Douyin.',
+  // Developer social channel row in "About" (round 6): the Douyin id is just this channel's value
+  settingsSocialLabel: 'Developer social media',
+  settingsSocialFreeNotice:
+    'Installing this app is completely free. If anyone charges you a download or installation fee, report them through this channel.',
   settingDouyinCopyAria: 'Copy Douyin ID',
   settingDouyinCopied: 'Douyin ID copied',
   oursErrCustomerNeedsKey:
@@ -878,6 +910,9 @@ export const en = {
   updateDialogClose: 'Close',
   updateDialogCancel: 'Cancel',
   updateDialogSnoozed: 'Reminder postponed — this prompt stays hidden for {hours} hours.',
+  // Startup update check: primary button on the startup prompt (opens the update entry in Settings;
+  // the download/install state machine lives only there and is not copied into this dialog)
+  updateGateActionUpdate: 'Update now',
   // ---------------------------------------------------------------------------
   // Refactor key skeleton (prep for #487): sign-in/sign-up, account and consumption,
   // card-key redemption, invites, email binding. Only new keys here; existing text above is untouched.
@@ -919,6 +954,33 @@ export const en = {
    * so the raw message is shown verbatim and this actionable line is added after it.
    */
   settingsAuthForgotNotReady: 'Password reset is not available yet — please contact support',
+  // Code-based reset (two steps: email → 6-digit code + new password).
+  // Deliberately separate from the `settingsAuthForgot*` group above (link mode: send a reset email):
+  // the action differs (send a code vs send an email), so the copy cannot be shared.
+  settingsAuthResetSubmit: 'Reset password',
+  settingsAuthResetNewPassword: 'New password (at least 6 characters)',
+  /** Local guard on step one: email empty (format errors use `sub2authEmailInvalid`) */
+  settingsAuthResetNeedsEmail: 'Enter your email address',
+  /** Server contract: `new_password` shorter than 6 = 400; the client pre-checks the same rule */
+  settingsAuthResetPasswordTooShort: 'Password must be at least 6 characters',
+  /** Code wrong / expired */
+  settingsAuthResetCodeWrong: 'The code is incorrect or has expired',
+  /** Server 429 (5/min send, 10/min reset): the wording must offer a next step ("wait"), not just "failed" */
+  settingsAuthResetRateLimited: 'Too many attempts — try again in a minute',
+  /** Other 4xx/5xx: no guessing, just a retryable sentence */
+  settingsAuthResetFailed: 'Reset failed. Please try again.',
+  /** Shown on the sign-in card once the reset flow finished (shared by AuthGate notice and the settings card) */
+  settingsAuthResetDone: 'Password reset. Sign in with your new password.',
+  /**
+   * Demo banner: the user MUST be able to tell that no real email is sent (only appears when the
+   * backend's code mode is disabled or unreachable). The second half is mandatory — without it
+   * people wait for an email that will never arrive.
+   */
+  settingsAuthResetDemoHint: 'Demo mode: the code is always 123456 and no email is sent',
+  /** Appended when the fallback reason is "backend unreachable" (not for "not enabled") */
+  settingsAuthResetDemoUnreachable: ' (reset service unreachable — demo fallback)',
+  /** Shows the fixed code again inside a demo session; `{code}` is injected by the page */
+  settingsAuthResetDemoCode: 'Demo code: {code}',
   sub2authPassword: 'Password',
   sub2authConfirmPassword: 'Confirm password',
   sub2authLogin: 'Log in',
@@ -927,6 +989,8 @@ export const en = {
   sub2authSendCode: 'Send verification code',
   /** Countdown placeholder: {seconds} comes from the server cooldown, never hardcoded */
   sub2authCodeSent: 'Code sent, resend in {seconds}s',
+  /** 429 — not a failure: too many attempts, wait `{seconds}` (from `Retry-After`, 60s fallback) */
+  sub2authTooManyTries: 'Too many attempts. Please try again in {seconds}s.',
   sub2authCodeInvalid: 'Incorrect verification code',
   sub2authEmailInvalid: 'Invalid email address',
   sub2authCredentialInvalid: 'Incorrect account or password',
@@ -1276,6 +1340,10 @@ export const en = {
   sendBlockedNoCredentials:
     'You are not signed in and no model provider is available, so this message was not sent. Sign in or pick a model provider first.',
   sendBlockedPickProvider: 'Choose provider',
+  // Pre-send guard for a required update (startup update check + read-only mode): the server raised
+  // the minimum supported version above this build, or declared mode:"forced"
+  sendBlockedUpdateRequired:
+    'This version is no longer supported, so this message was not sent. Update the app, then send again.',
   // #831 session-level branch (fork a stored chat into an independent new chat; not the same thing as
   // the in-chat message versions behind `BranchSwitcher`)
   sessionBranchMenuOption: 'Branch from this chat',

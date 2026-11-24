@@ -1,15 +1,22 @@
 import clsx from 'clsx'
 import { useRef, useState, type ReactNode } from 'react'
 import {
+  IconAnnounceOutline16,
+  IconChevronRightOutline14,
   IconCopyOutline16,
   IconDarkOutline16,
   IconDataOutline16,
   IconDownloadOutline16,
   IconFollowsystemOutline16,
+  IconHelpOutline16,
   IconLightOutline16,
+  IconMicOutline16,
+  IconRefreshOutline16,
   IconSettingsOutline16,
+  IconSocialOutline16,
   IconUploadOutline14,
   IconUserOutline16,
+  IconWalletOutline16,
 } from '../base/icons.js'
 import {
   BackupError,
@@ -29,7 +36,7 @@ import {
 } from '../../services/chat/history/urlImport.js'
 import { copyText } from '../../utils/clipboard.js'
 import { saveHistoryArchive } from '../../services/chat/history/saveArchive.js'
-import { isAndroidUpdate } from '../../services/appUpdate.js'
+import { bundledApp, isAndroidUpdate } from '../../services/appUpdate.js'
 import { ImportSkippedDetails, importedMessage, summaryFromCount } from './importSkipped.js'
 import { useChatStore, type HistoryImportSummary } from '../../services/chat/store.js'
 import {
@@ -57,7 +64,6 @@ import { showToast } from '../base/toastState.js'
 import { AppUpdateField, AppVersionField } from './AppUpdateField.js'
 import { ChatBackgroundField } from './ChatBackgroundField.js'
 import { DOUYIN_ACCOUNT_ID, douyinCopyToast } from './douyinAccount.js'
-import { AccountRow } from '../auth/AccountRow.js'
 import { FeedbackDialog } from './FeedbackDialog.js'
 import {
   closeSettings,
@@ -65,13 +71,34 @@ import {
   useSettingsDialog,
   type SettingsSection,
 } from './settingsDialogState.js'
-import { AccountConsumePage, type AccountSubPage } from '../consume/AccountConsumePage.js'
+import {
+  ACCOUNT_SUB_PAGE_TITLES,
+  AccountConsumePage,
+  type AccountSubPage,
+} from '../consume/AccountConsumePage.js'
 import { MOTION_EXIT, usePresence } from '../../utils/usePresence.js'
 import styles from './Settings.module.css'
+import {
+  SettingsBackButton,
+  SettingsCard,
+  SettingsCardInfoRow,
+  SettingsCardRow,
+} from './CardRow.js'
+import { AnnouncementBadge } from '../announcements/AnnouncementBadge.js'
+import { AnnouncementList } from '../announcements/AnnouncementList.js'
+import { useAnnouncements } from '../announcements/useAnnouncements.js'
+import { markAllRead } from '../../services/announcements/store.js'
 
 /**
- * 设置弹窗：分「通用设置」（主题、语言、朗读音色、位置）与「数据管理」（服务配置、导入、导出、删除）。
- * 桌面端为居中弹窗、左侧导航；移动端为底部弹层、导航横排在内容上方
+ * 设置弹窗：iOS 风格「分组列表（一级） + 二级页」。
+ *
+ * · 一级：灰色分组标题 + 卡片；行是「图标 + 文案 + 当前值（灰） + chevron」，整行可点；
+ * · 二级：点行后**内容区整页替换**（左上角「‹ 返回」，标题换成该页名字）——
+ *   不是叠新弹层、不是叠遮罩，仍然只有一个容器、一个 X（#727 的口径继续成立）；
+ * · 对外 API 一字不变：`openSettings(section)` 的 `section` 仍是「打开时落在哪个分组」，
+ *   `general` = 一级列表本身，`data` / `account` = 直接落到对应的二级页；
+ * · 公告栏的**数据是本地 mock**（`src/services/announcements/**`，已读状态存 localStorage），
+ *   不连后端：列表 / 未读红点 / 一键已读都在这一层之内，首次进入的公告弹窗挂在 `App` 上。
  */
 export const SettingsDialog = () => {
   const open = useSettingsDialog((state) => state.open)
@@ -80,58 +107,396 @@ export const SettingsDialog = () => {
   return mounted ? <SettingsContent visible={visible} /> : null
 }
 
-const sections: { value: SettingsSection; label: TranslationKey; icon: ReactNode }[] = [
+/** 二级页 id（`null` = 一级分组列表本身） */
+type SettingsPage =
+  | 'consume'
+  | 'appearance'
+  | 'general'
+  | 'voice'
+  | 'data'
+  | 'announcement'
+  | 'update'
+
+/** 二级页标题：与一级行文案同一批词条，不新写中文 */
+const PAGE_TITLES: Record<SettingsPage, TranslationKey> = {
+  consume: 'accountConsumeTitle',
+  appearance: 'settingsRowAppearance',
+  general: 'settingsRowGeneral',
+  voice: 'settingsRowVoice',
+  data: 'settingDialogAsideDataOptionLabel',
+  announcement: 'settingsRowAnnouncement',
+  update: 'settingDialogAppUpdate',
+}
+
+/**
+ * 旧的三个 tab（#711 / #727 阶段 1）与新 IA 的对应关系。
+ *
+ * 现在没有顶栏 tab 了，这个数组只剩一件事：把 `openSettings(section)` / `useSettingsDialog.section`
+ * 的语义接到新落点上 —— `general` = 一级列表本身（`page: null`），`data` / `account` = 直接进对应二级页。
+ *
+ * **形状别动**：`tests/unit/settings-memory-section-off-711.test.mjs` 按「值 / 文案 key / 图标」
+ * 逐位核这三项（它会从 `const sections:` 抠到第一个 `\n]`），改成 Record / 对象都会让那条门禁读不到。
+ */
+const sections: {
+  value: SettingsSection
+  label: TranslationKey
+  icon: ReactNode
+  page: SettingsPage | null
+}[] = [
   {
     value: 'general',
     label: 'settingDialogAsideGeneralOptionLabel',
     icon: <IconSettingsOutline16 />,
+    page: null,
   },
-  { value: 'data', label: 'settingDialogAsideDataOptionLabel', icon: <IconDataOutline16 /> },
-  /**
-   * #727 阶段 1：第三个 tab **常显**。
-   *
-   * 渠道 / API Key / 模型 / 连通性测试就住在这个 tab 里（从「数据管理」搬过来），所以它不能再
-   * 由「渠道是不是我们的渠道」控制出现 —— 任何渠道下都必须是三项，这也正是维护者否掉的那个条件。
-   */
-  { value: 'account', label: 'accountConsumeTitle', icon: <IconUserOutline16 /> },
+  {
+    value: 'data',
+    label: 'settingDialogAsideDataOptionLabel',
+    icon: <IconDataOutline16 />,
+    page: 'data',
+  },
+  { value: 'account', label: 'accountConsumeTitle', icon: <IconUserOutline16 />, page: 'consume' },
 ]
+
+/** 打开设置时落在哪一页：只认 `data` / `account`，其余（含 `general`）都落在一级列表 */
+const landingPageOf = (section: SettingsSection): SettingsPage | null =>
+  sections.find((item) => item.value === section)?.page ?? null
+
+/** 一组：灰色小字标题在**卡片外面**，卡片里是若干行（组内分隔线由 CSS 的 ::before 画） */
+const SettingsGroup = ({ titleKey, children }: { titleKey: TranslationKey; children: ReactNode }) => {
+  const t = useTranslate()
+  return (
+    <section className={styles.group}>
+      <h2 className={styles.groupTitle}>{t(titleKey)}</h2>
+      <SettingsCard>{children}</SettingsCard>
+    </section>
+  )
+}
+
+/**
+ * 「公告栏」这一行：与 `SettingsCardRow` 同一套视觉（复用同一批 `Settings.module.css` class），
+ * 唯一的差别是右侧那一格不是字符串，而是「红点 + 未读数」。
+ *
+ * 为什么没有直接给 `SettingsCardRow` 传节点：它的 `value` 类型是 `string`（那是给一级列表**全部**行
+ * 定的形状，值那一格还要按字符串做省略号截断）。公告这行的右侧是结构化徽标，就地按同一批 class
+ * 画一行，既不牵动别处，也不会把「值 = 一段当前值文案」的语义弄混。
+ */
+const AnnouncementRow = ({ onClick }: { onClick: () => void }) => {
+  const t = useTranslate()
+  const { unreadCount } = useAnnouncements()
+  return (
+    <button
+      type="button"
+      className={styles.linkRow}
+      data-testid="settings-row-announcement"
+      data-unread-count={unreadCount}
+      onClick={onClick}
+    >
+      <span className={styles.linkIcon} aria-hidden="true">
+        <IconAnnounceOutline16 />
+      </span>
+      <span className={styles.linkLabel}>{t('settingsRowAnnouncement')}</span>
+      {/* 值那一格永远渲染（没有未读就是空的）：它负责吃掉剩余空间，chevron 才会贴在行尾 */}
+      <span className={styles.linkValue}>
+        {unreadCount > 0 ? <AnnouncementBadge count={unreadCount} /> : null}
+      </span>
+      <IconChevronRightOutline14 />
+    </button>
+  )
+}
+
+/**
+ * 一级分组列表。
+ *
+ * 分组的归属与顺序由产品方定（2026-11-24 版）：账户 / 数据 / 应用 / 语音 / 公告 / 关于。
+ * 「账户与消费」那一行保留老 testid `account-consume-open`（付款回跳、消息流 CTA 与既有用例都靠它）。
+ */
+const RootList = ({
+  onOpen,
+  onFeedback,
+}: {
+  onOpen: (page: SettingsPage) => void
+  onFeedback: () => void
+}) => {
+  const t = useTranslate()
+  const themePreference = useSettings((state) => state.themePreference)
+  /** 右侧「当前值」：与二级页里那组选项共用同一批词条，不另写一份文案 */
+  const labelOf = <T extends string,>(options: { value: T; label: TranslationKey }[], value: T) =>
+    t((options.find((option) => option.value === value) ?? options[0]).label)
+
+  return (
+    <div className={styles.rootList} data-testid="settings-list">
+      {/* 账户组只剩「账户与消费」一行：登录 / 退出 / 当前邮箱在那页里已有同等区块，
+          一级再放一行「账号管理」就是重复。分组标题保留 —— 后面还可能有别的东西进来。 */}
+      <SettingsGroup titleKey="settingsGroupAccount">
+        <SettingsCardRow
+          testId="account-consume-open"
+          icon={<IconWalletOutline16 />}
+          label={t('accountConsumeTitle')}
+          onClick={() => onOpen('consume')}
+        />
+      </SettingsGroup>
+
+      <SettingsGroup titleKey="settingsGroupApp">
+        {/* 产品方口径：应用组三行 —— 外观（右侧显示当前主题）/ 通用 / 语音。
+            语言已收进「通用」页，不再单独占一行。 */}
+        <SettingsCardRow
+          testId="settings-row-appearance"
+          icon={<IconLightOutline16 />}
+          label={t('settingsRowAppearance')}
+          value={labelOf(themeOptions, themePreference)}
+          onClick={() => onOpen('appearance')}
+        />
+        <SettingsCardRow
+          testId="settings-row-general"
+          icon={<IconSettingsOutline16 />}
+          label={t('settingsRowGeneral')}
+          onClick={() => onOpen('general')}
+        />
+        <SettingsCardRow
+          testId="settings-row-voice"
+          icon={<IconMicOutline16 />}
+          label={t('settingsRowVoice')}
+          onClick={() => onOpen('voice')}
+        />
+      </SettingsGroup>
+
+      <SettingsGroup titleKey="settingsGroupData">
+        <SettingsCardRow
+          testId="settings-row-data"
+          icon={<IconDataOutline16 />}
+          label={t('settingDialogAsideDataOptionLabel')}
+          onClick={() => onOpen('data')}
+        />
+      </SettingsGroup>
+
+      {/* 位置靠下、在「关于」之上（用户指定）；有未读时这一行右侧带「红点 + 未读数」 */}
+      <SettingsGroup titleKey="settingsGroupAnnouncement">
+        <AnnouncementRow onClick={() => onOpen('announcement')} />
+      </SettingsGroup>
+
+      <SettingsGroup titleKey="settingsGroupAbout">
+        {/* 开发团队社媒（抖音号）+「完全免费」声明：产品方第六轮口径，放在「关于」组第一行 */}
+        <DouyinSetting />
+        <SettingsCardRow
+          testId="settings-row-update"
+          icon={<IconRefreshOutline16 />}
+          label={t('settingDialogAppUpdate')}
+          value={bundledApp().version}
+          valueTestId="app-version"
+          onClick={() => onOpen('update')}
+        />
+        {/* 反馈走既有的 `FeedbackDialog`（写反馈 / 日志自检两个出口都在那一层），不新写第二套 */}
+        <SettingsCardRow
+          testId="settings-row-help"
+          icon={<IconHelpOutline16 />}
+          label={t('settingsRowHelpFeedback')}
+          onClick={onFeedback}
+        />
+      </SettingsGroup>
+    </div>
+  )
+}
+
+/**
+ * 「公告栏」二级页：列表 + 一键已读。
+ *
+ * 数据是**本地 mock**（`src/services/announcements/**`）：4 条公告、已读状态存 localStorage、
+ * 不连后端、不发任何请求。列表本身（红点 / 标题 / 相对时间 / 2 行摘要可展开）在
+ * `components/announcements/AnnouncementList.tsx` 里，这里只负责「卡片 + 一键已读」这层外壳。
+ *
+ * 「一键已读」的可用性直接看 `unreadCount`：没有未读时置灰（点了也没意义），
+ * 文案与词条保持产品方口径（`settingsAnnouncementMarkAllRead` = 「一键已读」）。
+ */
+const AnnouncementSettings = () => {
+  const t = useTranslate()
+  const { unreadCount } = useAnnouncements()
+  return (
+    <>
+      <SettingsCard>
+        <AnnouncementList />
+      </SettingsCard>
+      <SettingsCard>
+        <div className={styles.announcementActions}>
+          <Button
+            variant="outlined"
+            size="m"
+            disabled={unreadCount === 0}
+            data-testid="settings-announcement-read"
+            onClick={markAllRead}
+          >
+            {t('settingsAnnouncementMarkAllRead')}
+          </Button>
+        </div>
+      </SettingsCard>
+    </>
+  )
+}
 
 const SettingsContent = ({ visible }: { visible: boolean }) => {
   const t = useTranslate()
-  // 打开时按调用方指定的分组选中，之后在弹窗内切换
-  // #711 兜底：旧版本可能留下 `'memory'`（脏值 / 回滚后再升上来的包）。收窄类型后这种值在
-  // 编译期就被挡住，运行期这里再收敛一次，保证任何来源的脏值都落到「通用设置」而不是空白面板。
-  const [section, setSection] = useState(() =>
+  /**
+   * 这次打开落在哪一页。
+   *
+   * 初值来自 `useSettingsDialog.getState()`（只在挂载时读一次）：`SettingsContent` 每次开合都会
+   * 重新挂载（`SettingsDialog` 不在 `mounted` 时返回 null），所以「打开设置落在请求的那一页」
+   * 与「弹层内自己换页」两件事互不干扰。
+   */
+  // #711 兜底：旧版本可能留下 `'memory'` 这类脏值，先收敛成合法分组，再映射成落点页
+  const [section] = useState(() =>
     normalizeSettingsSection(useSettingsDialog.getState().section)
+  )
+  const [page, setPage] = useState<SettingsPage | null>(() => landingPageOf(section))
+  /**
+   * 账户与消费里当前打开的下级页面（`null` = L1 列表页，见 `AccountConsumePage`）。
+   * 初值来自 `openAccountConsume(tab)`（#817）：付款回跳 / 消息流 CTA 靠它直接落到某一页。
+   */
+  const [accountPage, setAccountPage] = useState<AccountSubPage | null>(
+    () => useSettingsDialog.getState().accountConsumeTab
   )
   const historyImport = useHistoryImport()
   const historyDelete = useHistoryDelete()
   // 反馈弹窗：integrity=true 表示从「检查日志完整性」进入，自检面板默认展开
   const [feedback, setFeedback] = useState({ open: false, integrity: false })
-  /**
-   * 账户与消费里当前打开的下级页面（`null` = L1 列表页，见 `AccountConsumePage`）。
-   *
-   * 放在这里而不是内容区里：进了 L2（我的钱包 / 我的卡密 / 历史消费 / 账号）时，tab 3 顶上的
-   * 「模型来源」配置区要让位 —— 内容区整体换成下级页面，且切换 tab 要回到 L1。
-   *
-   * **初值来自 `openAccountConsume(tab)`**（#817）：付款回跳 / 消息流 CTA 都靠它直接落到某一页；
-   * `null`（默认）= 从侧栏点进来 / Key 守卫打开设置，落在 L1。只在挂载时读一次 ——
-   * `SettingsContent` 每次开合都会重新挂载（`SettingsDialog` 不在 `mounted` 时返回 null），
-   * 所以「打开设置落在请求的那一页」与「弹层内自己换页」两件事互不干扰。
-   */
-  const [accountPage, setAccountPage] = useState<AccountSubPage | null>(
-    () => useSettingsDialog.getState().accountConsumeTab
-  )
   const replacingHistory = useChatStore((state) => state.importingHistory)
   const historyBusy = historyImport.busy || historyDelete.busy || replacingHistory
   // 覆盖确认 / 删除确认叠在设置之上时，设置层的 X 与点击遮罩一律不可用：
   // 那层遮罩是全屏的，第一次点击只会落到上层的「取消」上，用户会以为 X 坏了、
   // 必须点两次才能退出设置（issue #28 缺陷 2）。确认框关掉后自动恢复。
   const confirmOpen = historyImport.source !== null || historyDelete.opened
+
+  /** 点一级行：进目标二级页；「账户与消费」一律从它自己的 L1 起步（与老的「切 tab 回 L1」同一口径） */
+  const openPage = (next: SettingsPage) => {
+    if (next === 'consume') {
+      setAccountPage(null)
+    }
+    setPage(next)
+  }
+
+  /** 左上角「‹ 返回」：内容区整页换回一级列表，弹层本身不关 */
+  const back = () => {
+    setPage(null)
+    setAccountPage(null)
+  }
+
+  /** 二级页内容（每页只有一屏，没有第三层） */
+  const renderPage = (): ReactNode => {
+    if (page === 'consume') {
+      // 自带页内行与二级头的组件，不套卡片外壳（它不是「一行一卡」的列表）
+      return <AccountConsumePage page={accountPage} onNavigate={setAccountPage} />
+    }
+    if (page === 'data') {
+      return (
+        <SettingsCard>
+          <ImportHistory historyImport={historyImport} disabled={historyBusy} />
+          <ExportHistory disabled={historyBusy} />
+          <SettingCell
+            label={t('feedbackCellLabel')}
+            description={t('feedbackCellDescription')}
+            status={null}
+            className={styles.wrapActionsCell}
+            action={
+              <>
+                <Button
+                  variant="outlined"
+                  size="m"
+                  className={styles.cellButton}
+                  onClick={() => setFeedback({ open: true, integrity: false })}
+                >
+                  {t('feedbackCellAction')}
+                </Button>
+                {/* 用户反馈前可先自检：条数 / 时间跨度 / 事件类型覆盖 / 缺失项 */}
+                <Button
+                  variant="outlined"
+                  size="m"
+                  className={styles.cellButton}
+                  onClick={() => setFeedback({ open: true, integrity: true })}
+                >
+                  {t('feedbackIntegrityCheck')}
+                </Button>
+              </>
+            }
+          />
+          <SettingCell
+            label={t('deleteAllSessions')}
+            status={null}
+            action={
+              <Button
+                variant="dangerOutlined"
+                size="m"
+                className={styles.cellButton}
+                disabled={historyBusy}
+                onClick={historyDelete.open}
+              >
+                {t('delete')}
+              </Button>
+            }
+          />
+        </SettingsCard>
+      )
+    }
+    if (page === 'appearance') {
+      // 外观：主题 + 聊天背景 + **文字样式**（字号 / 字重 / 行高）。
+      // 这三项只影响消息区的排版，是「长什么样」而不是「怎么说话」——
+      // 放在「语音」页里属于归类错误（朗读音色才是语音维度）。
+      return (
+        <SettingsCard>
+          <ThemeSetting />
+          <ChatBackgroundField />
+          <div className={styles.cardLabel}>{t('settingsRowFont')}</div>
+          <ReadingSettings />
+        </SettingsCard>
+      )
+    }
+    if (page === 'general') {
+      // 通用：语言 / 思考过程 / 回车键行为三行**平铺在同一页**，右侧各自直接是 Select，不再往下钻一层
+      return (
+        <SettingsCard>
+          <LocaleSetting />
+          <ThinkingDisplaySetting />
+          <EnterKeySettings />
+        </SettingsCard>
+      )
+    }
+    if (page === 'voice') {
+      // 语音：只有朗读音色（TTS 的音色）。
+      // 字号 / 字重 / 行高是**文字样式**，已移到「外观 → 样式」，不再放这里。
+      return (
+        <SettingsCard>
+          <TtsVoiceSetting />
+        </SettingsCard>
+      )
+    }
+    if (page === 'announcement') {
+      return <AnnouncementSettings />
+    }
+    if (page === 'update') {
+      // 内置更新只在 APK 里有落地：Web 端只显示版本，不渲染检查更新（见 AppVersionField 注释）
+      return (
+        <SettingsCard>{isAndroidUpdate() ? <AppUpdateField /> : <AppVersionField />}</SettingsCard>
+      )
+    }
+    return null
+  }
+
+  /**
+   * 标题栏（居中标题 + 右上圆形 X）是设置容器的，账户与消费的下级页也从这里取名字 ——
+   * 那套子页面第五轮起不再自己画页头（视觉统一，避免一屏两个标题两条返回）。
+   */
+  const consumeSubPage = page === 'consume' ? accountPage : null
+  const title =
+    page === null
+      ? t('settings')
+      : consumeSubPage !== null
+        ? t(ACCOUNT_SUB_PAGE_TITLES[consumeSubPage])
+        : t(PAGE_TITLES[page])
+  /** 消费子页的「返回」由那页自己给（回消费入口页）；其余二级页回一级列表 */
+  const showSettingsBack = page !== null && consumeSubPage === null
+
   return (
     <>
       <Modal
-        title={t('settings')}
+        title={title}
         closable
         dismissDisabled={confirmOpen}
         visible={visible}
@@ -143,106 +508,17 @@ const SettingsContent = ({ visible }: { visible: boolean }) => {
           }
         }}
       >
-        <div role="tablist" className={styles.navigation}>
-          {sections.map((item) => (
-            <button
-              key={item.value}
-              type="button"
-              role="tab"
-              aria-selected={section === item.value}
-              className={clsx(styles.navItem, section === item.value && styles.navItemActive)}
-              data-testid={item.value === 'account' ? 'account-consume-open' : undefined}
-              onClick={() => {
-                setSection(item.value)
-                // 切 tab 一律回到 L1（下次进来不该停在某个下级页面）
-                setAccountPage(null)
-              }}
-            >
-              {item.icon}
-              {t(item.label)}
-            </button>
-          ))}
-          {/* #727 阶段 1：第三项现在是上面 `sections` 里的普通 tab（常显），这里不再有第二个入口 ——
-              两套入口并存正是要消掉的东西。 */}
-        </div>
-        <div role="tabpanel" className={styles.content}>
-          {section === 'general' ? (
-            <>
-              {/* 账号（W1-B 后半 #487）：当前登录邮箱 + 退出登录；未登录时不渲染 */}
-              <AccountRow />
-              <ThemeSetting />
-              <LocaleSetting />
-              <TtsVoiceSetting />
-              <ThinkingDisplaySetting />
-              {/* 内置更新只在 APK 里有落地：Web 端只显示版本，不渲染检查更新（见 AppVersionField 注释） */}
-              {isAndroidUpdate() ? <AppUpdateField /> : <AppVersionField />}
-              <ReadingSettings />
-              <EnterKeySettings />
-              {/* 「位置信息」已从设置页移除（1.4.0-beta.1）：location 仍在 store 里读取，
-                  只用于 latest_reminder 快照，界面上不再暴露入口。 */}
-            </>
-          ) : section === 'data' ? (
-            <>
-              <ChatBackgroundField />
-              <ImportHistory historyImport={historyImport} disabled={historyBusy} />
-              <ExportHistory disabled={historyBusy} />
-              {/* 渠道 / API Key / 模型 / 连通性测试已经搬到第三个 tab（账户与消费），这里**故意不留**：
-                  两处都有 = 维护者截图里那种重复。 */}
-              <SettingCell
-                label={t('feedbackCellLabel')}
-                description={t('feedbackCellDescription')}
-                status={null}
-                className={styles.wrapActionsCell}
-                action={
-                  <>
-                    <Button
-                      variant="outlined"
-                      size="m"
-                      className={styles.cellButton}
-                      onClick={() => setFeedback({ open: true, integrity: false })}
-                    >
-                      {t('feedbackCellAction')}
-                    </Button>
-                    {/* 用户反馈前可先自检：条数 / 时间跨度 / 事件类型覆盖 / 缺失项 */}
-                    <Button
-                      variant="outlined"
-                      size="m"
-                      className={styles.cellButton}
-                      onClick={() => setFeedback({ open: true, integrity: true })}
-                    >
-                      {t('feedbackIntegrityCheck')}
-                    </Button>
-                  </>
-                }
-              />
-              <DouyinSetting />
-              <SettingCell
-                label={t('deleteAllSessions')}
-                status={null}
-                action={
-                  <Button
-                    variant="dangerOutlined"
-                    size="m"
-                    className={styles.cellButton}
-                    disabled={historyBusy}
-                    onClick={historyDelete.open}
-                  >
-                    {t('delete')}
-                  </Button>
-                }
-              />
-            </>
+        <div className={styles.content}>
+          {page === null ? (
+            <RootList
+              onOpen={openPage}
+              onFeedback={() => setFeedback({ open: true, integrity: false })}
+            />
           ) : (
-            <>
-              {/* 第三个 tab：L1 页首就是余额卡，模型来源 / 我的卡密 / 历史消费 / 账号都是一行，
-                  点进去是内容区整体换成 L2（带「返回」）。全部**渲染在设置弹层内部**：
-                  不新开弹层、不叠遮罩、不出现第二个 X。
-
-                  #807：L2「模型来源」是**单层手风琴**，字段（地址 / Key / 模型）的草稿与
-                  「确认使用」都在那一页里（`AccountConsumePage` + `settings/sourceAccordion*`），
-                  所以这里不再注入 `sourceConfig` / 不再持有 API Key 编辑器 —— 一份状态一处。 */}
-              <AccountConsumePage page={accountPage} onNavigate={setAccountPage} />
-            </>
+            <div className={styles.pageBody} data-testid={`settings-page-${page}`}>
+              {showSettingsBack ? <SettingsBackButton testId="settings-back" onClick={back} /> : null}
+              {renderPage()}
+            </div>
           )}
         </div>
       </Modal>
@@ -370,6 +646,7 @@ const ThinkingDisplaySetting = () => {
       label={t('settingDialogThinkingDisplayLabel')}
       description={t('settingDialogThinkingDisplayDescription')}
       status={null}
+      className={styles.stackedCell}
       action={
         <Select
           ariaLabel={t('settingDialogThinkingDisplayLabel')}
@@ -924,20 +1201,20 @@ const DouyinSetting = () => {
     showToast(douyinCopyToast(copied))
   }
   return (
-    <SettingCell
-      label={t('settingDouyinLabel')}
-      description={t('settingDouyinDescription')}
-      status={null}
-      className={styles.wrapActionsCell}
-      action={
+    <SettingsCardInfoRow
+      icon={<IconSocialOutline16 />}
+      label={t('settingsSocialLabel')}
+      // 免费声明（限定「软件本体」）：这一行的说明位，正文式换行、不截断
+      description={t('settingsSocialFreeNotice')}
+      value={
         <button
           type="button"
-          className={styles.douyinPill}
+          className={styles.douyinValue}
           data-testid="douyin-id-copy"
           aria-label={t('settingDouyinCopyAria')}
           onClick={() => void copy()}
         >
-          <span className={styles.douyinPillValue}>{DOUYIN_ACCOUNT_ID}</span>
+          <span className={styles.douyinValueText}>{DOUYIN_ACCOUNT_ID}</span>
           <IconCopyOutline16 />
         </button>
       }
@@ -1508,6 +1785,7 @@ const EnterKeySettings = () => {
       label={t('settingDialogEnterKeyMode')}
       description={t('settingDialogEnterKeyModeDescription')}
       status={null}
+      className={styles.stackedCell}
       action={
         <Select
           ariaLabel={t('settingDialogEnterKeyMode')}

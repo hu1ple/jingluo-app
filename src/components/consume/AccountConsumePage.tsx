@@ -59,7 +59,14 @@ import { getAccessToken, useAuthStore } from '../../services/auth/store.js'
 import { LegacyMigrationButton } from '../../legacy/migration/LegacyMigrationButton.js'
 import { useLegacyMigrationResult } from '../../legacy/migration/resultState.js'
 import { Button } from '../base/Button.js'
-import { IconChevronRightOutline14 } from '../base/icons.js'
+import {
+  IconDataOutline16,
+  IconDocumentOutline16,
+  IconSettingsOutline16,
+  IconUserOutline16,
+  IconWalletOutline16,
+} from '../base/icons.js'
+import { SettingsBackButton, SettingsCard, SettingsCardRow } from '../settings/CardRow.js'
 import { showToast } from '../base/toastState.js'
 import { InvitePanel } from './index.js'
 import { BuyTab } from './BuyTab.js'
@@ -68,6 +75,8 @@ import { MyCardsTab } from './MyCardsTab.js'
 import { runWalletAutoRedeem, type WalletAutoRedeemOutcome } from './walletAutoRedeem.js'
 import { WALLET_PAY_ENTRY_PAGE, landAfterPayReturn } from './walletPayFlow.js'
 import { runWebPayReturn, subscribeWebPayOpened } from './webPayReturn.js'
+import { record } from '../../services/diagnostics/collector.js'
+import { buildMeta } from '../../services/diagnostics/fields.js'
 import { WalletHeaderView } from './walletHeaderView.js'
 import { formatCurrency, maskedEmail } from './panels.js'
 import { sourceKeyOf } from './SourceSheet.js'
@@ -113,12 +122,30 @@ import styles from './AccountConsume.module.css'
  *  - 上限写死（8 次）而不是一直轮下去：这是**兜底**，不是「客户端负责查单」，
  *    该由用户手动重试的场合必须停在手动重试上（`walletAutoRedeem` 本身也永不自动重试）。
  */
+/** 诊断日志里统一用这个 stage，排「为什么没自动兑现」时按它过滤 */
+const WEB_PAY_STAGE = 'wallet.pay-return'
+
 const WEB_PAY_POLL_MS = 4500
 const WEB_PAY_POLL_MAX = 8
 /** 轮询的墙钟上限（2 分钟）：无论用户有没有切回来，定时器到点自己退场（监听仍留着） */
 const WEB_PAY_POLL_WALL_MS = 120000
 
 export type AccountSubPage = 'wallet' | 'source' | 'cards' | 'buy' | 'history' | 'account'
+
+/**
+ * 各下级页面的标题词条 —— 与行文案同一批，不新写中文。
+ *
+ * 消费方是设置弹层：标题栏（居中标题 + 右上圆形 X）是**设置容器**的，
+ * 这里只把「这一屏叫什么」交给它（第五轮：视觉统一，页内不再自己画标题）。
+ */
+export const ACCOUNT_SUB_PAGE_TITLES: Record<AccountSubPage, TranslationKey> = {
+  wallet: 'accountConsumeWallet',
+  source: 'accountConsumeGroupSource',
+  cards: 'accountConsumeTabCards',
+  buy: 'oursPayTitle',
+  history: 'accountConsumeHistory',
+  account: 'accountConsumeTabAccount',
+}
 
 export type AccountConsumePanelProps = {
   /**
@@ -499,6 +526,12 @@ export const AccountConsumePage = ({
       subscribeWebPayOpened(() => {
         // 新一次付款 = 新的轮询预算
         webPayAttempts.current = 0
+        record('nav', 'info', 'web pay opened', {
+          ...buildMeta({ stage: WEB_PAY_STAGE }),
+          // 触发方式写在 meta 里：`check:log-coverage` 要求可切片字段 ≥2，
+          // 而且排障时能区分「新标签页导航成功」和将来可能的其它入口。
+          trigger: 'pay-tab-navigated',
+        })
         setWebPayTick((tick) => tick + 1)
       }),
     []
@@ -528,12 +561,20 @@ export const AccountConsumePage = ({
    * 绝不会多兑一张卡、也不会对同一张卡打第二枪。
    */
   useEffect(() => {
-    // 没开过收款页 / 未登录（`loadOrders` 都不会注入，查了也是 skipped）/ 非浏览器环境 → 不挂
-    if (webPayTick === 0 || signedIn !== true || typeof document === 'undefined') {
+    // 没开过收款页 / 非浏览器环境 → 没什么可听的
+    if (webPayTick === 0 || typeof document === 'undefined') {
       return
     }
-    /** 用户离开过本页吗：没离开过说明收款页根本没被看，别自作主张把人拽到卡密页 */
-    let leftOnce = false
+    if (signedIn !== true) {
+      // 未登录：`orders/my` 要 JWT，这条路必然以 `not-signed-in` 收场。与其让用户以为
+      // 「自动兑现坏了」，不如当场说清楚，并在诊断里留痕（#784 的唯一触发点在这里）。
+      record('nav', 'info', 'web pay return skipped', {
+        ...buildMeta({ stage: WEB_PAY_STAGE }),
+        reason: 'not-signed-in',
+      })
+      showToast(t('walletAutoRedeemNeedSignIn'))
+      return
+    }
     let timer: ReturnType<typeof setInterval> | null = null
     const startedAt = Date.now()
 
@@ -554,21 +595,24 @@ export const AccountConsumePage = ({
      * `onPurchased`（= 本文件的 `backToCards`）——换页 + 重拉订单 + 自动兑现，
      * 判定逻辑（`walletAutoRedeem.ts`）一行都没有复制，也没有第二个回调名。
      */
-    function fire(): void {
+    function fire(source: 'visible' | 'poll'): void {
       if (!alive.current) {
         stop()
         return
       }
+      record('nav', 'info', 'web pay return fire', {
+        ...buildMeta({ stage: WEB_PAY_STAGE }),
+        source,
+        attempts: webPayAttempts.current,
+      })
       runWebPayReturn()
     }
     /** 切回来这一下最准：一次就够（之后就交给下面的轮询兜底），摘掉监听 */
     function onVisibility(): void {
       if (document.visibilityState === 'visible') {
         document.removeEventListener('visibilitychange', onVisibility)
-        fire()
-        return
+        fire('visible')
       }
-      leftOnce = true
     }
 
     document.addEventListener('visibilitychange', onVisibility)
@@ -578,10 +622,8 @@ export const AccountConsumePage = ({
         stopPolling()
         return
       }
+      // 本页不可见 = 用户还在收款页，查了也没人看，还会被浏览器节流
       if (document.visibilityState !== 'visible') {
-        return
-      }
-      if (!leftOnce) {
         return
       }
       webPayAttempts.current += 1
@@ -589,11 +631,11 @@ export const AccountConsumePage = ({
         stopPolling()
         return
       }
-      fire()
+      fire('poll')
     }, WEB_PAY_POLL_MS)
 
     return stop
-  }, [signedIn, webPayTick])
+  }, [signedIn, webPayTick, t])
 
   const SOURCE_LABEL_KEYS: Record<string, TranslationKey> = {
     builtin: 'accountConsumeSourceBuiltin',
@@ -674,80 +716,38 @@ export const AccountConsumePage = ({
     />
   )
 
-  /** L2 页标题（`root` 没有）：与行文案同一批词条，不新写中文 */
-  const SUB_PAGE_TITLES: Record<AccountSubPage, TranslationKey> = {
-    wallet: 'accountConsumeWallet',
-    source: 'accountConsumeGroupSource',
-    cards: 'accountConsumeTabCards',
-    buy: 'oursPayTitle',
-    history: 'accountConsumeHistory',
-    account: 'accountConsumeTabAccount',
-  }
-
-  /** 下级页面的头部：左上角「返回」+ 本页标题（设置弹层的头部与 X 不动，这里只是内容区的二级头） */
-  /** 与 `subHeader` 同形，只是标题换成一个自定义词条（例如登录卡出现时这一屏叫「登录」） */
-  const subHeaderWithTitle = (back: AccountSubPage | null, titleKey: TranslationKey) => (
-    <div className={styles.subHeader}>
-      <button
-        type="button"
-        className={styles.subBack}
-        data-testid="account-consume-back"
-        onClick={() => onNavigate(back)}
-      >
-        <IconChevronRightOutline14 />
-        {t('back')}
-      </button>
-      <span className={styles.subTitle}>{t(titleKey)}</span>
-    </div>
-  )
-
-  const subHeader = (target: AccountSubPage, back: AccountSubPage | null) => (
-    <div className={styles.subHeader}>
-      <button
-        type="button"
-        className={styles.subBack}
-        data-testid="account-consume-back"
-        onClick={() => onNavigate(back)}
-      >
-        <IconChevronRightOutline14 />
-        {t('back')}
-      </button>
-      <span className={styles.subTitle}>{t(SUB_PAGE_TITLES[target])}</span>
-    </div>
+  /**
+   * 下级页面的头部：**只有左上角「‹ 返回」**。
+   *
+   * 标题（与右上角圆形 X）是设置弹层自己的那份 —— 内容和一级列表是同一个容器，
+   * 所以这里不再写第二份居中的标题（第五轮：五套页头统一成设置二级页那一套）。
+   * 本页的标题由 `SettingsDialog` 按 `page` 从 `ACCOUNT_SUB_PAGE_TITLES` 取。
+   */
+  const subBack = (back: AccountSubPage | null) => (
+    <SettingsBackButton testId="account-consume-back" onClick={() => onNavigate(back)} />
   )
 
   // ───────────────── L2：我的钱包（余额卡 + 付款入口 / 我的卡密 / 历史消费） ──────
   if (page === 'wallet') {
     return (
       <div className={`${styles.page} ${styles.embedded}`} data-testid="account-consume-page">
-        {subHeader('wallet', null)}
-        {/* 页首一行：余额卡 + 付款入口（#817，同一行；窄屏放不下就整块折行） */}
-        {walletHeader}
-        <div className={styles.rows}>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={false}
-            className={styles.row}
-            data-testid="account-consume-tab-cards"
+        {subBack(null)}
+        {/* 页首一行：余额 + 付款入口（#817 的信息层级不变，只是并进同一张卡片 —— 第五轮视觉统一） */}
+        <SettingsCard>{walletHeader}</SettingsCard>
+        <SettingsCard>
+          <SettingsCardRow
+            testId="account-consume-tab-cards"
+            icon={<IconDocumentOutline16 />}
+            label={t('accountConsumeTabCards')}
             onClick={() => onNavigate('cards')}
-          >
-            <span className={styles.rowMain}>{t('accountConsumeTabCards')}</span>
-            <span className={styles.value}>›</span>
-          </button>
-          <div className={styles.divider} />
-          <button
-            type="button"
-            role="tab"
-            aria-selected={false}
-            className={styles.row}
-            data-testid="account-consume-history"
+          />
+          <SettingsCardRow
+            testId="account-consume-history"
+            icon={<IconDataOutline16 />}
+            label={t('accountConsumeHistory')}
             onClick={() => onNavigate('history')}
-          >
-            <span className={styles.rowMain}>{t('accountConsumeHistory')}</span>
-            <span className={styles.value}>›</span>
-          </button>
-        </div>
+          />
+        </SettingsCard>
         {/* 老账号额度迁移（#498 的临时尾巴，@remove-after 1.6.0）：本行只是**挂载点**，
             「显不显示」全由组件自己判 —— `migration.enabled !== true` 时组件 `return null`，
             所以默认关闭的构型里这一页**没有任何痕迹**（不是空按钮、不是占位）。
@@ -790,9 +790,10 @@ export const AccountConsumePage = ({
     })
     return (
       <div className={`${styles.page} ${styles.embedded}`} data-testid="account-consume-page">
-        {subHeader('source', null)}
+        {subBack(null)}
         {sourceState.open === 'builtin' && (sourceState.claim.phase === 'claiming' || sourceState.claim.phase === 'failed')
           ? null : keyEnsureBanner}
+        <SettingsCard>
         <SourceAccordionView
           t={t}
           state={sourceState}
@@ -822,6 +823,7 @@ export const AccountConsumePage = ({
           onConfirm={onConfirmSourceRow}
           styles={styles}
         />
+        </SettingsCard>
       </div>
     )
   }
@@ -830,8 +832,8 @@ export const AccountConsumePage = ({
   if (page === 'cards') {
     return (
       <div className={`${styles.page} ${styles.embedded}`} data-testid="account-consume-page">
-        {subHeader('cards', 'wallet')}
-        <div className={styles.viewBody}>
+        {subBack('wallet')}
+        <SettingsCard>
         {/* 页标题由设置头部给（「我的卡密」+ 返回），这里不再写第二份同名标题 */}
         <MyCardsTab
           consume={consume}
@@ -841,7 +843,7 @@ export const AccountConsumePage = ({
           onGoBuy={() => onNavigate('buy')}
           onNeedLogin={needLogin}
         />
-        </div>
+        </SettingsCard>
       </div>
     )
   }
@@ -850,10 +852,10 @@ export const AccountConsumePage = ({
   if (page === 'buy') {
     return (
       <div className={`${styles.page} ${styles.embedded}`} data-testid="account-consume-page">
-        {subHeader('buy', 'wallet')}
-        <div className={styles.viewBody}>
+        {subBack('wallet')}
+        <SettingsCard>
         <BuyTab onPurchased={backToCards} />
-        </div>
+        </SettingsCard>
       </div>
     )
   }
@@ -862,10 +864,10 @@ export const AccountConsumePage = ({
   if (page === 'history') {
     return (
       <div className={`${styles.page} ${styles.embedded}`} data-testid="account-consume-page">
-        {subHeader('history', 'wallet')}
-        <div className={styles.viewBody}>
+        {subBack('wallet')}
+        <SettingsCard>
         <HistoryView consume={consume} signedIn={signedIn === true} />
-        </div>
+        </SettingsCard>
       </div>
     )
   }
@@ -878,29 +880,31 @@ export const AccountConsumePage = ({
   if (page === 'account') {
     return (
       <div className={`${styles.page} ${styles.embedded}`} data-testid="account-consume-page">
-        {signedIn === true ? subHeader('account', null) : subHeaderWithTitle(null, 'sub2authLogin')}
+        {subBack(null)}
         {keyEnsureBanner}
 
         {/* 资料区：已登录 = 头像 + 昵称 + 邮箱；未登录 = 一句「未登录」（登录 / 注册入口在下方的账号面板） */}
         {signedIn === true ? (
-          <div className={styles.profile} data-testid="account-consume-profile">
-            <div className={styles.avatar} aria-hidden="true">
-              {avatarText}
-            </div>
-            <div className={styles.profileText}>
-              <div className={styles.profileName}>
-                {authUser === null || authUser.username === undefined || authUser.username === ''
-                  ? displayEmail
-                  : authUser.username}
+          <SettingsCard>
+            <div className={styles.profile} data-testid="account-consume-profile">
+              <div className={styles.avatar} aria-hidden="true">
+                {avatarText}
               </div>
-              <div className={styles.profileMail}>{displayEmail}</div>
+              <div className={styles.profileText}>
+                <div className={styles.profileName}>
+                  {authUser === null || authUser.username === undefined || authUser.username === ''
+                    ? displayEmail
+                    : authUser.username}
+                </div>
+                <div className={styles.profileMail}>{displayEmail}</div>
+              </div>
             </div>
-          </div>
+          </SettingsCard>
         ) : null}
 
         {/* 行区：未登录时不摆一排「—」，直接给登录 / 注册入口（#608：不设登录墙） */}
         {signedIn === true ? (
-          <div className={styles.rows}>
+          <SettingsCard>
             <div className={`${styles.row} ${styles.rowStatic}`} data-testid="account-consume-id">
               <span className={styles.rowMain}>{t('accountConsumeAccountId')}</span>
               <span className={styles.value}>
@@ -910,7 +914,6 @@ export const AccountConsumePage = ({
                 </i>
               </span>
             </div>
-            <div className={styles.divider} />
             <div className={`${styles.row} ${styles.rowStatic}`} data-testid="account-consume-bind-email">
               <span className={styles.rowMain}>{t('accountConsumeBindEmail')}</span>
               <span className={styles.value}>
@@ -920,7 +923,6 @@ export const AccountConsumePage = ({
                 </i>
               </span>
             </div>
-            <div className={styles.divider} />
             <div className={`${styles.row} ${styles.rowStatic}`} data-testid="account-consume-login-method">
               <span className={styles.rowMain}>{t('accountConsumeLoginMethod')}</span>
               <span className={styles.value}>
@@ -930,13 +932,15 @@ export const AccountConsumePage = ({
                 </i>
               </span>
             </div>
-          </div>
+          </SettingsCard>
         ) : (
+          <SettingsCard>
           <div className={styles.viewBody} data-testid="account-consume-tab-account">
             {/* 未登录 = **这一页就是登录界面**：登录 / 注册分段 + 获取验证码 + 忘记密码 +
                 「暂不登录」（#608 的口子，直接去填 API Key）。 */}
             <SettingsAuthCard consume={consume} onSkip={() => onNavigate('source')} />
           </div>
+          </SettingsCard>
         )}
 
         {/*
@@ -952,16 +956,23 @@ export const AccountConsumePage = ({
           否则就成了「客户端第二份开关」（#484 §3.1d）。
         */}
         {signedIn === true ? (
+          // 挂载点必须**直接**是 `{signedIn === true ? (<div className={styles.viewBody}
+          // data-testid="account-consume-invite">` —— `tests/unit/invite-signedout-hidden.test.mjs`
+          // 按这个形状判「未登录不渲染邀请面板」，所以这里不套卡片外壳（面板自己带卡片样式）。
           <div className={styles.viewBody} data-testid="account-consume-invite">
-            <InvitePanel consume={consume} signedIn={signedIn === true} onSignIn={needLogin} onBalance={setBalance} />
+            <InvitePanel
+              consume={consume}
+              signedIn={signedIn === true}
+              onSignIn={needLogin}
+              onBalance={setBalance}
+            />
           </div>
         ) : null}
 
         {/* 退出登录（红字行，原型 `.logout`）：动作就是既有的 auth store `signOut()`，不另写一套 */}
         {signedIn === true ? (
           signOutAsk ? (
-            <div className={styles.rows}>
-              <div className={styles.divider} />
+            <SettingsCard>
               <div className={`${styles.row} ${styles.rowStatic}`}>
                 <span className={styles.rowMain}>{t('accountConsumeSignOutConfirm')}</span>
                 <span className={styles.value}>
@@ -990,10 +1001,9 @@ export const AccountConsumePage = ({
                   {t('sub2authLogout')}
                 </Button>
               </div>
-            </div>
+            </SettingsCard>
           ) : (
-            <>
-              <div className={styles.divider} />
+            <SettingsCard>
               <button
                 type="button"
                 className={styles.logout}
@@ -1002,7 +1012,7 @@ export const AccountConsumePage = ({
               >
                 {t('sub2authLogout')}
               </button>
-            </>
+            </SettingsCard>
           )
         ) : null}
       </div>
@@ -1010,47 +1020,34 @@ export const AccountConsumePage = ({
   }
 
   // ───────────────────────────── L1：列表页（三行：模型来源 / 我的钱包 / 账号） ──
+  // 视觉与设置一级列表同款：卡片 + 「图标 + 标签 + 右值 + chevron」的 56px 行。
   return (
     <div className={`${styles.page} ${styles.embedded}`} data-testid="account-consume-page">
-      <div role="tablist" aria-label={t('accountConsumeTitle')} className={styles.rows}>
+      <SettingsCard>
         {/* 1) 模型来源收成一行：右侧是当前渠道名；未登录先去登录界面（登录后才是配置页） */}
-        <button
-          type="button"
-          role="tab"
-          aria-selected={false}
-          className={styles.row}
-          data-testid="account-consume-source"
+        <SettingsCardRow
+          testId="account-consume-source"
+          icon={<IconSettingsOutline16 />}
+          label={t('accountConsumeGroupSource')}
+          value={configured ? t(sourceLabelKey) : undefined}
           onClick={() => onNavigate('source')}
-        >
-          <span className={styles.rowMain}>{t('accountConsumeGroupSource')}</span>
-          <span className={styles.value}>{configured ? t(sourceLabelKey) : ''} ›</span>
-        </button>
-        <div className={styles.divider} />
+        />
         {/* 2) 我的钱包：余额卡 / 我的卡密 / 历史消费都在它点进去的那一页，L1 不摊开余额卡 */}
-        <button
-          type="button"
-          role="tab"
-          aria-selected={false}
-          className={styles.row}
-          data-testid="account-consume-wallet"
+        <SettingsCardRow
+          testId="account-consume-wallet"
+          icon={<IconWalletOutline16 />}
+          label={t('accountConsumeWallet')}
           onClick={() => onNavigate('wallet')}
-        >
-          <span className={styles.rowMain}>{t('accountConsumeWallet')}</span>
-          <span className={styles.value}>›</span>
-        </button>
-        <div className={styles.divider} />
+        />
         {/* 3) 账号：未登录进去就是登录界面（#608 的 key-only 口子在那页底部） */}
-        <button
-          type="button"
-          className={styles.row}
-          data-testid="account-consume-tab-account"
+        <SettingsCardRow
+          testId="account-consume-tab-account"
+          icon={<IconUserOutline16 />}
+          label={t('accountConsumeTabAccount')}
+          value={signedIn === true ? undefined : t('accountConsumeSignedOutCta')}
           onClick={() => onNavigate('account')}
-        >
-          <span className={styles.rowMain}>{t('accountConsumeTabAccount')}</span>
-          <span className={styles.value}>{signedIn === true ? '›' : t('accountConsumeSignedOutCta')}</span>
-        </button>
-      </div>
-
+        />
+      </SettingsCard>
     </div>
   )
 }

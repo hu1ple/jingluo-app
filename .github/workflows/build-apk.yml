@@ -25,6 +25,11 @@ on:
         description: '先跑 gradle clean（产物缓存异常时勾选）'
         type: boolean
         default: false
+      variant:
+        description: '构建变体：standard（对外）/ staging（预发布）'
+        type: choice
+        options: [standard, staging]
+        default: standard
 
 permissions:
   contents: read
@@ -127,18 +132,39 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: 构建（web → cap sync → assembleRelease）
+        env:
+          # 变体只在这里透传一次，构建逻辑全在 build-apk.sh（standard 分支与加变体前逐字一致）
+          BUILD_VARIANT: ${{ inputs.variant }}
         run: |
           set -euo pipefail
+          echo "构建变体: ${BUILD_VARIANT}"
           if [ "${{ inputs.clean }}" = "true" ]; then ./build-apk.sh release --clean; else ./build-apk.sh release; fi
 
       # 发布五件套：debuggable / 变体 / 回环标记 / 证书指纹 / 明文 base。
       # 期望证书从 config/appIdentity.json 派生，本文件不写第二份指纹。
+      #
+      # staging（预发布）与 standard 只有两处不同，其余判据一字不变：
+      #   · 第 5 项 INSECURE_CONSUME 会因明文 http 后端为 true —— 必须显式 --allow-insecure
+      #     （结论行会强制标 INSECURE(staging-only)，仍然「打得出来但发不安静悄悄」）；
+      #   · 第 6 项的期望消费地址从 config/endpoints.staging.json 派生（不传 --expect-consume-base
+      #     就会拿生产 config/endpoints.json 的值比，必然不符）。
+      # --variant 仍按产物的 ACTUAL 标记填：staging 走的是 build:staging（不设 INTERNAL_BUILD），
+      # gradle 的 ARTIFACT_VARIANT 落 standard（见 android/app/build.gradle 的 updateVariant）。
       - name: 产物五件套校验
+        env:
+          BUILD_VARIANT: ${{ inputs.variant }}
         run: |
           set -euo pipefail
           APK=android/app/build/outputs/apk/release/app-release.apk
           [ -f "$APK" ] || { echo "::error::没找到 $APK"; exit 1; }
-          pnpm run verify:apk -- "$APK" --variant standard
+          if [ "${BUILD_VARIANT}" = "staging" ]; then
+            EXPECT_CONSUME="$(node -p "JSON.parse(require('node:fs').readFileSync('config/endpoints.staging.json','utf8')).consume.baseUrl")"
+            echo "staging 变体：期望 consume.baseUrl = ${EXPECT_CONSUME}（明文，staging-only）"
+            pnpm run verify:apk -- "$APK" --variant standard --allow-insecure \
+              --expect-consume-base "$EXPECT_CONSUME"
+          else
+            pnpm run verify:apk -- "$APK" --variant standard
+          fi
 
       # 独立复算一次证书指纹并**断言**相等（`verify:apk` 已经查过，这里是第二道，故意重复）：
       # 这一步失败只可能意味着一件事 —— 产出的包用户装不上。
@@ -164,7 +190,8 @@ jobs:
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: apk-${{ github.sha }}
+          # 变体进 artifact 名：staging 包是明文联调包（禁止公开分发），绝不能和 standard 包混淆
+          name: apk-${{ inputs.variant }}-${{ github.sha }}
           path: |
             android/app/build/outputs/apk/release/app-release.apk
             ${{ runner.temp }}/apk.sha256

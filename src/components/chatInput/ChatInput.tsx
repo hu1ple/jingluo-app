@@ -54,6 +54,7 @@ import { useVoiceInput } from './useVoiceInput.js'
 import { VoiceButton } from './VoiceButton.js'
 import { Spectrum } from './Spectrum.js'
 import { useTranslate } from '../../i18n/index.js'
+import { updateRequiredNow, useUpdateGate } from '../../services/updateGateState.js'
 import { ThinkingToggle } from './ThinkingToggle.js'
 import styles from './ChatInput.module.css'
 
@@ -289,12 +290,38 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
 
   // 移动端录音时用频谱替代输入框内容（官方渠道没有语音入口，这一支同时失效）
   const recording = !compactToolbar && voice.status === 'recording'
+  /**
+   * 启动检查更新的判定结果：`true` = 服务端要求必须更新（**只读模式**）。
+   *
+   * 订阅的是轻量 store（`services/updateGateState.ts`），不是本组件自己查 —— 判定只在启动时
+   * 异步跑一次，结果对「发送 / 重新生成 / 继续」三个入口是**同一份**判据。
+   *
+   * 注意：这里读的是渲染期的值，只用来让按钮呈现禁用态；真正拦住请求的是 `send()` 里的
+   * `updateRequiredNow()`（点下去那一瞬间再读一次）。两者职责不同，缺一不可。
+   */
+  const updateRequired = useUpdateGate((state) => state.gate.kind === 'forced')
 
   // 排队、上传中或上传失败的附件都留在输入框，全部上传成功后才能发送
   const canSend =
-    !importingHistory && !streaming && voice.status === 'idle' && draftReady && !docDrafts.busy
+    !updateRequired &&
+    !importingHistory &&
+    !streaming &&
+    voice.status === 'idle' &&
+    draftReady &&
+    !docDrafts.busy
 
   const send = () => {
+    /**
+     * 强制更新（只读模式）的第一道门：**只拦「发新消息」**，不做任何别的事 ——
+     *   · 不 abort 正在流式输出的回答（那是上一轮请求，与本次判定无关；打断它才是真丢数据）；
+     *   · 不追溯判定之前已经发出的消息（判定是异步的，网络往返 1~2 秒内用户可能已经发出去了；
+     *     撤回 / 中止那几条会让用户看到「回答发到一半没了」，比「放过去一条」糟得多）。
+     *     这条是**有意为之**，不是漏判。
+     */
+    if (updateRequiredNow()) {
+      showToast({ key: 'sendBlockedUpdateRequired' })
+      return
+    }
     if (
       useChatStore.getState().importingHistory ||
       voice.status !== 'idle' ||

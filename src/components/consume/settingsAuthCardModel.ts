@@ -29,6 +29,7 @@ import { createElement, type ReactNode } from 'react'
 
 import type { TranslationKey } from '../../i18n/index.js'
 import type { ConsumeCallResult } from '../../services/consume/index.js'
+import { createInFlightLatch, rateLimitSecondsOf, type InFlightLatch } from '../auth/submitGuard.js'
 import { PasswordField, passwordToggleLabelKey } from './passwordInput.js'
 import type { ConsumeTranslate, PanelButton, PanelClassNames } from './panels.js'
 
@@ -78,6 +79,13 @@ export type AuthCardState = {
   submitAttempted: boolean
   /** 表单级提示（如「注册暂未开放」） */
   notice: AuthCardNotice
+  /**
+   * 提交被 429 挡回来之后的冷却剩余秒数（`0` = 没在冷却）。
+   *
+   * 429 **不是失败**：这段时间主按钮禁用、屏幕上写「操作太频繁，请 N 秒后再试」，倒计时归零自动恢复。
+   * 秒数来自服务端 `Retry-After`（`retryAfterMs`），没有该头就 60s —— 见 `auth/submitGuard.ts`。
+   */
+  submitCooldown: number
   forgot: ForgotState
 }
 
@@ -97,6 +105,10 @@ export type AuthCardEvent =
   /** 请求已发出：恢复隐藏（#797「提交后恢复隐藏」） */
   | { type: 'form-submitted' }
   | { type: 'notice'; notice: AuthCardNotice }
+  /** 提交撞 429：进冷却（秒数由 `submitAuthCard` 从 `Retry-After` 算出） */
+  | { type: 'cooldown'; seconds: number }
+  /** 冷却逐秒步进（容器每秒派一次，归零自动恢复可点） */
+  | { type: 'cooldown-tick' }
   | { type: 'forgot-sending' }
   | { type: 'forgot-outcome'; outcome: ForgotOutcome }
 
@@ -114,6 +126,7 @@ export const initialAuthCardState = (mode: AuthCardMode = 'login'): AuthCardStat
   confirmTouched: false,
   submitAttempted: false,
   notice: null,
+  submitCooldown: 0,
   forgot: initialForgotState(),
 })
 
@@ -169,6 +182,10 @@ export const reduceAuthCard = (state: AuthCardState, event: AuthCardEvent): Auth
       }
     case 'notice':
       return { ...state, notice: event.notice }
+    case 'cooldown':
+      return { ...state, submitCooldown: Math.max(0, Math.ceil(event.seconds)) }
+    case 'cooldown-tick':
+      return state.submitCooldown <= 0 ? state : { ...state, submitCooldown: state.submitCooldown - 1 }
     case 'forgot-sending':
       return { ...state, forgot: { sending: true, outcome: null } }
     case 'forgot-outcome':
@@ -197,9 +214,9 @@ export const confirmErrorKeyOf = (state: AuthCardState): 'settingsAuthPasswordMi
   return state.password === state.confirmPassword ? null : 'settingsAuthPasswordMismatch'
 }
 
-/** 主按钮能不能点：注册 tab 额外要求「确认密码非空且与密码一致」 */
+/** 主按钮能不能点：注册 tab 额外要求「确认密码非空且与密码一致」；429 冷却里一律不能点 */
 export const authCardCanSubmit = (state: AuthCardState, submitting: boolean): boolean => {
-  if (submitting || state.step !== 'form') {
+  if (submitting || state.step !== 'form' || state.submitCooldown > 0) {
     return false
   }
   if (state.email.trim() === '' || state.password === '') {
@@ -211,36 +228,98 @@ export const authCardCanSubmit = (state: AuthCardState, submitting: boolean): bo
   return state.confirmPassword !== '' && state.password === state.confirmPassword
 }
 
+/**
+ * 提交结果的最小读法（**只判断「成了吗 / 是不是 429」**，不把 store 的完整类型搬进来）。
+ *
+ * `AuthResult<AuthUser>` 天然满足它：`{ok:true,data}` 与 `{ok:false,error:AuthError}` 都结构兼容。
+ * `retryAfterMs` 是 `Sub2ApiError` 的字段，`AuthError` 目前没有（传输层没搬）—— 于是真机上秒数
+ * 走 60s 兜底；将来传输层把它透出来，这里**不用改**就能按 `Retry-After` 倒计时。
+ */
+export type AuthCardCallOutcome = {
+  ok: boolean
+  error?: {
+    status?: number | undefined
+    kind?: string | undefined
+    retryAfterMs?: number | undefined
+  } | null
+}
+
 /** 卡里唯一会发请求的四个口子（真机是 `useAuthStore` 的三个动作 + `consume.auth.forgotPassword`） */
 export type AuthCardSource = {
-  signIn: (input: { email: string; password: string }) => Promise<unknown>
+  signIn: (input: { email: string; password: string }) => Promise<AuthCardCallOutcome>
   /**
    * 注册（#839：**不再有邀请码**）。邀请码改到登录后的「我的邀请」里处理，注册表单与请求体都不带
    * `invitation_code`（`AuthRegisterInput` 里的可选字段留给不可达的旧 `RegisterPage`，这里不传）。
    */
-  signUp: (input: { email: string; password: string; verifyCode?: string }) => Promise<unknown>
+  signUp: (input: {
+    email: string
+    password: string
+    verifyCode?: string
+  }) => Promise<AuthCardCallOutcome>
   forgotPassword: (input: { email: string }) => Promise<ConsumeCallResult<unknown>>
 }
 
 export type AuthCardSubmitContext = {
   submitting: boolean
+  /**
+   * 调用方注入的同步闩（容器那一个 ref）。
+   *
+   * `submitting` 是 props / store 里的渲染态，同一 tick 连点两次会都读到旧值 —— 判定不能只靠它。
+   * 容器给了就用容器的；没给（裸 Node 单测 / 别的调用点）用模块级兜底闩，**并发两次调用一定挡得住**。
+   */
+  latch?: InFlightLatch
   /** `settings/public` 是否已经拉到（没拉到时不做本地拦截，交给服务端判 —— #484 §3.1d） */
   registrationLoaded: boolean
   registrationEnabled: boolean
 }
 
 /**
+ * 模块级兜底闩：容器没注入自己的 ref 时用它。
+ *
+ * 为什么**必须有**：`ctx.submitting` 是渲染态，同一 tick 连点两次都读到 `false`（事故现场：
+ * 双击两次注册 → 服务端 IP 限流 5/min → 之后填对验证码也被 429 挡 60s）。调用方 ref 是主防线，
+ * 这一层保证「任何调用点都挡得住并发两次」—— 单测里注入假 source 时走的就是它。
+ */
+const fallbackLatch = createInFlightLatch()
+
+/** 「忘记密码」的闩：同一 tick 连点两次只发一封重置邮件 */
+const forgotLatch = createInFlightLatch()
+
+/**
  * 提交表单。**发不发请求全看这里**，界面按钮的 `disabled` 只是顺手（按钮状态可能落后一帧，
  * 所以真正的不发请求必须由本函数保证）。
+ *
+ * 三层守卫，各管一段：
+ *  1. `ctx.submitting` / `submitCooldown`：渲染态的「正在发」「还在冷却」；
+ *  2. **同步闩**（`ctx.latch` ?? 模块级兜底）：同一 tick 的第二次调用在这里被挡掉 —— 这一层才是
+ *     事故根因的修复（前两层都读不到刚发生的这次调用）；
+ *  3. `try/finally`：请求抛错也把闩放掉，否则一次异常就把注册按钮永久锁死。
  */
 export const submitAuthCard = async (
   source: AuthCardSource,
   state: AuthCardState,
   ctx: AuthCardSubmitContext
 ): Promise<AuthCardEvent[]> => {
-  if (ctx.submitting) {
+  if (ctx.submitting || state.submitCooldown > 0) {
     return []
   }
+  const latch = ctx.latch ?? fallbackLatch
+  if (!latch.enter()) {
+    return []
+  }
+  try {
+    return await submitAuthCardLocked(source, state, ctx)
+  } finally {
+    latch.exit()
+  }
+}
+
+/** 抢到闩之后的真正判定 + 请求（唯一读点仍是「发不发」这三条） */
+const submitAuthCardLocked = async (
+  source: AuthCardSource,
+  state: AuthCardState,
+  ctx: AuthCardSubmitContext
+): Promise<AuthCardEvent[]> => {
   const email = state.email.trim()
   if (email === '' || state.password === '') {
     return [{ type: 'submit-blocked' }]
@@ -263,10 +342,22 @@ export const submitAuthCard = async (
       input.verifyCode = verifyCode
     }
     // #839：无论 `invitation_code_enabled` 是 true 还是 false，注册请求都不带邀请码
-    await source.signUp(input)
-    return [{ type: 'form-submitted' }]
+    return cooldownOrSubmitted(await source.signUp(input))
   }
-  await source.signIn({ email, password: state.password })
+  return cooldownOrSubmitted(await source.signIn({ email, password: state.password }))
+}
+
+/**
+ * 请求结局 → 事件：**429 走冷却，其余（成功 / 别的失败）保持原样**。
+ *
+ * 「其余失败保持原样」不是偷懒：失败文案由 store 的 `error.messageKey` 经 `errorKey` 上屏
+ * （#679 的收口口径），本函数只负责把 429 从「失败」里摘出来 —— 它该是可等待，不是「出错了」。
+ */
+const cooldownOrSubmitted = (outcome: AuthCardCallOutcome): AuthCardEvent[] => {
+  const seconds = outcome.ok ? null : rateLimitSecondsOf(outcome.error)
+  if (seconds !== null) {
+    return [{ type: 'cooldown', seconds }]
+  }
   return [{ type: 'form-submitted' }]
 }
 
@@ -304,12 +395,20 @@ export const submitForgotPassword = async (
   source: AuthCardSource,
   state: AuthCardState
 ): Promise<AuthCardEvent[]> => {
-  const email = state.email.trim()
-  if (email === '') {
-    return [{ type: 'forgot-outcome', outcome: { status: 'needs-email' } }]
+  // 同一把同步闩的规矩（见 `submitAuthCard` 的注释）：并发两次只发一封
+  if (!forgotLatch.enter()) {
+    return []
   }
-  const result = await source.forgotPassword({ email })
-  return [{ type: 'forgot-outcome', outcome: forgotOutcomeOf(result) }]
+  try {
+    const email = state.email.trim()
+    if (email === '') {
+      return [{ type: 'forgot-outcome', outcome: { status: 'needs-email' } }]
+    }
+    const result = await source.forgotPassword({ email })
+    return [{ type: 'forgot-outcome', outcome: forgotOutcomeOf(result) }]
+  } finally {
+    forgotLatch.exit()
+  }
 }
 
 // --------------------------------------------------------------------------- 视图
@@ -326,6 +425,13 @@ export type SettingsAuthCardViewProps = {
   sendingCode: boolean
   /** 验证码倒计时剩余秒数（0 = 没在冷却；计时器在容器里） */
   countdown: number
+  /**
+   * 这一轮发码倒计时是**被 429 挡回来**的（而不是真发出去了）。
+   *
+   * true 时把提示换成「操作太频繁，请 N 秒后再试」，并压掉 `errorKey` —— store 把 429 归一成
+   * 「登录失败，请重试」，那两句话同时出现在屏幕上，用户会以为是自己填错了。
+   */
+  countdownRateLimited?: boolean
   /** 登录 / 注册失败的文案 key（来自 store 的 `error.messageKey`） */
   errorKey: TranslationKey | null
   registrationLoaded: boolean
@@ -438,6 +544,10 @@ export const SettingsAuthCardView = (props: SettingsAuthCardViewProps): ReactNod
   const confirmErrorKey = confirmErrorKeyOf(state)
   const codeLoading = props.sendingCode || props.countdown > 0
   const canSubmit = authCardCanSubmit(state, props.submitting)
+  /** 提交链路的 429 冷却（>0 = 主按钮禁用 + 一行「请 N 秒后再试」） */
+  const submitCooldown = state.submitCooldown
+  const codeRateLimited = props.countdownRateLimited === true && props.countdown > 0
+  const rateLimited = submitCooldown > 0 || codeRateLimited
 
   const segmented = createElement(
     'div',
@@ -513,6 +623,27 @@ export const SettingsAuthCardView = (props: SettingsAuthCardViewProps): ReactNod
       )
     : null
 
+  /**
+   * 冷却提示：两条链路共用一句文案（`sub2authTooManyTries`，`{seconds}`= 剩余秒数）。
+   *
+   * 优先显示**提交**那一条（`submitCooldown`）：它才是「点了注册被挡回来」的直接回执；
+   * 发码那一条由按钮自己显示 `{N}s` 倒计时，这里再补一句更完整的「太频繁」。
+   */
+  const cooldownNote =
+    submitCooldown > 0 || codeRateLimited
+      ? createElement(
+          'p',
+          {
+            className: c.authNotice,
+            role: 'status',
+            'data-testid': submitCooldown > 0 ? 'settings-auth-cooldown' : 'settings-auth-code-cooldown',
+          },
+          t('sub2authTooManyTries', {
+            seconds: submitCooldown > 0 ? submitCooldown : props.countdown,
+          })
+        )
+      : null
+
   // 密码框：登录 tab 复用同一个组件，但**没有**确认密码那一栏（#797）
   const passwordField = createElement(PasswordField, {
     value: state.password,
@@ -580,13 +711,15 @@ export const SettingsAuthCardView = (props: SettingsAuthCardViewProps): ReactNod
       },
       registering ? t('sub2authRegister') : t('sub2authLogin')
     ),
-    props.errorKey === null
+    // 冷却期间不讲「失败」：429 在用户眼里是「等一等」，不是「你出错了」
+    props.errorKey === null || rateLimited
       ? null
       : createElement(
           'div',
           { className: c.authError, role: 'alert', 'data-testid': 'settings-auth-error' },
           t(props.errorKey)
         ),
+    cooldownNote,
     state.notice === null
       ? null
       : createElement(

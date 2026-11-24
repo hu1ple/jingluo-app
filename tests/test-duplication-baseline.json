@@ -18,18 +18,6 @@
     },
     {
       "files": [
-        "tests/integration/url-import-native.test.mjs",
-        "tests/integration/url-import-stages.test.mjs"
-      ],
-      "lines": 24,
-      "layers": [
-        "integration"
-      ],
-      "reason": "集成层 `openApp` 的公共尾段（context.newPage → console/pageerror 收集 → goto/清 localStorage/reload → 开设置 → 数据管理）。但两个文件的 openApp 前置（initScript 里的 Capacitor mock 计划：data/status/range/chunkDelay/rejectAfter）按用例完全不同，只抽尾段只有 8 行、不到 20 行窗口；抽整个工厂则要先把 mock 计划参数化。另一条硬约束：验证要真 dist + chromium（assertFreshBuild），本轮验收口径只跑 L0。留给集成层批次。抽掉后删本条。",
-      "issue": "#408"
-    },
-    {
-      "files": [
         "tests/integration/domain05-ui-export-import.test.mjs",
         "tests/integration/url-import-web.test.mjs"
       ],

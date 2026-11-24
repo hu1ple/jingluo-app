@@ -105,7 +105,15 @@ export const openSettingsDataSection = async (page) => {
   if ((await page.getByRole('dialog').count()) === 0) {
     await page.getByRole('button', { name: /设置|Settings/ }).last().click()
   }
-  await page.getByRole('tab', { name: /数据管理|Data/ }).first().click()
+  // 2026-11-24 设置改版：分组从「顶栏 tab」变成「分组列表 + 二级页」，
+  // 「数据管理」现在是列表里的一行（`settings-row-data`），不再是 tab。
+  // 两种形态都认，避免旧用例与这次改版互相绑死。
+  const dataRow = page.getByTestId('settings-row-data')
+  if ((await dataRow.count()) > 0) {
+    await dataRow.first().click()
+  } else {
+    await page.getByRole('tab', { name: /数据管理|Data/ }).first().click()
+  }
   // 已保存 Key 时密码框是隐藏的（只显示掩码），等不到不算错
   await page.waitForSelector('input[type="password"]', { timeout: 3000 }).catch(() => {})
 }

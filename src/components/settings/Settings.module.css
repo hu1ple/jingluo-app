@@ -1,70 +1,237 @@
+/* ---------- 设置弹层：iOS 风格「分组列表 + 二级页」 ----------
+   只有一个容器（`Modal`），点二级页是**内容区整页替换**（左上角「‹ 返回」），
+   不新开弹层、不叠遮罩、不出现第二个 X。 */
+
 .dialog {
-  --modal-header-gap: 7px;
-  width: 760px;
-  height: 500px;
+  --modal-header-gap: 8px;
+  width: 420px;
+  height: min(760px, calc(100vh - 32px));
   max-height: calc(100vh - 32px);
-  padding: 19px 24px 22px;
+  padding: 14px 16px 0;
+}
+
+/* 分组背景：浅色 #f9fafb / 深色 #1b1b1c —— 卡片（bg-layer-2）在两种主题下都比它亮一档。
+   `.dialog.dialog` 是**刻意**抬高优先级：Modal 自己的 `.content` 也是单个类，
+   两个 CSS Module 的注入顺序不该决定「谁是灰底、谁是白卡」。 */
+.dialog.dialog {
+  background-color: var(--dsw-specific-sidebar-fill);
 }
 
 .dialogMain {
   display: flex;
   flex: 1;
+  flex-direction: column;
   min-height: 0;
   color: var(--dsw-alias-label-primary);
 }
 
-.navigation {
+/* 一级列表与二级页共用的滚动区：只有它滚，标题与关闭按钮不动 */
+.content {
+  display: flex;
+  flex: 1 0 0;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding-bottom: 10px;
+  overflow-y: auto;
+}
+
+/* ---------- 分组：灰色小字标题 + 卡片 ---------- */
+
+.rootList {
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  gap: 4px;
-  width: 172px;
-  margin: 6px 12px 0 -12px;
-  padding-top: 4px;
+  padding-top: 2px;
 }
 
-.navItem {
+.group,
+.pageBody {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+/* 组与组之间的呼吸间距（不用 gap：#173 在 Chromium 83 上另有一套兜底） */
+.group {
+  margin-bottom: 22px;
+}
+
+.group:last-child {
+  margin-bottom: 4px;
+}
+
+/* 灰色分组标题：小字号、在**卡片外面**、左对齐（比卡片左边缘再缩进 4px 与行文字对齐更稳） */
+.groupTitle {
+  margin: 0 0 7px 4px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  letter-spacing: 0.02em;
+}
+
+/* 卡片：白底、13px 圆角、无描边（分隔线由下面那条 ::before 画，横向内边距 16px） */
+.card {
+  box-sizing: border-box;
+  flex-shrink: 0;
+  padding: 0 16px;
+  overflow: hidden;
+  border-radius: 13px;
+  background-color: var(--dsw-alias-bg-layer-2);
+}
+
+.pageBody > .card + .card {
+  margin-top: 14px;
+}
+
+/* 组内分隔线：**左内缩**，从文字起始处开始（图标行 32px，无图标行 0），不贯穿到卡片边缘 */
+.card > * + * {
+  position: relative;
+}
+
+/* 卡片内的小标题（.cardLabel）**只留上方那条线**：下面那行（如「字号」）自己也会画一条，
+   两条线把小标题夹在中间很难看（外观页「字体」那组实测就是这样）。 */
+.card > .cardLabel + *::before {
+  display: none;
+}
+
+.card > * + *::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: var(--card-row-inset, 0);
+  height: 1px;
+  background-color: var(--dsw-alias-border-l2-darkmode-thin);
+}
+
+/* 卡片里的老行（导入 / 导出 / 社媒 / 反馈 / 删除…）不再自带「整卡宽」的分隔线：统一由上面的 ::before 画 */
+.card .cell + .cell {
+  box-shadow: none;
+}
+
+/* 卡片里的老行跟一级行同一套字号与行高（14px 的小字在 56px 行里会显得「不是一页的」） */
+.card .cell {
+  min-height: 56px;
+}
+
+.card .cell .label {
+  font-size: 16px;
+  line-height: 22px;
+}
+
+/* 老行的说明位：卡片里右边已经有值/按钮，不再留 48px 的空档 */
+.card .cell .text {
+  padding-right: 8px;
+}
+
+/* 卡片里的说明统一 13px / 18（与 `.infoRowDesc` 同一档，不再有大有小） */
+.card .cell .description {
+  font-size: 13px;
+  line-height: 18px;
+}
+
+/* ---------- 头部：居中标题 + 右上角圆形关闭按钮 ----------
+   Modal 的 `.header / .title / .close` 是它自己的私有类名（容易被哈希），这里只能按结构选中：
+   弹窗内容的第一层子节点就是 header（header → main → footer）。
+   `.dialog > div:first-child > button` 的优先级高于 Modal 的 `.close`，所以负 margin 与 14px 字形都会被覆盖。 */
+.dialog > div:first-child {
+  position: relative;
+  flex-shrink: 0;
+  justify-content: center;
+  min-height: 34px;
+}
+
+.dialog > div:first-child > div {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 24px;
+  text-align: center;
+}
+
+.dialog > div:first-child > button {
+  position: absolute;
+  top: 50%;
+  right: -4px;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  margin: 0;
+  padding: 0;
+  border-radius: 50%;
+  background-color: var(--dsw-alias-interactive-bg-hover);
+  transform: translateY(-50%);
+
+  svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  &:hover {
+    background-color: var(--dsw-alias-interactive-bg-active);
+  }
+}
+
+/* 卡片里「说明较长 + 右侧是下拉」的行：文案独占一行、控件下移右对齐。
+   不这么做的话，390 档上 Select 的 nowrap 宽度会把说明压成每行 5 个字的竖条
+   （「回车键行为」那行实测最严重）。与 `.wrapActionsCell` 同一手法，只是不限窄屏。 */
+.stackedCell {
+  flex-wrap: wrap;
+}
+
+.stackedCell .text {
+  flex: 1 1 100%;
+  padding-right: 0;
+}
+
+.stackedCell .cellActions {
+  flex: 1 0 100%;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+/* 卡片内的块标题（例如「语音」页里「朗读设置」那一组字号/字重/行高的抬头）：
+   比分组标题还轻一档，只做分组说明，不抢行的注意力 */
+.cardLabel {
+  padding: 18px 0 6px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  letter-spacing: 0.02em;
+}
+
+/* ---------- 一级行：图标 + 文案 + 值（灰）+ chevron，整行可点 ---------- */
+
+.linkRow {
   display: flex;
   align-items: center;
-  gap: 8px;
   box-sizing: border-box;
-  width: calc(100% - 8px);
-  min-height: 40px;
-  margin: 0 4px;
-  padding: 9px 10px 9px 8px;
-  border: none;
-  border-radius: 12px;
-  background-color: transparent;
+  width: 100%;
+  min-height: 56px;
+  padding: 0;
+  border: 0;
+  background: none;
   color: var(--dsw-alias-label-primary);
   font: inherit;
-  font-size: 14px;
+  font-size: 16px;
   line-height: 22px;
   text-align: left;
   cursor: pointer;
-  user-select: none;
-  outline: none;
-  transition:
-    background-color var(--ds-transition-duration) var(--ds-ease-in-out),
-    transform var(--motion-duration-press) var(--motion-ease-ios);
+  /* 分隔线从文案左侧开始：20px 图标 + 12px 间距 */
+  --card-row-inset: 32px;
 
-  /* 按压反馈：110ms 只动 transform */
   &:active {
-    transform: scale(0.97);
-  }
-
-  svg {
-    flex-shrink: 0;
-  }
-
-  &:hover,
-  &.navItemActive {
     background-color: var(--dsw-alias-interactive-bg-hover);
   }
 
-  /* #215：WebView 下限是 Chromium 83，不认 `:focus-visible` → 整条规则被丢弃，键盘走到这里什么都看不到。
-  ① `:focus` 兜底：83 上只有这段生效（鼠标点击也会出环，这是可接受的降级）；
-  ② `:focus:not(:focus-visible)`：现代内核把鼠标点击的环收回，键盘态不受影响；83 上该选择器同样整条失效，正好保住①；
-  ③ `:focus-visible`：现代内核键盘态接管（与①同形）。 */
+  /* #215：`:focus` 兜底（Chromium 83 只认这段）+ `:focus:not(:focus-visible)` 收回现代内核鼠标点击态 + `:focus-visible` 键盘态。
+     三段缺一不可（scripts/lib/focusVisibleAudit.mjs 会逐条核对）：83 上 `:focus-visible` 是未知伪类，
+     整条选择器连同规则一起被丢弃 —— 只写它等于「键盘走到这里什么都看不到」。 */
 
   &:focus {
     box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
@@ -79,29 +246,165 @@
   }
 }
 
-.content {
-  display: flex;
-  flex: 1 0 0;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  margin-right: -24px;
-  padding: 0 24px;
-  overflow-y: auto;
+.linkIcon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-right: 12px;
+  color: var(--dsw-alias-label-secondary);
+
+  svg {
+    width: 20px;
+    height: 20px;
+  }
 }
 
-/* 分组标题（#727 阶段 1）：第三个 tab 里「模型来源」等分组的清晰抬头 + 与上方的间距 */
-.groupHead {
-  flex-shrink: 0;
-  margin: 16px 0 4px;
-  color: var(--dsw-alias-label-secondary);
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 18px;
+/* 文案优先：行宽不够时**只压「值」**（标题被挤成省略号是最不能接受的一种坏）。
+   值那一格永远渲染（没有值就是空串），它负责吃掉剩余空间，chevron 才会贴在行尾。 */
+.linkLabel {
+  flex: 0 0 auto;
+  max-width: 55%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 
-  &:first-child {
-    margin-top: 4px;
+/* 右侧当前值：灰、右对齐、空间不够时自己截断 */
+.linkValue {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: 10px;
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 15px;
+  line-height: 20px;
+  text-align: right;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.linkRow > svg {
+  flex-shrink: 0;
+  margin-left: 6px;
+  color: var(--dsw-alias-label-caption);
+}
+
+/* ---------- 带说明的行（「关于 → 开发团队社媒」）：图标 / 标题 / 右值 同一行，说明跨整行 ----------
+   用 grid 而不是 flex 包一层：说明必须能**横跨到右值下面**（窄屏下 2–3 行就够），
+   同时图标与标题垂直居中、与其它行的图标列对齐。
+   `@supports`/`gap` 都不涉及（grid from Chromium 57，本仓库下限 83），不触发 #173 的兜底要求。 */
+.infoRow {
+  display: grid;
+  box-sizing: border-box;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  grid-template-areas:
+    'icon label value'
+    '. desc desc';
+  align-items: center;
+  min-height: 56px;
+  padding: 12px 0;
+  color: var(--dsw-alias-label-primary);
+  /* 分隔线从文案左侧开始：20px 图标 + 12px 间距 */
+  --card-row-inset: 32px;
+}
+
+.infoRowIcon {
+  display: inline-flex;
+  grid-area: icon;
+  align-items: center;
+  width: 20px;
+  height: 20px;
+  color: var(--dsw-alias-label-secondary);
+
+  svg {
+    width: 20px;
+    height: 20px;
   }
+}
+
+.infoRowLabel {
+  grid-area: label;
+  min-width: 0;
+  padding-left: 12px;
+  overflow: hidden;
+  font-size: 16px;
+  line-height: 22px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 右侧值：与「跟随系统 / 1.4.14」同一档（灰 15px），靠右对齐、不抢行高 */
+.infoRowValue {
+  display: flex;
+  grid-area: value;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+  margin-left: 10px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 15px;
+  line-height: 20px;
+}
+
+/* 说明：13px 灰字，正文式换行（绝不截断），首行与标题文字左对齐 */
+.infoRowDesc {
+  grid-area: desc;
+  margin-top: 4px;
+  padding-left: 12px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 13px;
+  line-height: 18px;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- 二级页：左上角「‹ 返回」 ---------- */
+
+.backRow {
+  display: flex;
+  flex-shrink: 0;
+  margin: 0 0 8px;
+}
+
+.backButton {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 0 0 -4px;
+  padding: 6px 10px 6px 4px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--dsw-alias-brand-text);
+  font: inherit;
+  font-size: 15px;
+  line-height: 20px;
+  cursor: pointer;
+
+  svg {
+    margin-right: 2px;
+    transform: rotate(180deg);
+  }
+
+  /* 理由同 `.linkRow:focus`：只写 `:focus` 一档，#215 的低内核降级口径 */
+  &:focus {
+    outline: none;
+    background-color: var(--dsw-alias-interactive-bg-hover-accent);
+  }
+}
+
+/* ---------- 公告栏：只留「一键已读」这颗按钮的外壳 ----------
+   列表（卡片行 / 未读红点 / 相对时间 / 2 行摘要可展开）整套搬进了
+   `components/announcements/Announcements.module.css`：它同时服务于一级列表那一行的徽标
+   与首次进入的公告弹窗，放在设置页的样式表里会变成跨页面的隐式依赖。 */
+
+.announcementActions {
+  display: flex;
+  justify-content: center;
+  padding: 12px 0;
 }
 
 .cell {
@@ -127,7 +430,9 @@
 
 .cellActions {
   display: flex;
-  flex: 0 1 auto;
+  /* **不许压缩**：`0 1 auto` 时动作列会被压到比内容还窄，里面的 Select（min-width 124）
+     就溢出到左侧文字上 —— 外观页「字号」那行的说明被下拉框盖住就是这么来的。 */
+  flex: 0 0 auto;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
@@ -666,6 +971,7 @@
     max-width: none;
     height: calc(100% - 64px);
     max-height: 800px;
+    padding: 12px 16px 0;
     border-radius: 24px 24px 0 0;
     /* 移动端：底部弹层，滑入 / 滑落都只动 transform（时长略长，行程更大） */
     --modal-motion-duration: var(--motion-duration-slow);
@@ -682,37 +988,13 @@
     flex-direction: column;
   }
 
-  .navigation {
-    flex-direction: row;
-    width: auto;
-    margin: 6px -4px;
-    padding: 4px 0;
-    overflow-x: auto;
-  }
-
-  .navItem {
-    /* #727：导航多了第三项「账户与消费」，108px × 3 在 360 档会顶出右边界（第三项被切一半）。
-       改成「可收缩 + 更小的下限」：三项平分一行，360 档实测不再横向滚动。 */
-    flex: 1 1 auto;
-    justify-content: center;
-    width: auto;
-    min-width: 92px;
-    margin: 0;
-    white-space: nowrap;
-
-    &:first-child {
-      margin-left: 4px;
-    }
-
-    &:last-child {
-      margin-right: 4px;
-    }
-  }
-
+  /* 390 / 360：卡片两侧各留 16px（`.dialog` 的 padding），行内不再二次缩进 */
   .content {
-    padding-top: 24px;
-    padding-left: 0;
-    padding-bottom: env(safe-area-inset-bottom);
+    padding-bottom: max(12px, env(safe-area-inset-bottom, 0px));
+  }
+
+  .group {
+    margin-bottom: 20px;
   }
 
   .text {
@@ -1411,73 +1693,60 @@
   min-width: 0;
 }
 
-/* ---------- 抖音号（用户直接指定的展示项）----------
-   整个胶囊就是复制按钮：等宽字体 + 强调色描边，点一下复制并由 toast 反馈。
-   圆角/高度沿用 .cellButton 那一档，不引入第二套视觉语言，也不做广告条。 */
-.douyinPill {
+/* ---------- 「开发团队社媒」的右值：灰色等宽号码 + 一个小复制图标 ----------
+   点击复制（toast 照旧）。刻意不再是蓝色描边胶囊：那一块在一排灰字里太抢眼，
+   与「跟随系统 / 1.4.14」这类普通值不是一套。 */
+.douyinValue {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
-  gap: 6px;
-  min-height: 36px;
-  padding: 0 14px;
-  border: 1px solid var(--dsw-alias-brand-primary);
-  border-radius: 100px;
-  background-color: transparent;
-  color: var(--dsw-alias-brand-text);
+  margin: 0 0 0 -4px;
+  padding: 4px;
+  border: 0;
+  background: none;
+  color: var(--dsw-alias-label-tertiary);
   font: inherit;
   cursor: pointer;
-
-  &:hover {
-    background-color: var(--dsw-alias-interactive-bg-hover);
-  }
-
-  /* #215：`:focus` 兜底（Chromium 83 只认这段）+ `:focus:not(:focus-visible)` 收回现代内核鼠标点击态 + `:focus-visible` 键盘态 */
-
-  &:focus {
-    outline: 2px solid var(--dsw-alias-brand-primary);
-    outline-offset: 2px;
-  }
-
-  &:focus:not(:focus-visible) {
-    outline: none;
-  }
-
-  &:focus-visible {
-    outline: 2px solid var(--dsw-alias-brand-primary);
-    outline-offset: 2px;
-  }
-
-  svg {
-    flex-shrink: 0;
-  }
 }
 
-/* 号码本身：等宽 + 半粗，8 位一眼能核对 */
-.douyinPillValue {
+.douyinValueText {
   font-family: var(--ds-font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  line-height: 20px;
   white-space: nowrap;
 }
 
-/* 手机端：点击区拉到 44px（与 .cellButton 同档），桌面端保持 36px */
-@media not all and (min-width: 768px) {
-  .douyinPill {
-    min-height: 44px;
-  }
+.douyinValue svg {
+  width: 15px;
+  height: 15px;
+  margin-left: 6px;
+  opacity: 0.75;
+}
+
+.douyinValue:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.douyinValue:hover svg {
+  opacity: 1;
+}
+
+/* #215：三段式（`:focus` 兜底 + `:focus:not(:focus-visible)` 收回 + `:focus-visible` 键盘态），
+   与 `.linkRow` 同一套判据 —— 只写 `:focus-visible` 在 Chromium 83 上整条规则会被丢弃。 */
+.douyinValue:focus {
+  border-radius: 8px;
+  box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
+}
+
+.douyinValue:focus:not(:focus-visible) {
+  box-shadow: none;
+}
+
+.douyinValue:focus-visible {
+  box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
 }
 
 /* #173-fallback:start —— 由 node scripts/gen-flex-gap-fallback.mjs 生成，勿手改（issue #173） */
-:global(html[data-flex-gap-fallback]) .navigation > *:not(:last-child) {
-  margin-bottom: 4px;
-}
-
-:global(html[data-flex-gap-fallback]) .navItem > *:not(:last-child) {
-  margin-right: 8px;
-}
-
 :global(html[data-flex-gap-fallback]) .row > *:not(:last-child) {
   margin-right: 8px;
 }
@@ -1658,16 +1927,5 @@
 :global(html[data-flex-gap-fallback]) .feedbackTicketLine > *:not(:last-child) {
   margin-right: 6px;
   margin-bottom: 6px;
-}
-
-:global(html[data-flex-gap-fallback]) .douyinPill > *:not(:last-child) {
-  margin-right: 6px;
-}
-
-@media not all and (min-width: 768px) {
-  :global(html[data-flex-gap-fallback]) .navigation > *:not(:last-child) {
-    margin-bottom: 0;
-    margin-right: 4px;
-  }
 }
 /* #173-fallback:end */

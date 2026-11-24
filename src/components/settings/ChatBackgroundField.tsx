@@ -67,14 +67,16 @@ export const ChatBackgroundField = () => {
         <div className={clsx(styles.description, status?.error && styles.error)}>{hint}</div>
       </div>
       <div className={styles.backgroundAction}>
-        <span
-          className={clsx(styles.backgroundPreview, !url && styles.backgroundPreviewEmpty)}
-          role="img"
-          aria-label={t('settingsChatBackground')}
-          style={url ? { backgroundImage: `url("${url}")` } : undefined}
-        >
-          {url ? null : '—'}
-        </span>
+        {/* 没有背景图时**不渲染空缩略图**：一个只有破折号的空框在窄屏上既占位又像坏掉的控件，
+            真正要点的只有「上传」。有图时才显示缩略图。 */}
+        {url ? (
+          <span
+            className={styles.backgroundPreview}
+            role="img"
+            aria-label={t('settingsChatBackground')}
+            style={{ backgroundImage: `url("${url}")` }}
+          />
+        ) : null}
         {confirming ? (
           <>
             <Button variant="outlined" size="m" disabled={busy} onClick={() => setConfirming(false)}>

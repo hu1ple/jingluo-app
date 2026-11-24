@@ -71,7 +71,11 @@ console.log('\n[2] 复制成功 / 失败对应的提示')
 
 // ---------------------------------------------------------------- [3] 文案成对
 console.log('\n[3] zh / en 文案成对且非空')
-const KEYS = ['settingDouyinLabel', 'settingDouyinDescription', 'settingDouyinCopyAria', 'settingDouyinCopied']
+// 2026-11-24 设置改版：抖音号从「数据管理」提到一级「关于」组，定位也从「官方抖音号」
+// 改成「开发团队的社媒联系渠道」，于是 `settingDouyinLabel` / `settingDouyinDescription`
+// 被 `settingsSocialLabel` / `settingsSocialFreeNotice` 取代（旧 key 已删，留着会被 R4 判孤立）。
+// 断言口径不变：成对、非空、en 不含中文、中英不同。
+const KEYS = ['settingsSocialLabel', 'settingsSocialFreeNotice', 'settingDouyinCopyAria', 'settingDouyinCopied']
 for (const key of KEYS) {
   ok(typeof zh[key] === 'string' && zh[key].trim() !== '', `zh 有 ${key}`)
   ok(typeof en[key] === 'string' && en[key].trim() !== '', `en 有 ${key}`)

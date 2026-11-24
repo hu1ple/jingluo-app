@@ -281,12 +281,16 @@ test('E 接线：设置写入根元素 data-*，main 起步时应用，设置面
   for (const marker of ['readingFontSize', 'readingFontWeight', 'readingLineHeight']) {
     assert.match(dialog, new RegExp(marker), `设置面板必须真的读写 ${marker}`)
   }
-  assert.match(dialog, /<ReadingSettings \/>/, '通用设置里必须渲染阅读设置这一组')
-  // 只加在通用设置的末尾，序号/顺序不动（其他 issue 的分支要能顺序 rebase）
-  assert.match(
-    dialog,
-    /<ThinkingDisplaySetting \/>\s*<AppUpdateField \/>\s*<ReadingSettings \/>/,
-    '阅读设置必须追加在通用设置末尾'
+  assert.match(dialog, /<ReadingSettings \/>/, '设置里必须渲染阅读设置这一组')
+  // 2026-11-24 设置改版（iOS 分组列表 + 二级页）：原来这条判据要求
+  // `<ThinkingDisplaySetting />` `<AppUpdateField />` `<ReadingSettings />` 三个相邻且按序渲染
+  // （「末尾追加式，其他 lane 顺序 rebase 不撞车」）。新 IA 把思考过程放进「应用 → 通用」页、
+  // 应用更新放进「关于」组、朗读设置放进「应用 → 语音」页，三者已不在同一屏，相邻/顺序前提失效。
+  // 保留的意图换成更有价值的不变量：**阅读设置只渲染一处**（防同一条设置出现在两个页面）。
+  assert.equal(
+    (dialog.match(/<ReadingSettings \/>/g) ?? []).length,
+    1,
+    '阅读设置只能渲染一处（出现在两个页面就是重复设置）'
   )
 })
 

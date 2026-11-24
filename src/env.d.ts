@@ -102,6 +102,12 @@ declare const __ENDPOINTS__: {
   }
 }
 
+/**
+ * 测试接缝总开关（`TEST_AUTH_SEAM=1` 的测试构建里为 true，生产构建为 undefined）。
+ * 见 src/utils/testSeam.ts 与 scripts/lib/testAuthSeam.mjs。
+ */
+declare const __TEST_SEAM__: unknown
+
 /** Prism 语言包通过副作用注册到全局 Prism */
 declare module 'prismjs/components/*' {}
 

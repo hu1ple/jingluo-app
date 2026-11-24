@@ -120,6 +120,34 @@ const endpointsFile = path.resolve(root, resolveEndpointsLabel(process.env.ENDPO
 const effectiveConsumePay = applyBaseOverrides(loadConsumePay(endpointsFile), endpoints)
 
 /**
+ * `DL_BASE_OVERRIDE`：把**分发基地址**（`releases.json` / `apk/` 所在的那台机）指到别处。
+ *
+ * 为什么需要它：consume / pay 早有 `*_BASE_OVERRIDE`，但分发地址只能改 `config/endpoints.json`
+ * 再重新打包 —— 本地联调「静态站 + 公告 + 更新清单」时无法把 App 指到本机那份，
+ * 于是验证公告/强制更新永远打在线上 dl.rose7.cn 上。
+ *
+ * 判据与 consume 侧同源、同样保守：只接受 `https://` 或本机回环（`127.0.0.1` / `localhost`），
+ * 非回环明文必须显式 `ALLOW_INSECURE_CONSUME=true`（此时产物已带 `insecureConsume` 标记）。
+ * 非法值直接中止构建，不静默回退 —— 「override 设了却没生效」是 #651 的原始事故。
+ */
+const dlBaseOverride = (): string => {
+  const raw = process.env.DL_BASE_OVERRIDE?.trim()
+  if (!raw) {
+    return endpoints.download.primaryBase
+  }
+  const normalized = raw.replace(/\/+$/, '')
+  const loopback = /^http:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/i.test(normalized)
+  const https = /^https:\/\/[^/]+/i.test(normalized)
+  if (!https && !loopback && !insecureConsume) {
+    throw new Error(
+      `[build][ERROR] DL_BASE_OVERRIDE 必须是 https（或本机回环）：${raw}` +
+        '（非回环明文需要 ALLOW_INSECURE_CONSUME=true，产物会带 insecureConsume 标记，禁止公开分发）'
+    )
+  }
+  return normalized
+}
+
+/**
  * 明文联调包标记（Issue #601 守卫的补正面）：`ALLOW_INSECURE_CONSUME=true` → 注入
  * `__ENDPOINTS__.insecureConsume = true`，**运行时**（`src/services/consume/http.ts`）据此才肯
  * 接受非回环的明文 http base（默认一律抛 `ConsumeConfigError`）。
@@ -134,6 +162,9 @@ if (allowInsecureParsed.error) {
   throw new Error(`[consume] ${allowInsecureParsed.error}`)
 }
 const insecureConsume = allowInsecureParsed.allowInsecure
+
+/** 分发基地址的生效值：`DL_BASE_OVERRIDE` 优先（判据见上面的 `dlBaseOverride`） */
+const effectiveDlPrimaryBase = dlBaseOverride()
 
 /**
  * PDF 文本解析（Issue #480）：pdfjs 产物**不是**由打包器编译进来的（要经典 `<script src>` 才能过
@@ -468,6 +499,10 @@ export const createConfig = ({
       // 登录接缝（#510）：默认注入 `undefined` —— 见上方 `testAuthSeam` 的说明；
       // 真值只在 `TEST_AUTH_SEAM=1` 的测试构建里出现（假 token 是产物扫描的拦截标记）。
       __TEST_AUTH_STATE__: testAuthSeam ? JSON.stringify(SEAM_SESSION) : 'undefined',
+      // 测试接缝总开关（同一把 `TEST_AUTH_SEAM`）：测试构建里跳过「启动拉公告 / 弹窗 / 检查更新」，
+      // 否则 modal 遮罩会把 L1 的输入框点击全堵死，启动的网络请求也会打穿黄金回归的「不连真实服务」。
+      // 生产构建注入 undefined → 判断整段被死代码消除。见 src/utils/testSeam.ts。
+      __TEST_SEAM__: testAuthSeam ? 'true' : 'undefined',
       __API_ORIGIN__: JSON.stringify(apiOrigin),
       __INTERNAL_BUILD__: JSON.stringify(internalBuild),
       __APP_VERSION__: JSON.stringify(appVersion),
@@ -481,7 +516,7 @@ export const createConfig = ({
         feedbackUrl: endpoints.feedbackUrl,
         legacyHosts: endpoints.legacyHosts,
         // 分发地址（Issue #269）：源码只写 __ENDPOINTS__.dlPrimaryBase，打包前替换一次
-        dlPrimaryBase: endpoints.download.primaryBase,
+        dlPrimaryBase: effectiveDlPrimaryBase,
         dlFallbackBase: endpoints.download.fallbackBase,
         // 消费侧 / 支付侧（#484 W1-A）：src/services/consume/** 只从这两组里取地址、前缀与超时，
         // 源码里不许再出现任何后端地址或毫秒数（pnpm check:consume-api 会拦）。

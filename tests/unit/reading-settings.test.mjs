@@ -68,12 +68,13 @@ const cssBlock = (css, selector) => {
   return css.slice(start + 1, end)
 }
 
-const SIZES = ['small', 'standard', 'large', 'xlarge']
+const SIZES = settings.readingFontSizes
 const WEIGHTS = ['regular', 'medium', 'bold']
 const LINES = ['compact', 'standard', 'relaxed']
 
 test('A 阅读设置三项的默认值等于改造前的现状', () => {
   const state = settings.useSettings.getState()
+  assert.equal(SIZES[2], state.readingFontSize, '默认字号对应滑块第三档')
   assert.equal(state.readingFontSize, 'standard', '字号默认必须是现状档（修复前该字段不存在）')
   assert.equal(state.readingFontWeight, 'regular', '字重默认必须是现状档（修复前该字段不存在）')
   assert.equal(state.readingLineHeight, 'standard', '行高默认必须是现状档（修复前该字段不存在）')
@@ -98,7 +99,15 @@ test('B 三项可改动、立即生效、跨重启持久化，脏值回落默认
   assert.equal(cold.useSettings.getState().readingFontWeight, 'bold', '字重重启后保持')
   assert.equal(cold.useSettings.getState().readingLineHeight, 'relaxed', '行高重启后保持')
 
-  // 脏值不落到界面上
+  for (const size of SIZES) {
+    settings.setReadingFontSize(size)
+    assert.equal((await coldStart(size)).useSettings.getState().readingFontSize, size)
+  }
+
+  storage.set('chat-demo:reading-font-size', 'xxxlarge')
+  assert.equal((await coldStart('previous-maximum')).useSettings.getState().readingFontSize, 'xxlarge')
+
+  // 脏值回落到默认档
   storage.set('chat-demo:reading-font-size', 'huge')
   storage.set('chat-demo:reading-font-weight', '900')
   storage.set('chat-demo:reading-line-height', '')
@@ -162,7 +171,7 @@ test('C token 层：默认档逐值等于改造前的字号 / 字重 / 行高', 
     assert.match(css, new RegExp(`:root\\[data-ds-reading-line='${value}'\\]`), `缺少行高档 ${value}`)
   }
 
-  // 字号真的往上走：small < standard < large < xlarge
+  // 保留已有四档，仅扩展较大字号。
   const sizeOf = (value) => {
     const block =
       value === 'standard' ? base : cssBlock(css, `:root[data-ds-reading-size='${value}'] {`)
@@ -170,12 +179,7 @@ test('C token 层：默认档逐值等于改造前的字号 / 字重 / 行高', 
     assert.notEqual(match, null, `档 ${value} 没有定义 --ds-reading-size-body`)
     return Number(match[1])
   }
-  const ascending = SIZES.map(sizeOf)
-  assert.deepEqual(
-    ascending,
-    [...ascending].sort((a, b) => a - b),
-    `字号档必须递增，实际 ${ascending.join(' / ')}`
-  )
+  assert.deepEqual(SIZES.map(sizeOf), [12, 14, 16, 18, 20, 22])
 })
 
 test('C2 字体 token 由阅读 token 驱动，不再散落魔法数', () => {

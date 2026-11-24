@@ -28,7 +28,8 @@ export type ThinkingDisplay = 'collapsed' | 'expanded' | 'hidden'
  * 档位值只是「选了什么」，具体像素落在 src/styles/reading.css 的 token 上；
  * 默认档（standard / regular / standard）等于仓库改造前的固定字号字重行高。
  */
-export type ReadingFontSize = 'small' | 'standard' | 'large' | 'xlarge'
+export const readingFontSizes = ['xsmall', 'small', 'standard', 'large', 'xlarge', 'xxlarge'] as const
+export type ReadingFontSize = (typeof readingFontSizes)[number]
 export type ReadingFontWeight = 'regular' | 'medium' | 'bold'
 export type ReadingLineHeight = 'compact' | 'standard' | 'relaxed'
 
@@ -176,9 +177,8 @@ const initialThinkingDisplay = (): ThinkingDisplay => {
 /** 阅读设置默认档 = 改造前的现状（16px / 常规 / 标准行距）；脏值回落默认档 */
 const initialReadingFontSize = (): ReadingFontSize => {
   const saved = read(KEYS.readingFontSize)
-  return saved === 'small' || saved === 'large' || saved === 'xlarge' || saved === 'standard'
-    ? saved
-    : 'standard'
+  if (saved === 'xxxlarge') return 'xxlarge'
+  return readingFontSizes.find((size) => size === saved) ?? 'standard'
 }
 
 const initialReadingFontWeight = (): ReadingFontWeight => {

@@ -49,6 +49,7 @@ import {
   ALLOW_INSECURE_ENV,
   BASE_OVERRIDE_ENV,
   ENDPOINTS_LABEL,
+  resolveEndpointsLabel,
   allowInsecureFromEnv,
   applyBaseOverrides,
   loadConsumePay,
@@ -76,7 +77,16 @@ function die(msg) {
  * 报错必须带**键名与文件行号**（`consume.baseUrl 缺失` 这种话，缺了行号还是要人去 grep）。
  * 占位地址（`*.invalid`）不算错，但每次都打一行警告 —— 出正式包前必须换掉。
  */
-function checkConsumeEndpoints() {
+/** 环境 profile：`--staging` 或 `ENDPOINTS_PROFILE=staging`；默认 production（`config/endpoints.json`） */
+const resolveProfile = () => {
+  if (process.argv.includes('--staging') || process.env.ENDPOINTS_PROFILE === 'staging') {
+    return 'staging';
+  }
+  return 'production';
+};
+
+function checkConsumeEndpoints(profile) {
+  const label = resolveEndpointsLabel(profile);
   // 明文放行开关（#601 守卫的补正面）：只认字面 true，非法取值直接中止 ——
   // 与 gradle 的 -PallowInsecureConsume 同一条规则（逃生舱不能靠拼写猜）。
   const allowInsecure = allowInsecureFromEnv();
@@ -89,8 +99,8 @@ function checkConsumeEndpoints() {
   let config;
   let raw;
   try {
-    config = loadConsumePay(path.join(ROOT, ENDPOINTS_LABEL), insecureOptions);
-    raw = JSON.parse(fs.readFileSync(path.join(ROOT, ENDPOINTS_LABEL), 'utf8'));
+    config = loadConsumePay(path.join(ROOT, label), insecureOptions);
+    raw = JSON.parse(fs.readFileSync(path.join(ROOT, label), 'utf8'));
   } catch (error) {
     die(error && error.message ? error.message : String(error));
   }
@@ -127,7 +137,7 @@ function checkConsumeEndpoints() {
     log(`${section}=${effective[section].baseUrl}${by}${extra}`);
     if (overridden) {
       log(
-        `${BASE_OVERRIDE_ENV[section]}=${overridden} 覆盖 ${ENDPOINTS_LABEL} 的 ${section}.baseUrl` +
+        `${BASE_OVERRIDE_ENV[section]}=${overridden} 覆盖 ${label} 的 ${section}.baseUrl` +
           `（配置值 ${config[section].baseUrl}）：本次产物只认覆盖值`
       );
     }
@@ -157,20 +167,28 @@ function resolveRspackBin() {
 async function main() {
   const argv = process.argv.slice(2);
   const internal = argv.includes('--internal');
-  const passthrough = argv.filter((a) => a !== '--internal');
+  // `--allow-insecure` 等价于 `ALLOW_INSECURE_CONSUME=true`，但写在命令行上：
+  // 跨平台（Windows 的 npm script 不支持 `VAR=1 cmd` 前缀赋值），而且放行这件事**看得见**，
+  // 不靠拼写猜。真正的判据仍然是 consumeEndpoints.allowInsecureFromEnv()（只认字面 'true'）。
+  if (argv.includes('--allow-insecure')) process.env[ALLOW_INSECURE_ENV] = 'true';
+  const passthrough = argv.filter((a) => a !== '--internal' && a !== '--staging' && a !== '--allow-insecure');
 
-  const outDir = (process.env.DIST_OUT ?? '').trim() || 'dist';
+  const profile = resolveProfile();
+  // 预发布产物默认落到 dist-pre：避免一次 `--staging` 构建把准备发版用的 dist/ 顶掉。
+  const outDir = (process.env.DIST_OUT ?? '').trim() || (profile === 'staging' ? 'dist-pre' : 'dist');
   const variant = internal ? 'internal' : 'standard';
   const { bin, version } = resolveRspackBin();
 
   // 0. 端点配置 fail-fast（不合法直接 exit 1，绝不带着错地址打包）
-  checkConsumeEndpoints();
+  checkConsumeEndpoints(profile);
 
   // 1. 清输出目录（原脚本的 rm -rf dist）
   await fsp.rm(path.join(ROOT, outDir), { recursive: true, force: true });
 
   // 2. 构建：env 由 node 侧设置，不依赖 POSIX 前缀赋值
-  const env = { ...process.env, NODE_ENV: 'production' };
+  // DIST_OUT 必须显式传给孩子：rspack.config.ts 只认 process.env.DIST_OUT，
+  // 不传就会写回默认 dist/ —— 一次预发布构建把正式产物顶掉（本轮实测踩到）。
+  const env = { ...process.env, NODE_ENV: 'production', DIST_OUT: outDir, ENDPOINTS_PROFILE: profile };
   if (internal) env.INTERNAL_BUILD = '1';
   else delete env.INTERNAL_BUILD;
 

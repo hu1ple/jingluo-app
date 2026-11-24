@@ -9,6 +9,8 @@
 
 export declare const ENDPOINTS_FILE: string
 export declare const ENDPOINTS_LABEL: string
+export declare const ENDPOINTS_PROFILES: Readonly<{ production: string; staging: string }>
+export declare function resolveEndpointsLabel(profile?: string | null): string
 export declare const DEPRECATED_MARKERS: readonly string[]
 export declare const CONSUME_KEYS: readonly string[]
 export declare const PAY_KEYS: readonly string[]

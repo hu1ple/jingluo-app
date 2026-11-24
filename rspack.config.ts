@@ -4,7 +4,12 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig } from '@rspack/cli'
 import { rspack, type Configuration } from '@rspack/core'
 import { assertBrowserslist } from './scripts/lib/compatBaseline.mjs'
-import { ENDPOINTS_FILE, allowInsecureFromEnv, applyBaseOverrides, loadConsumePay } from './scripts/lib/consumeEndpoints.mjs'
+import {
+  allowInsecureFromEnv,
+  applyBaseOverrides,
+  loadConsumePay,
+  resolveEndpointsLabel,
+} from './scripts/lib/consumeEndpoints.mjs'
 import { SEAM_FLAG, SEAM_SESSION, seamEnabled } from './scripts/lib/testAuthSeam.mjs'
 
 const dev = process.env.NODE_ENV !== 'production'
@@ -108,7 +113,11 @@ const endpoints = JSON.parse(readFileSync(new URL('./config/endpoints.json', imp
  * 判据与配置文件同源：`scripts/lib/consumeEndpoints.mjs` 的 `applyBaseOverrides`（https / 本机回环例外 /
  * 废弃域黑名单 / consume≠pay 全部照旧，非法值直接中止构建）。这里只做「读进来的值换成生效值」。
  */
-const effectiveConsumePay = applyBaseOverrides(loadConsumePay(ENDPOINTS_FILE), endpoints)
+// 环境 profile（`ENDPOINTS_PROFILE=staging`）：**注入点必须自己认这份**，否则 build.mjs 的日志说
+// 「指向预发布」、产物里仍是生产域名（形状就是 #651 那个「改了却没改」）。
+// 默认 production → `config/endpoints.json`，与改动前完全一致。
+const endpointsFile = path.resolve(root, resolveEndpointsLabel(process.env.ENDPOINTS_PROFILE))
+const effectiveConsumePay = applyBaseOverrides(loadConsumePay(endpointsFile), endpoints)
 
 /**
  * 明文联调包标记（Issue #601 守卫的补正面）：`ALLOW_INSECURE_CONSUME=true` → 注入

@@ -230,8 +230,17 @@ fi
 #   · -PallowInsecureConsume=true         ：闸 1b 放行「明文非回环」+ 写 INSECURE_CONSUME=true 自证标记
 #   · ALLOW_INSECURE_CONSUME=true         ：web 侧同一个开关的另一入口（gradle 也认），免得出半套包
 if [ "$BUILD_VARIANT" = "staging" ]; then
-  STAGING_CONSUME_BASE="$(node -p "require('./config/endpoints.staging.json').consume.baseUrl" 2>/dev/null || true)"
-  [ -n "$STAGING_CONSUME_BASE" ] || die "读不到 config/endpoints.staging.json 的 consume.baseUrl（staging 变体必须有这份配置）"
+  # 注意：这里已经 `cd android/` 了（gradle 必须在 android/ 下跑），所以配置要用**绝对路径**读 ——
+  # 写成相对路径 './config/...' 会读不到（实测 CI 第一次跑就栽在这：node 静默失败 → die）。
+  STAGING_CONSUME_JSON="$PROJECT_ROOT/config/endpoints.staging.json"
+  [ -f "$STAGING_CONSUME_JSON" ] || die "找不到 $STAGING_CONSUME_JSON（staging 变体必须有这份端点配置）"
+  if ! STAGING_CONSUME_BASE="$(node -p "JSON.parse(require('node:fs').readFileSync(process.argv[1],'utf8')).consume.baseUrl" -- "$STAGING_CONSUME_JSON")"; then
+    die "读不出 $STAGING_CONSUME_JSON 的 consume.baseUrl（见上方 node 报错）"
+  fi
+  case "$STAGING_CONSUME_BASE" in
+    http://*|https://*) ;;
+    *) die "$STAGING_CONSUME_JSON 的 consume.baseUrl 不是协议://主机 形式：'$STAGING_CONSUME_BASE'" ;;
+  esac
   export ALLOW_INSECURE_CONSUME=true
   GRADLE_ARGS+=("-PconsumeBase=$STAGING_CONSUME_BASE" "-PallowInsecureConsume=true")
   printf '\033[1;33m[build-apk][警告] BUILD_VARIANT=staging：产物指向预发布后端 %s（明文），带 INSECURE_CONSUME 标记 → 只许内网联调，禁止公开分发\033[0m\n' "$STAGING_CONSUME_BASE" >&2

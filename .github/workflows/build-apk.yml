@@ -158,7 +158,7 @@ jobs:
           APK=android/app/build/outputs/apk/release/app-release.apk
           [ -f "$APK" ] || { echo "::error::没找到 $APK"; exit 1; }
           if [ "${BUILD_VARIANT}" = "staging" ]; then
-            EXPECT_CONSUME="$(node -p "require('./config/endpoints.staging.json').consume.baseUrl")"
+            EXPECT_CONSUME="$(node -p "JSON.parse(require('node:fs').readFileSync('config/endpoints.staging.json','utf8')).consume.baseUrl")"
             echo "staging 变体：期望 consume.baseUrl = ${EXPECT_CONSUME}（明文，staging-only）"
             pnpm run verify:apk -- "$APK" --variant standard --allow-insecure \
               --expect-consume-base "$EXPECT_CONSUME"

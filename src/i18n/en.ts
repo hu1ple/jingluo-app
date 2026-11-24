@@ -170,7 +170,7 @@ export const en = {
    * (`{models}`), "built-in model" and "do not retry" are no longer in the main copy.
    * Params are still passed; tier and non-retryability are unchanged.
    */
-  replyModelInvalid: 'Hmph, I already shooed “{model}” away! Only look for me! (*¯︶¯*)',
+  replyModelInvalid: 'Hmph, I already shooed that model away! Only look for me! (*¯︶¯*)',
   /** Upstream did not list usable models (#339) */
   replyModelInvalidNoModels: 'not listed by the upstream',
   /** The reply did not record a model name (imported history, #339) */

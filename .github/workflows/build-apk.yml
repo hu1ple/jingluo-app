@@ -3,8 +3,9 @@ name: Build signed APK
 # 让「拿到仓库的人」不需要任何签名材料就能产出**用户可覆盖升级**的正式包。
 #
 # 签名私钥不进仓库、不进日志、不进 artifact：
-#   · keystore 走 Secret `ANDROID_KEYSTORE_B64`（整文件的 base64）
-#   · 口令走 Secret `ANDROID_KEYSTORE_PASSWORD`
+#   · 四个 Secret 与 `release.yml` **同名**（同一套材料，不要维护两套命名）：
+#     `ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_STORE_PASSWORD` /
+#     `ANDROID_KEYSTORE_KEY_ALIAS` / `ANDROID_KEYSTORE_KEY_PASSWORD`
 #   · 触发者**不需要也不应该**知道口令 —— 他能拿到的是「签好名的 APK」
 #
 # 为什么放在 Environment `apk-signing` 下：Secret 只有该 Environment 批准后才可用，
@@ -48,12 +49,12 @@ jobs:
       # 直接走下去会得到「未签名/错签名」的包，那正是最坏的结果。
       - name: 预检签名 Secret
         env:
-          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
-          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_STORE_PASSWORD }}
         run: |
           set -euo pipefail
-          [ -n "${KS_B64:-}" ] || { echo "::error::缺少 Secret ANDROID_KEYSTORE_B64（keystore 整文件的 base64）"; exit 1; }
-          [ -n "${KS_PASS:-}" ] || { echo "::error::缺少 Secret ANDROID_KEYSTORE_PASSWORD"; exit 1; }
+          [ -n "${KS_B64:-}" ] || { echo "::error::缺少 Secret ANDROID_KEYSTORE_BASE64（keystore 整文件的 base64）"; exit 1; }
+          [ -n "${KS_PASS:-}" ] || { echo "::error::缺少 Secret ANDROID_KEYSTORE_STORE_PASSWORD"; exit 1; }
           echo "签名 Secret 已就位（长度 $(printf %s "$KS_B64" | wc -c) / 口令长度 ${#KS_PASS}）"
 
       - name: pnpm
@@ -96,9 +97,10 @@ jobs:
       # 文件权限 600，脚本结束在 always() 步骤里删除。
       - name: 注入签名材料
         env:
-          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
-          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_STORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEYSTORE_KEY_ALIAS }}
+          KS_KEYPASS: ${{ secrets.ANDROID_KEYSTORE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           umask 077
@@ -112,7 +114,7 @@ jobs:
           storeFileRelease=$KS
           storePasswordRelease=$KS_PASS
           keyAliasRelease=$ALIAS
-          keyPasswordRelease=$KS_PASS
+          keyPasswordRelease=${KS_KEYPASS:-$KS_PASS}
           EOF
           chmod 600 android/keystore/keystore.properties
           echo "已写入 keystore（alias=$ALIAS），路径在 \$RUNNER_TEMP，不入 artifact"

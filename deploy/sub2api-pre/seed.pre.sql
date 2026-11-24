@@ -14,20 +14,8 @@ BEGIN;
 INSERT INTO settings (key, value, updated_at) VALUES ('password_reset_enabled', 'true', now())
   ON CONFLICT (key) DO UPDATE SET value = 'true', updated_at = now();
 
--- 2) SMTP 指向本机收信服务（host 是唯一必填项，用户名/口令留空 = 不鉴权）
-INSERT INTO settings (key, value, updated_at) VALUES
-  ('smtp_host',      '127.0.0.1',                    now()),
-  ('smtp_port',      '1025',                         now()),
-  ('smtp_username',  '',                             now()),
-  ('smtp_password',  '',                             now()),
-  ('smtp_from',      'verify@notify.nekoai.com.cn',  now()),
-  ('smtp_from_name', '鲸落(预发布)',                  now()),
-  ('smtp_use_tls',   'false',                        now())
-  ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();
-
--- 3) 关掉两条 API 发信通道，强制走 SMTP（否则验证码会被 SES / 阿里云 DM 真发出去）
-UPDATE settings SET value = 'false', updated_at = now() WHERE key IN ('ses_enabled', 'aliyun_dm_enabled');
-UPDATE settings SET value = '',      updated_at = now() WHERE key = 'email_verify_provider';
+-- 2/3) 邮件通道**不在这里**：真发还是本地 sink 由 `reset-pre.sh` 按参数应用
+--      `seed.mail.real.sql` / `seed.mail.sink.sql`（预发布默认**真发**）。
 
 -- 4) 默认分组的平台：迁移默认给的是 `anthropic`，而生产 group 1 是 `openai`。
 --    不一致的后果是**静默 503**：账号的 platform 是 openai，分组却要 anthropic →

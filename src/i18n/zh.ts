@@ -426,7 +426,10 @@ export const zh = {
   uploadFailedNetwork: '附件「{name}」上传失败：网络异常，请重试',
   uploadFailedUnknown: '附件「{name}」上传失败',
   /** #379：消息里那条持久提示（不是 toast）——说的是「哪几个附件没跟着发」，不是「发送失败」 */
-  attachUnavailableSent: '{names} 在本机不可用（导入的历史会话只保留文件信息），本条已按纯文字发送',
+  attachUnavailableSent: '附件详情 · 已跳过 {count} 个',
+  attachAvailableList: '发送时可用（{count}）',
+  attachMissingList: '缺少原件，已跳过（{count}）',
+  attachOlderNotice: '此历史消息仅记录了跳过的附件。',
   /** #379：附件全被跳过、又没有文字可发时，明说而不是发一条空消息 */
   attachUnavailableNoText: '附件在本机不可用，且这条消息没有文字内容，未发送',
   /** 该渠道没有 Files API（#303）：入口禁用时的提示，以及上传路径走到这里时的失败原因 */

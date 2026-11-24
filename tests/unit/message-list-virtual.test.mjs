@@ -33,13 +33,14 @@ const makeMessages = (count) =>
     role: index % 2 === 0 ? 'user' : 'assistant',
   }))
 
-const render = ({ count = 500, measured = [], scrollTop = 0, viewport = 800, anchorEnd = false } = {}) => {
+const render = ({ retainedIds, count = 500, measured = [], scrollTop = 0, viewport = 800, anchorEnd = false } = {}) => {
   const items = makeMessages(count)
   // 实测高度表与 items 对齐，没实测的位置留 undefined
   const aligned = items.map((_, index) => measured[index])
   const html = renderToStaticMarkup(
     createElement(VirtualRows, {
       items,
+      retainedIds,
       measured: aligned,
       scrollTop,
       viewport,
@@ -135,4 +136,15 @@ test('流式增长：最后一条变大后总高度跟着变大，前后不重�
   })
   assert.equal(end, 500, '贴底时窗口要到最后一条')
   assert.equal(bottomPad, 0, '撑开后的最后一条下方不能留占位，否则贴底会有一段空白')
+})
+
+test('保留窗口两侧正在编辑的行，其他远处行继续虚拟化，列表总高度不变', () => {
+  const measured = Array.from({ length: 500 }, () => 100)
+  const options = { measured, scrollTop: 25000 }
+  const normal = render(options)
+  const retainedIds = new Set(['m4', 'm250', 'm497'])
+  const pinned = render({ ...options, retainedIds })
+  assert.deepEqual(pinned.ids, ['m4', ...normal.ids, 'm497'])
+  const spacers = [...pinned.html.matchAll(/style="height:(\d+)px"/g)]
+  assert.equal(spacers.reduce((sum, match) => sum + Number(match[1]), 0) + pinned.mounted * 100, 50000)
 })

@@ -50,6 +50,7 @@ export const UserMessage = memo(function UserMessage({
   busy,
   versions,
   onSelectVersion,
+  onEditingChange,
 }: {
   sessionId: string
   message: UserMessageType
@@ -59,6 +60,7 @@ export const UserMessage = memo(function UserMessage({
   isLast: boolean
   busy: boolean
   versions: MessageVersions
+  onEditingChange: (id: string, editing: boolean) => void
   onSelectVersion: SelectMessageVersion
 }) {
   const t = useTranslate()
@@ -84,6 +86,15 @@ export const UserMessage = memo(function UserMessage({
   const documents = files.filter((file) => isAttachmentRefId(file.id))
   const uploads = files.filter((file) => !isAttachmentRefId(file.id))
   const canSend = !busy && (draft.trim() !== '' || files.length > 0)
+
+  // 编辑期间让虚拟列表保留这条消息；结束编辑或离开分支时解除保留。
+  useLayoutEffect(() => {
+    if (!editing) {
+      return
+    }
+    onEditingChange(message.id, true)
+    return () => onEditingChange(message.id, false)
+  }, [editing, message.id, onEditingChange])
 
   useLayoutEffect(() => {
     const textarea = textareaRef.current

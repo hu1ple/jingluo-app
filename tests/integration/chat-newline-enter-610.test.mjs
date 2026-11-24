@@ -28,7 +28,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { DB_NAME, clearAllStores, ensureChatDb, writeSessions } from '../helpers/chat-db.mjs'
-import { serveDir, verifyDist } from '../helpers/env.mjs'
+import { consumeApiV1Prefix, consumeBaseUrl } from '../../scripts/lib/endpoints.mjs'
+import { readBuildInfo, serveDir, verifyDist } from '../helpers/env.mjs'
 import { assertNoEgress, installEgressGate } from '../helpers/helpers.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -203,7 +204,17 @@ const server = await serveDir(DIST, { label: '被测产物' })
  * #686：出站总闸，**必须在每个 page 的 `page.goto` 之前**装上（首屏请求一旦发出去就收不回来）。
  * 本用例只碰 IndexedDB fixture 与被测产物自己的静态服务；白名单只写它的 origin（精确 host:port）。
  */
-const gate = (page) => installEgressGate(page, { appUrl: server.url, allowHosts: [new URL(server.url).host] })
+const consume = new URL(readBuildInfo(DIST)?.endpoints?.consume?.baseUrl ?? consumeBaseUrl)
+const gate = (page) => installEgressGate(page, {
+  appUrl: server.url,
+  allowHosts: [new URL(server.url).host],
+  stubs: [{
+    name: 'settings-public',
+    host: consume.host,
+    path: consume.pathname.replace(/\/$/, '') + consumeApiV1Prefix + '/settings/public',
+    respond: () => ({ status: 200, body: '{}' }),
+  }],
+})
 
 const seed = async (context) => {
   const seeder = await context.newPage()
@@ -400,6 +411,26 @@ const scenario = async ({ label, width, height, isMobile }) => {
     JSON.stringify((await textarea.inputValue())?.slice(0, 16))
   )
   await page.screenshot({ path: path.join(SHOT_DIR, `${SHOT_PREFIX}-${label}.png`) })
+
+  // 滚出渲染窗口再返回，未提交的修改、光标和原编辑节点都应保留。
+  const editor = await textarea.elementHandle()
+  const from = await page.evaluate(() => {
+    const scroller = window.__probe.scroller()
+    const start = scroller.scrollTop
+    scroller.scrollTop = start > window.__probe.maxScrollTop() / 2 ? 0 : scroller.scrollHeight
+    return start
+  })
+  await waitScrollStable(page)
+  expect(Math.abs(await page.evaluate(() => window.__probe.scrollTop()) - from) > 1000,
+    `[${label}] 编辑中的消息确实滚出了缓冲区`)
+  await page.evaluate((top) => { window.__probe.scroller().scrollTop = top }, from)
+  await waitScrollStable(page)
+  const retained = await editor.evaluate(el => ({
+    connected: el.isConnected, value: el.value, caret: el.selectionStart, focused: document.activeElement === el,
+  }))
+  expect(retained.connected && retained.focused && retained.value === value && retained.caret === caret,
+    `[${label}] 滑远后返回仍能在原光标继续编辑`, JSON.stringify(retained))
+  await editor.dispose()
 
   // 退出编辑，避免影响后面的滚动测量
   await page.keyboard.press('Escape')

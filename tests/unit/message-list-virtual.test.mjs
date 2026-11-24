@@ -33,7 +33,7 @@ const makeMessages = (count) =>
     role: index % 2 === 0 ? 'user' : 'assistant',
   }))
 
-const render = ({ retainedIds, count = 500, measured = [], scrollTop = 0, viewport = 800, anchorEnd = false } = {}) => {
+const render = ({ retainedIds, measureAnchor, estimate, count = 500, measured = [], scrollTop = 0, viewport = 800, anchorEnd = false } = {}) => {
   const items = makeMessages(count)
   // 实测高度表与 items 对齐，没实测的位置留 undefined
   const aligned = items.map((_, index) => measured[index])
@@ -41,6 +41,8 @@ const render = ({ retainedIds, count = 500, measured = [], scrollTop = 0, viewpo
     createElement(VirtualRows, {
       items,
       retainedIds,
+      measureAnchor,
+      estimate,
       measured: aligned,
       scrollTop,
       viewport,
@@ -147,4 +149,16 @@ test('保留窗口两侧正在编辑的行，其他远处行继续虚拟化，�
   assert.deepEqual(pinned.ids, ['m4', ...normal.ids, 'm497'])
   const spacers = [...pinned.html.matchAll(/style="height:(\d+)px"/g)]
   assert.equal(spacers.reduce((sum, match) => sum + Number(match[1]), 0) + pinned.mounted * 100, 50000)
+})
+
+test('回填高度改变整段占位时，窗口先保留眼前的消息，并允许继续滚动', () => {
+  const measureAnchor = { index: 400, id: 'm400', top: 400 * 508 }
+  const options = { count: 1280, estimate: 483, scrollTop: measureAnchor.top + 20 }
+  assert.ok(!render(options).ids.includes('m400'))
+  assert.ok(render({ ...options, measureAnchor }).ids.includes('m400'))
+  const moved = render({ ...options, measureAnchor, scrollTop: options.scrollTop + 483 * 12 })
+  assert.ok(moved.ids.includes('m412'))
+  assert.ok(!moved.ids.includes('m400'))
+  const stale = { ...measureAnchor, id: 'removed' }
+  assert.deepEqual(render({ ...options, measureAnchor: stale }).ids, render(options).ids)
 })

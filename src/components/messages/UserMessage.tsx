@@ -60,7 +60,7 @@ export const UserMessage = memo(function UserMessage({
   isLast: boolean
   busy: boolean
   versions: MessageVersions
-  onEditingChange: (id: string, editing: boolean) => void
+  onEditingChange: (id: string, editing: boolean, textarea?: HTMLTextAreaElement | null) => void
   onSelectVersion: SelectMessageVersion
 }) {
   const t = useTranslate()
@@ -92,7 +92,7 @@ export const UserMessage = memo(function UserMessage({
     if (!editing) {
       return
     }
-    onEditingChange(message.id, true)
+    onEditingChange(message.id, true, textareaRef.current)
     return () => onEditingChange(message.id, false)
   }, [editing, message.id, onEditingChange])
 

@@ -1,7 +1,6 @@
 import type { TranslationKey } from '../../i18n/index.js'
 import { isRetryableStatus, type ApiErrorCondition } from '../api/errors.js'
 import { shouldRetryStreamTimeout } from './timeoutPolicy.js'
-
 /**
  * 报错的**表驱动分类矩阵**（#771）。
  *
@@ -48,6 +47,7 @@ export type ErrorNoticeId =
   | 'serverBusy'
   | 'contentFilter'
   | 'modelInvalid'
+  | 'upstreamRefusal'
   | 'badRequest'
   | 'contextLimit'
   | 'upstreamRejected'
@@ -84,6 +84,33 @@ export type ErrorNoticeContext = {
 /** 行上附带的入口：文案里说「去某处」，界面上就得有一个能点的东西 */
 export type ErrorNoticeAction = 'apiKey' | 'topUp' | 'settings'
 
+/**
+ * `badRequest` 那一档「要不要给『打开设置』」的判据（#771 的后继收紧）。
+ *
+ * 只有**真的拿到参数证据**才给这个按钮 —— 否则一条「上游拒答 / 上游只说了句人话」
+ * 的 400 会把用户引去改模型与接口地址，而那里根本没有要改的东西：
+ * 1. `parseErrorField` 从原文里点出了**具体字段**（`max_tokens` / `messages.0.content`）；
+ * 2. 或上游 code 本身就在说「哪个字段缺了 / 哪里不合法」
+ *    （`invalid_parameter` / `missing_required_parameter` / `invalid_request_body`）。
+ *
+ * 注意**故意不收** `invalid_request_error`：官方端点所有 400 / 422 的 `error.type` 恒为它，
+ * 拿它当证据等于「所有参数错误都给设置入口」，正是要收紧的那条路。
+ */
+export const PARAM_EVIDENCE_CODES: readonly string[] = [
+  'invalid_parameter',
+  'missing_required_parameter',
+  'invalid_request_body',
+]
+
+/** 有没有「够具体」的参数证据：字段名，或点名参数层的上游 code */
+const hasParamEvidence = (ctx: ErrorNoticeContext): boolean => {
+  if (typeof ctx.field === 'string' && ctx.field.trim().length > 0) {
+    return true
+  }
+  const code = ctx.upstreamCode?.trim().toLowerCase() ?? ''
+  return PARAM_EVIDENCE_CODES.includes(code)
+}
+
 export type ErrorNoticeRow = {
   id: ErrorNoticeId
   /** 判据的人话版本（逐行 review 用；机器判据在 `match` 里） */
@@ -98,7 +125,11 @@ export type ErrorNoticeRow = {
   retryable: boolean | ((ctx: ErrorNoticeContext) => boolean)
   /** 是否显示「重新生成」按钮：终态错误（Key / 额度 / 参数 / 内容拦截）点了也一样 */
   regenerate: boolean | ((ctx: ErrorNoticeContext) => boolean)
-  action?: ErrorNoticeAction
+  /**
+   * 这一档要不要给操作入口。写成函数就表示**同一档里按证据分情况**：
+   * `badRequest` 只有在 `hasParamEvidence` 成立时才给「打开设置」，否则返回 undefined。
+   */
+  action?: ErrorNoticeAction | ((ctx: ErrorNoticeContext) => ErrorNoticeAction | undefined)
   /**
    * 这一行的文案带占位符，取值只有**渲染时**才有（上游点名的字段、可用模型列表、诊断短码）。
    * 这类行不落盘 `localMessage` —— 塞一个不带参数 key 进消息里，界面就会显示未替换的模板
@@ -133,6 +164,7 @@ const selfEvident = (ctx: ErrorNoticeContext): boolean =>
  * | 429 限流 | `status=429` | `replyRateLimited` | ✅ | ✅ |
  * | 5xx / 502 / 504 | `status>=500` | `replyServerBusy` | ✅ | ✅ |
  * | 余额不足 | `condition=insufficientBalance` | `replyInsufficientBalance` | ❌ | ❌ |
+ * | 上游拒答内容 | `condition=upstreamRefusal` | `replyUpstreamRefusal` | ❌ | ✅（无「打开设置」） |
  * | 参数 / 模型名错 | `replyBadRequest` / `replyModelInvalid` / `replyParamInvalid` | 同左 | ❌ | ❌ |
  * | 内容拦截 | `condition=contentFilter` | `replyContentFiltered` | ❌ | ❌ |
  * | 空响应 | `code=stream_empty` / `condition=emptyStream` | `replyEmptyStream` | ✅ | ✅ |
@@ -279,6 +311,18 @@ export const ERROR_NOTICE_ROWS: readonly ErrorNoticeRow[] = [
     regenerate: false,
   },
   {
+    id: 'upstreamRefusal',
+    criterion: 'condition=upstreamRefusal（上游拒答这条提问的内容：400/422 + 拒答原文，或 code=upstream_refusal）',
+    match: (ctx) => ctx.condition === 'upstreamRefusal',
+    key: 'replyUpstreamRefusal',
+    // 同一条内容重发还是被拒 —— **无人值守**的重试没有意义（自动重试口径同此）
+    retryable: false,
+    // 但「重新生成」有意义：换个说法 / 换条池子再试，是用户在主动改这一次请求
+    regenerate: true,
+    // **刻意不给 action:'settings'**：这是一次内容拒绝，与用户的模型 / 接口配置无关，
+    // 「打开设置」只会把人引去乱改配置（这条正是本次修复的核心）
+  },
+  {
     id: 'badRequest',
     criterion: 'condition=badRequest / tooLarge 或 status=400 / 413 / 422（参数不合法）',
     match: (ctx) =>
@@ -290,7 +334,9 @@ export const ERROR_NOTICE_ROWS: readonly ErrorNoticeRow[] = [
     key: (ctx) => (ctx.field ? 'replyParamInvalid' : 'replyBadRequest'),
     retryable: false,
     regenerate: false,
-    action: 'settings',
+    // 「打开设置」只在真有参数证据时给（字段名 / 点名参数层的 code）：没有证据的 400
+    // 说「去改设置」是误导，那种情况只留「复制诊断信息」。
+    action: (ctx) => (hasParamEvidence(ctx) ? 'settings' : undefined),
     // 文案里的 {status} / {field} 只有渲染时才知道（#347 / #353）
     paramsFromRenderer: true,
   },
@@ -354,4 +400,16 @@ export const errorNoticeRetryable = (ctx: ErrorNoticeContext): boolean => {
 export const errorNoticeRegenerate = (ctx: ErrorNoticeContext): boolean => {
   const row = pickErrorNotice(ctx)
   return typeof row.regenerate === 'function' ? row.regenerate(ctx) : row.regenerate
+}
+
+/**
+ * 这一档该带哪个操作入口（没有就是 undefined）。
+ *
+ * 为什么要问表而不是在 `describe.ts` 里写死：`badRequest` 现在**按证据分情况**
+ * （有字段名才给「打开设置」），这份判据必须和文案 / 可重试同一处维护，
+ * 否则「文案说去改设置、界面上却没按钮」或反过来又会分叉。
+ */
+export const errorNoticeAction = (ctx: ErrorNoticeContext): ErrorNoticeAction | undefined => {
+  const row = pickErrorNotice(ctx)
+  return typeof row.action === 'function' ? row.action(ctx) : row.action
 }

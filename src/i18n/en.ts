@@ -182,9 +182,19 @@ export const en = {
   replyModelInvalidNoModels: 'not listed by the upstream',
   /** The reply did not record a model name (imported history, #339) */
   replyModelUnknownName: 'not recorded',
-  /** Other rejected requests (#347): 400 / 422 where the upstream named no field */
+  /**
+   * The upstream refused the **content** of this request: the model will not answer it,
+   * which has nothing to do with our parameters or the user's settings.
+   */
+  replyUpstreamRefusal:
+    'The upstream model refused this request — it\'s not a problem with your settings. Try rephrasing or regenerate.',
+  /**
+   * Other rejected requests (#347): 400 / 422 where the upstream named no field.
+   * Neutral wording on purpose: the upstream only said "not this request", so we must not
+   * claim it is the user's configuration — the same 400 also covers content refusals.
+   */
   replyBadRequest:
-    'Invalid request parameters ({status}): the upstream refused this request (not a network problem, not an outage on our side). Retrying will not help — check the model and endpoint settings (do not retry).',
+    'Invalid request parameters ({status}): the upstream refused this request (not a network problem, not an outage on our side). It did not name a specific field, and retrying will not help (do not retry) — tap “Copy diagnostics” and send it to us.',
   /** Invalid field, and the upstream named which one (#347 / #353) */
   replyParamInvalid:
     'Invalid request parameters ({status}): the upstream rejected the field “{field}” — this request was refused upstream (not a network problem, not an outage on our side). Retrying will not help (do not retry).',

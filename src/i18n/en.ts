@@ -984,6 +984,11 @@ export const en = {
   /** Shown on the sign-in card once the reset flow finished (shared by AuthGate notice and the settings card) */
   settingsAuthResetDone: 'Password reset. Sign in with your new password.',
   /**
+   * The line under the sign-up card when `settings/public` could not be read (tap to retry).
+   * Must NOT say "sign-up is not open" — "we failed to read the flag" is not "the server turned sign-up off".
+   */
+  settingsAuthFlagsRetry: 'Could not load feature flags. Tap to retry.',
+  /**
    * Demo banner: the user MUST be able to tell that no real email is sent (only appears when the
    * backend's code mode is disabled or unreachable). The second half is mandatory — without it
    * people wait for an email that will never arrive.

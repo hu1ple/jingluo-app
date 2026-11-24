@@ -83,11 +83,14 @@ test('③ 开关来源：只认明确的 affiliate_enabled:false；没读到 / �
   })
   await loadAuthFlags()
   assert.equal(closed(), false, '读取抛错 → 不算关闭')
-  // 生产 reader（`createPublicSettingsReader`）读失败时返回 null、不抛错 —— loadAuthFlags 会落 loaded:true + 全 false：
-  // 这正是「settings/public 偶发超时」的真实形状，产物级曾因此误藏表单（`!affiliateEnabled` 的写法会在这里红）
+  // 生产 reader（`createPublicSettingsReader`）读失败时返回 null、不抛错 —— 这正是「settings/public 偶发超时」的真实形状。
+  // 2026-11-24 三态改造后它落 `registration: 'unknown'` + `loaded: false`（旧版落 loaded:true + 全 false，
+  // 那正是「一次没读成功 = 服务端说关闭」的根因，见 `src/services/auth/flags.ts` 文件头第 3 条）。
+  // 对邀请面板没有影响：`affiliateDisabled` 只认**明确的** false，读不到一律 false（`!affiliateEnabled` 的写法会在这里红）
   setPublicSettingsReader(async () => null)
   await loadAuthFlags()
-  assert.equal(useAuthFlags.getState().loaded, true, '前提：null 读取也会 loaded=true')
+  assert.equal(useAuthFlags.getState().registration, 'unknown', '前提：null 读取 → 三态 unknown（没读到）')
+  assert.equal(useAuthFlags.getState().loaded, false, '前提：没读到 → loaded=false（不再假装「服务端说了 false」）')
   assert.equal(closed(), false, '读取失败返回 null → 不算关闭，表单照常')
   setPublicSettingsReader(async () => ({ data: { affiliate_enabled: false, registration_enabled: true } }))
   await loadAuthFlags()

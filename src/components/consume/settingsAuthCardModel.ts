@@ -23,11 +23,18 @@
  *     这类具体的话，仍然不是「未知错误」），也**不**追加重置未开通 —— 网络问题不等于功能没开。
  *  3. **不弹第二层**（本卡文件头的老规矩）：忘记密码是**卡内的一个小页**（`step: 'forgot'`），
  *     不是盖在设置弹层上的第二层 dialog。
+ *
+ * 另外一条（2026-11-24 线上事故）：**「没读到开关」不等于「服务端关了注册」**。
+ * 注册闸门是三态（{@link registrationGateOfContext}）：只有 `'disabled'`（服务端真的回了
+ * `registration_enabled: false`）才在 {@link submitAuthCard} 里本地拦下并显示
+ * `sub2authRegistrationDisabled`；`'unknown'` 时注册照常提交，由服务端判（真关了它回
+ * `403 REGISTRATION_DISABLED`）。视图侧只多一行「功能开关读取失败，点此重试」。
  */
 
 import { createElement, type ReactNode } from 'react'
 
 import type { TranslationKey } from '../../i18n/index.js'
+import type { RegistrationGate } from '../../services/auth/flags.js'
 import type { ConsumeCallResult } from '../../services/consume/index.js'
 import { createInFlightLatch, rateLimitSecondsOf, type InFlightLatch } from '../auth/submitGuard.js'
 import { PasswordField, passwordToggleLabelKey } from './passwordInput.js'
@@ -77,7 +84,11 @@ export type AuthCardState = {
   confirmTouched: boolean
   /** 提交过至少一次：提交前的校验结果必须显示出来 */
   submitAttempted: boolean
-  /** 表单级提示（如「注册暂未开放」） */
+  /**
+   * 表单级提示（如「注册暂未开放」）。
+   * 那句话**只有**注册闸门 `'disabled'`（服务端真的回了 `false`）才会走到这里 —— 见
+   * `registrationGateOfContext` 与文件头最后一段；`'unknown'` 时不许显示它。
+   */
   notice: AuthCardNotice
   /**
    * 提交被 429 挡回来之后的冷却剩余秒数（`0` = 没在冷却）。
@@ -268,10 +279,48 @@ export type AuthCardSubmitContext = {
    * 容器给了就用容器的；没给（裸 Node 单测 / 别的调用点）用模块级兜底闩，**并发两次调用一定挡得住**。
    */
   latch?: InFlightLatch
-  /** `settings/public` 是否已经拉到（没拉到时不做本地拦截，交给服务端判 —— #484 §3.1d） */
-  registrationLoaded: boolean
-  registrationEnabled: boolean
+  /**
+   * **注册闸门三态**（`src/services/auth/flags.ts` 的 `RegistrationGate`）—— 唯一的拦截判据：
+   * 只有 `'disabled'`（服务端真的回了 `registration_enabled: false`）才本地拦；
+   * `'unknown'`（没读到 / 重试耗尽 / 形状不认识）**一律不拦**，交给服务端判（#484 §3.1d）。
+   */
+  registration?: RegistrationGate
+  /**
+   * @deprecated 旧的两布尔口径，只为既有调用点 / 既有单测保留（新代码请传 `registration`）。
+   * 语义仍然是旧的：只有「读到了（`true`）且读到的是关」才等价于 `'disabled'`；
+   * 其余组合（含没读到）一律 `'unknown'` —— 那次线上事故正是把「没读到」错当成了「关」。
+   */
+  registrationLoaded?: boolean
+  registrationEnabled?: boolean
 }
+
+/**
+ * 上下文 → 注册闸门三态（**唯一**读法，`submitAuthCard` 与调用方都走它，避免两处各写一套判据）。
+ *
+ * 优先级：显式的 `registration` 三态 > 旧的两布尔推导。旧口径的映射刻意保守：
+ * 「没读到」（`registrationLoaded !== true`）永远落 `'unknown'`，不会被当成关闭。
+ */
+export const registrationGateOfContext = (ctx: AuthCardSubmitContext): RegistrationGate => {
+  if (ctx.registration !== undefined) {
+    return ctx.registration
+  }
+  if (ctx.registrationLoaded === true && ctx.registrationEnabled === false) {
+    return 'disabled'
+  }
+  if (ctx.registrationEnabled === true) {
+    return 'enabled'
+  }
+  return 'unknown'
+}
+
+/**
+ * flags store 的当前状态 → 卡片判据。
+ *
+ * 只做一件事：把 `registration` 三态端出来。做成函数是为了让容器与单测**共用同一个映射**
+ * （如果哪天 store 的字段名变了，这里一处报错，而不是「单测绿、真机红」）。
+ */
+export const registrationGateOfFlags = (flags: { registration: RegistrationGate }): RegistrationGate =>
+  flags.registration
 
 /**
  * 模块级兜底闩：容器没注入自己的 ref 时用它。
@@ -329,7 +378,9 @@ const submitAuthCardLocked = async (
     if (state.password !== state.confirmPassword) {
       return [{ type: 'submit-blocked' }]
     }
-    if (ctx.registrationLoaded && !ctx.registrationEnabled) {
+    // 只有「服务端真的说了关」才本地拦；`unknown` 交给服务端（真关了它会回 403 REGISTRATION_DISABLED，
+    // 那句文案由 transport 的 AUTH_CODE_MESSAGE_KEYS 给）。把「没读到」拦在这里，就是那次事故。
+    if (registrationGateOfContext(ctx) === 'disabled') {
       return [{ type: 'notice', notice: 'sub2authRegistrationDisabled' }]
     }
     const verifyCode = state.verifyCode.trim()
@@ -434,8 +485,18 @@ export type SettingsAuthCardViewProps = {
   countdownRateLimited?: boolean
   /** 登录 / 注册失败的文案 key（来自 store 的 `error.messageKey`） */
   errorKey: TranslationKey | null
-  registrationLoaded: boolean
-  registrationEnabled: boolean
+  /**
+   * 注册闸门三态（`src/services/auth/flags.ts`）。视图**只用它决定提示**，不拿它拦人 ——
+   * 拦不拦是 `submitAuthCard` 的事，且只有 `'disabled'` 才拦。
+   */
+  registrationGate: RegistrationGate
+  /**
+   * 开关「试过了但没拿到」（重试耗尽 / 形状不认识）。为 true 时注册照常可点，
+   * 底部多一行「功能开关读取失败，点此重试」—— 而不是假装「注册未开放」。
+   */
+  flagsReadFailed: boolean
+  /** 点那一行提示时重新读一次开关（容器接线到 `loadAuthFlags`） */
+  onRetryFlags: () => void
   onEvent: (event: AuthCardEvent) => void
   onSubmit: () => void
   onSendCode: () => void
@@ -727,6 +788,20 @@ export const SettingsAuthCardView = (props: SettingsAuthCardViewProps): ReactNod
           { className: c.authNotice, role: 'status', 'data-testid': 'settings-auth-notice' },
           t(state.notice)
         ),
+    // 开关没读到（`unknown` + 试过）：**不**冒充「注册未开放」，只说「读取失败，点此重试」。
+    // 这一行只在注册分段出现 —— 登录不受注册开关影响，别在登录卡上加噪音。
+    registering && props.registrationGate === 'unknown' && props.flagsReadFailed
+      ? createElement(
+          'button',
+          {
+            type: 'button',
+            className: c.authLinkDim,
+            'data-testid': 'settings-auth-flags-retry',
+            onClick: props.onRetryFlags,
+          },
+          t('settingsAuthFlagsRetry')
+        )
+      : null,
     // #608 的口子：不登录也能用，直接去填 API Key
     createElement(
       'button',

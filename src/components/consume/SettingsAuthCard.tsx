@@ -22,8 +22,10 @@
  *  2. **状态与表单逻辑不另写一套**：动作全部走既有的 `useAuthStore`（`login` / `register` /
  *     `sendCode`），失败文案用 store 给的 `error.messageKey`，不写「未知错误」。
  *     表单状态机与视图在 `settingsAuthCardModel.ts`（裸 Node 可渲染，见那边的文件头）；
- *  3. **开关只认服务端**：`registration_enabled !== true` 时提交注册会被拦下并给一句文案（#484 §3.1d），
- *     不在这里本地兜一个「注册中不可用」的假成功。
+ *  3. **开关只认服务端，且「没读到」≠「关了」**：注册闸门是三态（`src/services/auth/flags.ts` 的
+ *     `RegistrationGate`）。只有 `'disabled'`（服务端真的回了 `registration_enabled: false`）时提交注册
+ *     才会被本地拦下并给一句文案；`'unknown'`（那次 502 / 超时 / 空壳回包）时注册**照常提交**，
+ *     由服务端判（真关了它回 `403 REGISTRATION_DISABLED`），卡片底部只多一行「功能开关读取失败，点此重试」。
  *
  * 本文件只做三件事：订阅 store、跑计时器、把「事件 → reducer」「点击 → 发请求」接上。
  */
@@ -41,6 +43,7 @@ import { createInFlightLatch, isRateLimited, rateLimitSecondsOf } from '../auth/
 import {
   initialAuthCardState,
   reduceAuthCard,
+  registrationGateOfFlags,
   SettingsAuthCardView,
   submitAuthCard,
   submitForgotPassword,
@@ -84,11 +87,29 @@ export const SettingsAuthCard = ({ consume, onSkip }: SettingsAuthCardProps) => 
   useEffect(() => {
     alive.current = true
     // 注册入口的显隐只看服务端开关（`settings/public`）。`main.tsx` 启动时已经拉过一次，
-    // 这里再拉一次只是让这张卡「自己也能独立成立」（幂等，失败落保守默认：只显示登录）。
+    // 这里再拉一次只是让这张卡「自己也能独立成立」（幂等；读不到落 `unknown`：注册照常可点）。
     void loadAuthFlags()
     return () => {
       alive.current = false
     }
+  }, [])
+
+  /**
+   * 「功能开关读取失败，点此重试」的接线。
+   *
+   * 为什么需要它：`unknown` 时我们**不**本地拦注册（交给服务端），但用户仍可能想再读一次开关
+   * （比如那波 502 已经过去了）—— 没有这个口子的话，只能靠重进设置页。`ref` 挡住连点：
+   * `loadAuthFlags` 自己会重试 2 次，连点会叠出 6 个请求。
+   */
+  const retryingFlags = useRef(false)
+  const retryFlags = useCallback(() => {
+    if (retryingFlags.current) {
+      return
+    }
+    retryingFlags.current = true
+    void loadAuthFlags().finally(() => {
+      retryingFlags.current = false
+    })
   }, [])
 
   // 倒计时：每秒减一，到 0 自动停（组件卸载后不再 setState）
@@ -145,13 +166,13 @@ export const SettingsAuthCard = ({ consume, onSkip }: SettingsAuthCardProps) => 
     run(() =>
       submitAuthCard(source, state, {
         submitting,
-        registrationLoaded: flags.loaded,
-        registrationEnabled: flags.registrationEnabled,
+        // 三态判据：只有 `disabled`（服务端真的回了 false）才本地拦；`unknown` 交给服务端
+        registration: registrationGateOfFlags(flags),
         // 主防线：同一 tick 的第二次点击在模型里被这只闩挡掉（模块级还有一层兜底）
         latch: submitLatch.current,
       })
     )
-  }, [run, source, state, submitting, flags.loaded, flags.registrationEnabled])
+  }, [run, source, state, submitting, flags])
 
   /**
    * 发验证码。两条链路的口气不同：发出去 → 60s 界面节奏（`sub2authCodeSent`）；
@@ -229,8 +250,9 @@ export const SettingsAuthCard = ({ consume, onSkip }: SettingsAuthCardProps) => 
       // 429 的文案**不上屏**：store 把它归一成「登录失败，请重试」，而这是一句「太频繁」的冷却提示；
       // 一起给会把「等一等」说成「出错了」。冷却结束后也不该再冒出来（同一次失败，同一句话）。
       errorKey={error === null || isRateLimited(error) ? null : error.messageKey}
-      registrationLoaded={flags.loaded}
-      registrationEnabled={flags.registrationEnabled}
+      registrationGate={registrationGateOfFlags(flags)}
+      flagsReadFailed={flags.readFailed}
+      onRetryFlags={retryFlags}
       onEvent={dispatch}
       onSubmit={submit}
       onSendCode={requestCode}

@@ -264,6 +264,20 @@ export const zh = {
   settingsRowHelpFeedback: '帮助与反馈',
   settingsAnnouncementEmpty: '暂无公告',
   settingsAnnouncementMarkAllRead: '一键已读',
+  // 公告栏接上 mock 数据后的新词条（列表 / 红点 / 首次弹窗）。
+  // 公告**标题与正文**是产品方指定的中文内容，直接写在 `services/announcements/mock.ts` 里，
+  // 不进这张表；这里只有界面标签。
+  settingsAnnouncementUnread: '未读',
+  settingsAnnouncementUnreadCount: '{count} 条未读公告',
+  settingsAnnouncementImportant: '重要公告',
+  settingsAnnouncementExpand: '展开全文',
+  settingsAnnouncementCollapse: '收起',
+  settingsAnnouncementPopupDismiss: '知道了',
+  // 相对时间（`components/announcements/relativeTime.ts` 按档位挑一条）
+  announceTimeJustNow: '刚刚',
+  announceTimeMinutesAgo: '{count} 分钟前',
+  announceTimeHoursAgo: '{count} 小时前',
+  announceTimeDaysAgo: '{count} 天前',
   apiKeyStart: '输入 API Key 开始使用',
   apiKeyEdit: '修改 API Key',
   apiKeyPlaceholder: '请输入 API Key',
@@ -812,7 +826,7 @@ export const zh = {
   // 「关于」组里的开发团队社媒渠道（第六轮）：抖音号只是这个渠道的具体值
   settingsSocialLabel: '开发团队社媒',
   settingsSocialFreeNotice:
-    '本软件本体完全免费，不会以任何名义收费；如有人向你收费，请通过这个渠道联系我们举报。',
+    '本软件的安装完全免费。如有人向你收取下载费用或安装费用，请通过这个渠道联系我们举报。',
   settingDouyinCopyAria: '复制抖音号',
   settingDouyinCopied: '抖音号已复制',
   oursErrCustomerNeedsKey:

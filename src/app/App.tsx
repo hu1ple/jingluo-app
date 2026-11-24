@@ -21,6 +21,8 @@ import { useAuthStatus } from '../services/auth/useAuthStatus.js'
 import { useApiConfig } from '../services/api/apiConfig.js'
 import { shouldSyncManagedKey } from '../services/api/managedKey.js'
 import { SettingsDialog } from '../components/settings/SettingsDialog.js'
+import { AnnouncementPopup } from '../components/announcements/AnnouncementPopup.js'
+import { applyResetFromLocation } from '../services/announcements/store.js'
 import { Toast } from '../components/base/Toast.js'
 import { showToast } from '../components/base/toastState.js'
 import { initChatBackground, useChatBackground } from '../services/chat/background.js'
@@ -32,6 +34,15 @@ import { CollapsedSider } from '../components/sider/CollapsedSider.js'
 import { closeMobileSider } from '../components/sider/mobileSiderState.js'
 import { MobileSider, Sider } from '../components/sider/Sider.js'
 import styles from './App.module.css'
+
+/**
+ * 公告的调试开关（产品方边看边提要求时反复看弹窗效果用）：
+ * URL 带 `?ann-reset` 就清掉「已读 / 已弹过」两个标记，没带就什么都不做。
+ *
+ * 放在模块作用域、只跑一次：放进组件体里会跟着每次重渲染重复清空 ——
+ * 用户刚点完「一键已读」，一个状态更新就把红点又还原回去。page load 一次正好。
+ */
+applyResetFromLocation(typeof window === 'undefined' ? '' : window.location.search)
 
 export const App = () => {
   const t = useTranslate()
@@ -169,6 +180,8 @@ export const App = () => {
         <SearchPanel />
       </div>
       <SettingsDialog />
+      {/* 首次进入的公告弹窗（只弹最新一条，本地 mock）：与设置弹窗互斥，见组件内注释 */}
+      <AnnouncementPopup />
       {/* #831 会话级分支的确认弹层：两个入口（列表「更多」/ 回答下方）共用这一份 */}
       <SessionBranchDialog />
       <Toast />

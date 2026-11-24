@@ -1,0 +1,229 @@
+/* ---------- 公告栏（设置 → 公告 → 公告栏）与首次进入的公告弹窗 ----------
+   视觉沿用设置页那一套：卡片由 `Settings.module.css` 的 `.card`（`padding: 0 16px`）给，
+   这里的每个条目只在**卡片内**排布，左右内边距一律不写第二遍。
+   红点 / 未读数统一用 `--dsw-alias-state-error-primary`（浅色 #d92d20 / 深色 #f25a5a），
+   缺 token 时回落到产品方点名的 #ff3b30。 */
+
+.list {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0;
+}
+
+.empty {
+  padding: 18px 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 14px;
+  line-height: 22px;
+  text-align: center;
+}
+
+.item {
+  padding: 14px 0;
+}
+
+/* 条目之间的分隔线：与设置卡片其它行同一条极淡线（#47 无边设计） */
+.item + .item {
+  box-shadow: inset 0 1px 0 0 var(--dsw-alias-border-l2-darkmode-thin);
+}
+
+.itemHead {
+  display: flex;
+  align-items: flex-start;
+}
+
+/* 未读红点：8px 实心圆，和标题首行文字垂直居中 */
+.unreadDot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  /* 与标题 22px 行高的首行中心对齐：22 / 2 - 4 = 7 */
+  margin-top: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background-color: var(--dsw-alias-state-error-primary, #ff3b30);
+}
+
+/* 重要公告的感叹号：只在 `level: 'important'` 时出现，颜色与红点同源 */
+.importantMark {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-top: 3px;
+  margin-right: 4px;
+  color: var(--dsw-alias-state-error-primary, #ff3b30);
+
+  svg {
+    width: 16px;
+    height: 16px;
+  }
+}
+
+.itemTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--dsw-alias-label-primary);
+  /* 已读：常规字重，让「未读略重」有对比 */
+  font-weight: 400;
+  font-size: 15px;
+  line-height: 22px;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* 未读：标题字重略重（产品方口径 600） */
+.itemTitleUnread {
+  font-weight: 600;
+}
+
+.itemTime {
+  flex-shrink: 0;
+  margin-left: 8px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+  /* 与标题首行对齐（22 - 18 = 4） */
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+/* 正文摘要：整块就是一个按钮（点了展开 / 收起），所以要把按钮的原生外观清干净 */
+.itemBodyButton {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+
+  /* #215：`:focus` 兜底 + 现代内核收回，与设置页其它按钮同一套三段式 */
+  &:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
+    border-radius: 6px;
+  }
+
+  &:focus:not(:focus-visible) {
+    box-shadow: none;
+  }
+
+  &:focus-visible {
+    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
+    border-radius: 6px;
+  }
+}
+
+.itemBody {
+  display: block;
+  margin: 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  line-height: 20px;
+  /* 正文里的换行是内容（长公告靠空行分段），必须原样保留 */
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* 摘要：2 行截断。带 -webkit-line-clamp 的盒子必须是 display:-webkit-box（Chromium 83 起可用） */
+.itemBodyClamped {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: pre-wrap;
+}
+
+/* 展开后：正文全显示；太长就自己滚，别把整页顶长（上限 40vh，够看又不会盖住底部按钮） */
+.itemBodyExpanded {
+  max-height: 40vh;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  touch-action: pan-y;
+}
+
+.itemToggle {
+  display: inline-block;
+  margin-top: 2px;
+  color: var(--dsw-alias-brand-text);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* ---------- 一级列表「公告栏」这一行右侧的徽标：红点 + 未读数 ---------- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+}
+
+.badgeDot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--dsw-alias-state-error-primary, #ff3b30);
+}
+
+.badgeCount {
+  margin-left: 4px;
+  color: var(--dsw-alias-state-error-primary, #ff3b30);
+  font-size: 13px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 首次进入的公告弹窗（复用 `base/Modal`，只补正文区） ---------- */
+
+.popupMeta {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* 正文：完整显示但不许超过屏高 70%，超出自己滚（issue #13：dvh 只出现在 @supports 里） */
+.popupBody {
+  max-height: 70vh;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  touch-action: pan-y;
+  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+  line-height: 22px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+
+  @supports (max-height: 100dvh) {
+    max-height: 70dvh;
+  }
+}
+
+.popupImportant {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 6px;
+  color: var(--dsw-alias-state-error-primary, #ff3b30);
+  vertical-align: -2px;
+
+  svg {
+    width: 16px;
+    height: 16px;
+  }
+}
+
+.popupTitle {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}

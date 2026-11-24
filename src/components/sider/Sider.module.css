@@ -424,3 +424,11 @@
   margin-right: 2px;
 }
 /* #173-fallback:end */
+
+/* 未读公告红点：挂在侧边栏「设置」行右端（与「公告栏」行的徽标同源） */
+.settingsBadge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  margin-right: 6px;
+}

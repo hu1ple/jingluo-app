@@ -16,6 +16,8 @@ import { IconButton } from '../base/IconButton.js'
 import { Modal } from '../base/Modal.js'
 import { showToast } from '../base/toastState.js'
 import { openSettings } from '../settings/settingsDialogState.js'
+import { AnnouncementBadge } from '../announcements/AnnouncementBadge.js'
+import { useAnnouncements } from '../announcements/useAnnouncements.js'
 import { closeMobileSider, useMobileSider } from './mobileSiderState.js'
 import { SessionItem } from './SessionItem.js'
 import styles from './Sider.module.css'
@@ -23,6 +25,8 @@ import styles from './Sider.module.css'
 /** 展开的侧边栏：名称与收起按钮、开启新对话、按时间分组的会话列表、底部设置；移动端放在抽屉里，收起按钮关闭抽屉 */
 export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
   const t = useTranslate()
+  // 未读公告数：设置入口与「公告栏」那一行的徽标同源（`services/announcements/store.ts`）
+  const unreadAnnouncements = useAnnouncements().unreadCount
   const sessions = useChatStore((state) => state.sessions)
   const activeId = useChatStore((state) => state.activeId)
   const [now, setNow] = useState(Date.now)
@@ -233,6 +237,12 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
             <IconSettingsOutline16 />
           </span>
           <span className={styles.settingsLabel}>{t('settings')}</span>
+          {/* 有未读公告时在设置入口上也挂红点：用户不进设置也能知道有新公告（与「公告栏」那一行的徽标同源） */}
+          {unreadAnnouncements > 0 ? (
+            <span className={styles.settingsBadge}>
+              <AnnouncementBadge count={unreadAnnouncements} />
+            </span>
+          ) : null}
         </button>
       </div>
       {deleting ? (

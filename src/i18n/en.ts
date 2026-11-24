@@ -266,6 +266,20 @@ export const en = {
   settingsRowHelpFeedback: 'Help & feedback',
   settingsAnnouncementEmpty: 'No announcements yet',
   settingsAnnouncementMarkAllRead: 'Mark all as read',
+  // New strings for the announcement board (list / unread dot / first-run popup).
+  // Announcement titles and bodies are Chinese content owned by the product side and live in
+  // `services/announcements/mock.ts`; only UI labels belong here.
+  settingsAnnouncementUnread: 'Unread',
+  settingsAnnouncementUnreadCount: '{count} unread announcement(s)',
+  settingsAnnouncementImportant: 'Important announcement',
+  settingsAnnouncementExpand: 'Show full text',
+  settingsAnnouncementCollapse: 'Show less',
+  settingsAnnouncementPopupDismiss: 'Got it',
+  // Relative times (picked by `components/announcements/relativeTime.ts`)
+  announceTimeJustNow: 'Just now',
+  announceTimeMinutesAgo: '{count} min ago',
+  announceTimeHoursAgo: '{count} h ago',
+  announceTimeDaysAgo: '{count} d ago',
   apiKeyStart: 'Enter an API Key to get started',
   apiKeyEdit: 'Edit API Key',
   apiKeyPlaceholder: 'Enter API Key',
@@ -824,7 +838,7 @@ export const en = {
   // Developer social channel row in "About" (round 6): the Douyin id is just this channel's value
   settingsSocialLabel: 'Developer social media',
   settingsSocialFreeNotice:
-    'The app itself is completely free and will never charge you. Report anyone who does through this channel.',
+    'Installing this app is completely free. If anyone charges you a download or installation fee, report them through this channel.',
   settingDouyinCopyAria: 'Copy Douyin ID',
   settingDouyinCopied: 'Douyin ID copied',
   oursErrCustomerNeedsKey:

@@ -2,6 +2,7 @@ import clsx from 'clsx'
 import { useRef, useState, type ReactNode } from 'react'
 import {
   IconAnnounceOutline16,
+  IconChevronRightOutline14,
   IconCopyOutline16,
   IconDarkOutline16,
   IconDataOutline16,
@@ -83,6 +84,10 @@ import {
   SettingsCardInfoRow,
   SettingsCardRow,
 } from './CardRow.js'
+import { AnnouncementBadge } from '../announcements/AnnouncementBadge.js'
+import { AnnouncementList } from '../announcements/AnnouncementList.js'
+import { useAnnouncements } from '../announcements/useAnnouncements.js'
+import { markAllRead } from '../../services/announcements/store.js'
 
 /**
  * 设置弹窗：iOS 风格「分组列表（一级） + 二级页」。
@@ -92,7 +97,8 @@ import {
  *   不是叠新弹层、不是叠遮罩，仍然只有一个容器、一个 X（#727 的口径继续成立）；
  * · 对外 API 一字不变：`openSettings(section)` 的 `section` 仍是「打开时落在哪个分组」，
  *   `general` = 一级列表本身，`data` / `account` = 直接落到对应的二级页；
- * · 公告栏本轮只做壳（入口 + 空页），不拉数据、不读 localStorage。
+ * · 公告栏的**数据是本地 mock**（`src/services/announcements/**`，已读状态存 localStorage），
+ *   不连后端：列表 / 未读红点 / 一键已读都在这一层之内，首次进入的公告弹窗挂在 `App` 上。
  */
 export const SettingsDialog = () => {
   const open = useSettingsDialog((state) => state.open)
@@ -168,6 +174,38 @@ const SettingsGroup = ({ titleKey, children }: { titleKey: TranslationKey; child
 }
 
 /**
+ * 「公告栏」这一行：与 `SettingsCardRow` 同一套视觉（复用同一批 `Settings.module.css` class），
+ * 唯一的差别是右侧那一格不是字符串，而是「红点 + 未读数」。
+ *
+ * 为什么没有直接给 `SettingsCardRow` 传节点：它的 `value` 类型是 `string`（那是给一级列表**全部**行
+ * 定的形状，值那一格还要按字符串做省略号截断）。公告这行的右侧是结构化徽标，就地按同一批 class
+ * 画一行，既不牵动别处，也不会把「值 = 一段当前值文案」的语义弄混。
+ */
+const AnnouncementRow = ({ onClick }: { onClick: () => void }) => {
+  const t = useTranslate()
+  const { unreadCount } = useAnnouncements()
+  return (
+    <button
+      type="button"
+      className={styles.linkRow}
+      data-testid="settings-row-announcement"
+      data-unread-count={unreadCount}
+      onClick={onClick}
+    >
+      <span className={styles.linkIcon} aria-hidden="true">
+        <IconAnnounceOutline16 />
+      </span>
+      <span className={styles.linkLabel}>{t('settingsRowAnnouncement')}</span>
+      {/* 值那一格永远渲染（没有未读就是空的）：它负责吃掉剩余空间，chevron 才会贴在行尾 */}
+      <span className={styles.linkValue}>
+        {unreadCount > 0 ? <AnnouncementBadge count={unreadCount} /> : null}
+      </span>
+      <IconChevronRightOutline14 />
+    </button>
+  )
+}
+
+/**
  * 一级分组列表。
  *
  * 分组的归属与顺序由产品方定（2026-11-24 版）：账户 / 数据 / 应用 / 语音 / 公告 / 关于。
@@ -232,14 +270,9 @@ const RootList = ({
         />
       </SettingsGroup>
 
-      {/* 位置靠下、在「关于」之上（用户指定）；本轮只有入口 + 空页 */}
+      {/* 位置靠下、在「关于」之上（用户指定）；有未读时这一行右侧带「红点 + 未读数」 */}
       <SettingsGroup titleKey="settingsGroupAnnouncement">
-        <SettingsCardRow
-          testId="settings-row-announcement"
-          icon={<IconAnnounceOutline16 />}
-          label={t('settingsRowAnnouncement')}
-          onClick={() => onOpen('announcement')}
-        />
+        <AnnouncementRow onClick={() => onOpen('announcement')} />
       </SettingsGroup>
 
       <SettingsGroup titleKey="settingsGroupAbout">
@@ -266,26 +299,32 @@ const RootList = ({
 }
 
 /**
- * 「公告栏」页：**本轮只做壳** —— 空态文案 + 列表容器骨架 + 置灰的「一键已读」。
- * 不拉数据、不读 localStorage、不写任何已读状态（数据与逻辑下一轮做）。
+ * 「公告栏」二级页：列表 + 一键已读。
+ *
+ * 数据是**本地 mock**（`src/services/announcements/**`）：4 条公告、已读状态存 localStorage、
+ * 不连后端、不发任何请求。列表本身（红点 / 标题 / 相对时间 / 2 行摘要可展开）在
+ * `components/announcements/AnnouncementList.tsx` 里，这里只负责「卡片 + 一键已读」这层外壳。
+ *
+ * 「一键已读」的可用性直接看 `unreadCount`：没有未读时置灰（点了也没意义），
+ * 文案与词条保持产品方口径（`settingsAnnouncementMarkAllRead` = 「一键已读」）。
  */
 const AnnouncementSettings = () => {
   const t = useTranslate()
+  const { unreadCount } = useAnnouncements()
   return (
     <>
       <SettingsCard>
-        <div className={styles.announcementList} role="list" data-testid="settings-announcement-list">
-          {/* 骨架：两条灰条代表将来的公告条目，空态文案占第三条 */}
-          <div className={styles.announcementSkeleton} aria-hidden="true" />
-          <div className={styles.announcementSkeleton} aria-hidden="true" />
-          <div className={styles.announcementEmpty} role="listitem">
-            {t('settingsAnnouncementEmpty')}
-          </div>
-        </div>
+        <AnnouncementList />
       </SettingsCard>
       <SettingsCard>
         <div className={styles.announcementActions}>
-          <Button variant="outlined" size="m" disabled data-testid="settings-announcement-read">
+          <Button
+            variant="outlined"
+            size="m"
+            disabled={unreadCount === 0}
+            data-testid="settings-announcement-read"
+            onClick={markAllRead}
+          >
             {t('settingsAnnouncementMarkAllRead')}
           </Button>
         </div>

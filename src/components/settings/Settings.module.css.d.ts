@@ -19,9 +19,6 @@ declare const styles: {
   readonly "linkValue": string;
   readonly "backRow": string;
   readonly "backButton": string;
-  readonly "announcementList": string;
-  readonly "announcementSkeleton": string;
-  readonly "announcementEmpty": string;
   readonly "announcementActions": string;
   readonly "cell": string;
   readonly "row": string;

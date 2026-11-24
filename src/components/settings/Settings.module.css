@@ -390,36 +390,10 @@
   }
 }
 
-/* ---------- 公告栏（本轮只做壳：空态 + 列表骨架 + 置灰的「一键已读」） ---------- */
-
-.announcementList {
-  display: flex;
-  flex-direction: column;
-  padding: 16px 0 8px;
-}
-
-.announcementSkeleton {
-  height: 12px;
-  margin-bottom: 10px;
-  border-radius: 6px;
-  background-color: var(--dsw-alias-bg-skeleton);
-}
-
-.announcementSkeleton:first-child {
-  width: 62%;
-}
-
-.announcementSkeleton:nth-child(2) {
-  width: 81%;
-}
-
-.announcementEmpty {
-  padding: 6px 0 2px;
-  color: var(--dsw-alias-label-tertiary);
-  font-size: 14px;
-  line-height: 22px;
-  text-align: center;
-}
+/* ---------- 公告栏：只留「一键已读」这颗按钮的外壳 ----------
+   列表（卡片行 / 未读红点 / 相对时间 / 2 行摘要可展开）整套搬进了
+   `components/announcements/Announcements.module.css`：它同时服务于一级列表那一行的徽标
+   与首次进入的公告弹窗，放在设置页的样式表里会变成跨页面的隐式依赖。 */
 
 .announcementActions {
   display: flex;

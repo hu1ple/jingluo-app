@@ -430,7 +430,9 @@
 
 .cellActions {
   display: flex;
-  flex: 0 1 auto;
+  /* **不许压缩**：`0 1 auto` 时动作列会被压到比内容还窄，里面的 Select（min-width 124）
+     就溢出到左侧文字上 —— 外观页「字号」那行的说明被下拉框盖住就是这么来的。 */
+  flex: 0 0 auto;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;

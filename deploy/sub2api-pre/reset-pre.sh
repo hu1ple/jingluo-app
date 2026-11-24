@@ -95,6 +95,12 @@ if [ "$WITH_SEED" = 1 ]; then
   sudo -u postgres "$PSQL" -d "$DB" -v ON_ERROR_STOP=1 -q -f "$DIR/seed.sql" >/dev/null
   echo "  已灌 $(grep -c 'INSERT INTO settings' "$DIR/seed.sql") 条 settings + 默认分组"
 
+  # 预发布专用覆盖（邮件通道指向本机 sink、打开验证码式密码重置）
+  if [ -f "$DIR/seed.pre.sql" ]; then
+    sudo -u postgres "$PSQL" -d "$DB" -v ON_ERROR_STOP=1 -q -f "$DIR/seed.pre.sql" >/dev/null
+    echo "  已灌 seed.pre.sql（password_reset_enabled=true，邮件走本机 mail-sink）"
+  fi
+
   if [ -f "$DIR/seed.local.env" ]; then
     log "    灌 seed.local.env（秘密项）"
     # 只取有值的键；settings key = 大写环境变量名的小写形式（ADMIN_API_KEY → admin_api_key）
@@ -141,6 +147,18 @@ if [ "$WITH_SEED" = 1 ]; then
   printf '  %-34s ' "default_balance 已播种"
   v=$(sudo -u postgres "$PSQL" -d "$DB" -tAc "select value from settings where key='default_balance'" | tr -d ' ')
   [ -n "$v" ] && echo "OK（$v）" || { echo "FAIL"; fail=1; }
+  printf '  %-34s ' "password_reset_enabled"
+  v=$(sudo -u postgres "$PSQL" -d "$DB" -tAc "select value from settings where key='password_reset_enabled'" | tr -d ' ')
+  [ "$v" = "true" ] && echo "OK" || { echo "FAIL（$v）"; fail=1; }
+  printf '  %-34s ' "忘记密码可用（验证码模式）"
+  if curl -sf -m 3 -X POST "$API/api/v1/auth/forgot-password" -H 'content-type: application/json' \
+       -d '{"email":"nobody@example.invalid"}' | grep -q verification; then
+    echo "OK"
+  else
+    echo "FAIL"; fail=1
+  fi
+  printf '  %-34s ' "mail-sink 在跑"
+  systemctl is-active mail-sink >/dev/null 2>&1 && echo "OK" || echo "未启动（验证码邮件无处可去）"
 fi
 printf '  %-34s ' "生产实例未被重启"
 t=$(systemctl show -p ActiveEnterTimestamp --value sub2api-staging)

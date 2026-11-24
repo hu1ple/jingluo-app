@@ -54,6 +54,15 @@ export type ReplyErrorReportInput = {
   model?: string
   /** 接口地址（#353 第 2 点）；完整 URL 由 `scrubReportText` 收敛成「协议//host/***」 */
   endpoint?: string
+  /**
+   * 触发这次失败的**参数快照**（超时的 `{seconds}`、文件上限的 `{size}/{limit}`、
+   * 支持的 `{formats}` 等）。
+   *
+   * 为什么要塞进诊断：2026-11-24 文案定稿后界面走「软文案」，句子不再引用这些占位符，
+   * 用户看到的是「敲了好久的门都没人开」。这些数字对**排查**仍然关键（超时几秒？上限多大？），
+   * 所以从界面上撤下来，但要在诊断里留一份——界面软、排查硬。
+   */
+  params?: Record<string, unknown>
   /** 出错时间（ms），默认取当前时刻 */
   at?: number
 }
@@ -107,6 +116,16 @@ export const buildReplyErrorReport = (input: ReplyErrorReportInput): string => {
   }
   if (endpoint) {
     lines.push(`接口: ${endpoint}`)
+  }
+  // 参数快照：只列「有值的原始标量」，不猜语义、不做单位换算（换算留给读的人）
+  const paramLine = Object.entries(input.params ?? {})
+    .filter(([, value]) => typeof value === 'string' || typeof value === 'number')
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .filter((pair) => !pair.endsWith('='))
+    .sort()
+    .join(', ')
+  if (paramLine) {
+    lines.push(`参数: ${paramLine}`)
   }
   if (detail) {
     /**

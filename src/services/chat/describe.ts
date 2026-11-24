@@ -209,6 +209,8 @@ export const describeReply = (reply: AssistantMessage): Notice | null => {
         // 可执行的核对项（#353 第 2 点）：渠道 / 模型 / 接口。三样都取自当前配置，
         // 只有「贴回去能被复现」这层用处；取值失败不影响诊断本身，缺哪行就不写哪行。
         ...configSnapshot(reply.model),
+        // 界面走软文案后，`{seconds}` 这类占位符不再入句；数字从诊断里留一份（见入参注释）
+        params: localMessage?.params,
       })
     // 历史补传错误刷新后仍需说明原因，恢复沿用附件卡片或重新生成。
     if (kind === 'upload') {
@@ -249,15 +251,17 @@ export const describeReply = (reply: AssistantMessage): Notice | null => {
     const regenerate = errorNoticeRegenerate(noticeCtx)
     // 流断在 message_stop 之前：明说连接中断（已收到的内容照常展示），不要混进「网络异常」
     if (kind === 'interrupted') {
-      return { text: localized || translate('replyStreamInterrupted'), regenerate }
+      // 断流 / 卡住 / 断网这三档以前不给「复制诊断信息」，恰恰是最需要反馈的场景
+      // （2026-11-24：文案定稿后界面不再显示 {seconds} 这类数字，它们只能从这里带出去）
+      return { text: localized || translate('replyStreamInterrupted'), regenerate, diagnostics: diagnosticsOf() }
     }
     // 正文阶段长时间没有新数据（#150）：连接还在，只是上游不动了，说「等待时间过长」而不是「断网」
     if (kind === 'idle') {
-      return { text: localized || translate('replyWaitingStalled'), regenerate }
+      return { text: localized || translate('replyWaitingStalled'), regenerate, diagnostics: diagnosticsOf() }
     }
     if (kind === 'network') {
       // 网络不可达 / DNS / 跨域（#771 第 2 类）：明说「不是上游慢」，再给下一步
-      return { text: translate('replyNetworkUnreachable'), regenerate }
+      return { text: translate('replyNetworkUnreachable'), regenerate, diagnostics: diagnosticsOf() }
     }
     // 上游说「上下文太长」（#122）：这不是重试能解决的，给能照着做的建议
     if (status === 413 || isContextLimitMessage(upstreamMessage)) {

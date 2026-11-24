@@ -36,6 +36,9 @@ const {
   MAX_REPORT_STACK_LINES,
 } = await import('../../src/app/errorReport.ts')
 
+// 回复失败的「复制诊断信息」文本（与上面崩溃报告不是同一份，别混）
+const { buildReplyErrorReport } = await import('../../src/services/chat/replyErrorReport.ts')
+
 const FACTS = {
   ready: 'yes',
   sessions: 3,
@@ -175,4 +178,30 @@ test('non-Error throws still produce a readable report and meta', () => {
     /错误: plain string/
   )
   assert.equal(errorBoundaryMeta('plain string').reason, 'render-throw-non-error')
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 参数快照（2026-11-24）：文案定稿后界面不再显示 `{seconds}` / `{size}` 这类占位符，
+// 但排查要这些数字。它们改从诊断里出现——**界面软、排查硬**。
+// ─────────────────────────────────────────────────────────────────────────────
+test('参数快照：有 params 就单列一行，按 key 排序、只收原始标量', () => {
+  const text = buildReplyErrorReport({
+    status: 0,
+    kind: 'idle',
+    params: { seconds: 30, size: '12 MB', limit: '10 MB', empty: '', nested: { a: 1 } },
+    at: 0,
+  })
+  assert.match(text, /^参数: .*seconds=30/m, `要带 seconds，实际：\n${text}`)
+  assert.match(text, /limit=10 MB/)
+  assert.match(text, /size=12 MB/)
+  assert.doesNotMatch(text, /nested=|empty=/)
+  // 排序固定，便于人工比对
+  assert.match(text, /参数: limit=10 MB, seconds=30, size=12 MB/)
+})
+
+test('参数快照：没有 params / 全是空值时不出这一行', () => {
+  const withoutParams = buildReplyErrorReport({ status: 500, kind: 'stream', at: 0 })
+  assert.doesNotMatch(withoutParams, /^参数:/m)
+  const emptyOnly = buildReplyErrorReport({ status: 500, kind: 'stream', params: {}, at: 0 })
+  assert.doesNotMatch(emptyOnly, /^参数:/m)
 })

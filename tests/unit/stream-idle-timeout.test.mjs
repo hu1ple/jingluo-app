@@ -418,3 +418,26 @@ test('阈值的默认值有据可依，且可配置；非法值回默认（不�
     client.setStreamIdleTimeout(fallback)
   }
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2026-11-24 文案定稿后：界面走软文案，`{seconds}` 这类占位符不再入句。
+// 但「超时几秒」是排查必需的信息 —— 它改从「复制诊断信息」里出现（界面软、排查硬）。
+// ─────────────────────────────────────────────────────────────────────────────
+test('诊断留底：界面不显示超时秒数了，数字必须出现在诊断里', async () => {
+  const { describeReply } = await import('../../src/services/chat/describe.ts')
+  const notice = describeReply({
+    id: 'm-idle',
+    role: 'assistant',
+    status: 'error',
+    content: '',
+    error: {
+      kind: 'idle',
+      message: '',
+      localMessage: { key: 'replyIdleTimeout', params: { seconds: 30 } },
+    },
+  })
+  assert.ok(notice, '空闲超时必须有提示')
+  assert.doesNotMatch(notice.text, /\{seconds\}/, '占位符不许漏到界面')
+  assert.doesNotMatch(notice.text, /30\s*秒/, '定稿文案不再显示秒数')
+  assert.match(notice.diagnostics ?? '', /^参数: seconds=30/m, `诊断里要留底，实际：\n${notice.diagnostics}`)
+})

@@ -72,6 +72,9 @@ if [ "$DATA_ONLY" = 1 ]; then
   echo "  已清空 users（级联清 api_keys / orders / sessions 等）"
 else
   log "2/6 重建库 $DB（drop → create → 由服务启动时跑迁移）"
+  # 必须先停服务：它在跑的时候会立刻重连，DROP DATABASE 会报
+  # `database is being accessed by other users`（实测踩到）。
+  systemctl stop "$SVC" || true
   sudo -u postgres "$PSQL" -tAc "select pg_terminate_backend(pid) from pg_stat_activity where datname='$DB' and pid <> pg_backend_pid()" >/dev/null
   sudo -u postgres "$PSQL" -c "DROP DATABASE IF EXISTS $DB" >/dev/null
   sudo -u postgres "$PSQL" -c "CREATE DATABASE $DB OWNER $DB_OWNER" >/dev/null
@@ -86,7 +89,15 @@ for i in $(seq 1 30); do
   curl -sf -m 2 "$API/health" >/dev/null 2>&1 && break
 done
 curl -sf -m 3 "$API/health" >/dev/null || die "重启后 /health 不通，看 journalctl -u $SVC -n 50"
-echo "  $SVC 已就绪"
+# /health 可能先于迁移就绪（踩过：紧接着灌种子时 `relation "accounts" does not exist`）。
+# 所以还要等**表真的建出来**，否则后面的 seed 会打在空库上。
+for i in $(seq 1 60); do
+  n=$(sudo -u postgres "$PSQL" -d "$DB" -tAc "select count(*) from information_schema.tables where table_schema='public' and table_name='accounts'" 2>/dev/null | tr -d ' ')
+  [ "${n:-0}" -ge 1 ] && break
+  sleep 1
+done
+[ "${n:-0}" -ge 1 ] || die "等了 60s，迁移还没建出 accounts 表（看 journalctl -u $SVC -n 80）"
+echo "  $SVC 已就绪（迁移完成，表数 $(sudo -u postgres "$PSQL" -d "$DB" -tAc "select count(*) from information_schema.tables where table_schema='public'" | tr -d ' ')）"
 
 # ---------------------------------------------------------------- 4. 灌种子配置
 if [ "$WITH_SEED" = 1 ]; then
@@ -94,6 +105,15 @@ if [ "$WITH_SEED" = 1 ]; then
   [ -f "$DIR/seed.sql" ] || die "找不到 $DIR/seed.sql"
   sudo -u postgres "$PSQL" -d "$DB" -v ON_ERROR_STOP=1 -q -f "$DIR/seed.sql" >/dev/null
   echo "  已灌 $(grep -c 'INSERT INTO settings' "$DIR/seed.sql") 条 settings + 默认分组"
+
+  # 上游账号 + 渠道 + 模型定价（含凭据 → 本机 600，不进 git）。
+  # 没有它，网关会回 503 `No available accounts`（聊天完全不可用）。
+  if [ -f "$DIR/seed.upstream.local.sql" ]; then
+    sudo -u postgres "$PSQL" -d "$DB" -v ON_ERROR_STOP=1 -q -f "$DIR/seed.upstream.local.sql" >/dev/null
+    echo "  已灌 seed.upstream.local.sql（上游账号 / 渠道 / 模型定价 → 聊天可用）"
+  else
+    echo "  ⚠ 没有 $DIR/seed.upstream.local.sql：预发布将无法聊天（503 no available accounts）"
+  fi
 
   # 预发布专用覆盖（邮件通道指向本机 sink、打开验证码式密码重置）
   if [ -f "$DIR/seed.pre.sql" ]; then
@@ -157,6 +177,12 @@ if [ "$WITH_SEED" = 1 ]; then
   else
     echo "FAIL"; fail=1
   fi
+  printf '  %-34s ' "上游账号已播种"
+  n=$(sudo -u postgres "$PSQL" -d "$DB" -tAc "select count(*) from accounts where status='active' and schedulable" | tr -d ' ')
+  [ "${n:-0}" -gt 0 ] && echo "OK（$n 个可调度）" || { echo "FAIL（0 个，聊天会 503）"; fail=1; }
+  printf '  %-34s ' "默认分组平台 = openai"
+  v=$(sudo -u postgres "$PSQL" -d "$DB" -tAc "select platform from groups where id=1" | tr -d ' ')
+  [ "$v" = "openai" ] && echo "OK" || { echo "FAIL（$v，账号选不到）"; fail=1; }
   printf '  %-34s ' "mail-sink 在跑"
   systemctl is-active mail-sink >/dev/null 2>&1 && echo "OK" || echo "未启动（验证码邮件无处可去）"
 fi

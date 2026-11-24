@@ -15,7 +15,7 @@
  */
 import { createId } from '../../utils/id.js'
 import { estimateTokens } from '../chat/contextBudget.js'
-import { getChatDB, reportStorageError } from '../chat/db.js'
+import { openChatTransaction, reportStorageError } from '../chat/db.js'
 import { ATTACHMENT_LIMITS, SUPPORTED_EXTENSIONS, type SupportedExtension } from './limits.js'
 import { parseDocxFile } from './parsers/docx.js'
 import { isPdfParseError, parsePdfFile } from './parsers/pdf.js'
@@ -502,9 +502,8 @@ export const getMeta = (id: string): Promise<DocumentAttachment | undefined> =>
  * 是删除会话后的标准收尾调用。
  */
 export const collectReferencedAttachmentIds = async (): Promise<Set<string>> => {
-  const db = await getChatDB()
   const referenced = new Set<string>()
-  const tx = db.transaction('sessions')
+  const tx = await openChatTransaction(['sessions'])
   for (let cursor = await tx.store.openCursor(); cursor; cursor = await cursor.continue()) {
     for (const message of cursor.value.messages) {
       if (message.role !== 'user') {

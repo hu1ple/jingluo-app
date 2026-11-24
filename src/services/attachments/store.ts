@@ -18,7 +18,13 @@
  * 缺件降级仍然保留：原件确实可能因为别的原因读不到（存储被清理、库被外部改动），
  * 读正文一律经过 `readAttachmentText` + 缺件降级，不假设原件一定在。
  */
-import { getChatDB, loadFile, saveFiles, type StoredAttachmentText } from '../chat/db.js'
+import {
+  loadFile,
+  openChatTransaction,
+  runChatStoreRequest,
+  saveFiles,
+  type StoredAttachmentText,
+} from '../chat/db.js'
 import { ATTACHMENT_BLOB_PREFIX, attachmentBlobKey, isAttachmentBlobKey } from './blobKeys.js'
 import type { DocumentAttachment } from './types.js'
 
@@ -42,7 +48,7 @@ const abortTransaction = (tx: { abort(): void }) => {
 
 /** 同内容原件是否已经存过：只查键，不把 blob 读进内存 */
 const hasBlob = async (key: string): Promise<boolean> =>
-  (await (await getChatDB()).count('files', key)) > 0
+  (await runChatStoreRequest('files', 'readonly', (store) => store.count(key))) > 0
 
 /**
  * 保存原始文件，返回它的 blob 键（即 `DocumentAttachment.localPath`）。
@@ -63,20 +69,22 @@ export const saveAttachmentBlob = async (sha256: string, blob: Blob): Promise<st
 export const readAttachmentBlob = (key: string): Promise<Blob | undefined> => loadFile(key)
 
 export const putAttachment = async (record: DocumentAttachment): Promise<void> => {
-  await (await getChatDB()).put('attachments', record)
+  await runChatStoreRequest('attachments', 'readwrite', (store) => store.put(record))
 }
 
 export const getAttachment = async (id: string): Promise<DocumentAttachment | undefined> =>
-  (await getChatDB()).get('attachments', id)
+  runChatStoreRequest('attachments', 'readonly', (store) => store.get(id))
 
 export const listAttachments = async (): Promise<DocumentAttachment[]> =>
-  (await getChatDB()).getAll('attachments')
+  runChatStoreRequest('attachments', 'readonly', (store) => store.getAll())
 
 /** 读缓存全文记录（含解析结论）；键缺省或不存在时返回 undefined */
 export const readAttachmentTextRecord = async (
   key: string | undefined
 ): Promise<StoredAttachmentText | undefined> =>
-  key === undefined ? undefined : (await getChatDB()).get('attachmentTexts', key)
+  key === undefined
+    ? undefined
+    : runChatStoreRequest('attachmentTexts', 'readonly', (store) => store.get(key))
 
 /** 写缓存全文；同一 `sha256:parserVersion` 重复写入是幂等的覆盖（解析结论一致） */
 export const writeAttachmentTextRecord = async (params: {
@@ -111,8 +119,7 @@ export const writeAttachmentTextRecord = async (params: {
   if (params.warnings !== undefined && params.warnings.length > 0) {
     record.warnings = params.warnings
   }
-  const db = await getChatDB()
-  const tx = db.transaction('attachmentTexts', 'readwrite')
+  const tx = await openChatTransaction(['attachmentTexts'], 'readwrite')
   await Promise.all([tx.store.put(record), tx.done])
   return record
 }
@@ -128,8 +135,7 @@ export const writeAttachmentTextRecord = async (params: {
  * 返回实际删掉的存储条目数（元数据 1 条 + 可能删掉的全文 / 原件），供 `sweepOrphans` 汇报。
  */
 export const removeAttachment = async (id: string): Promise<number> => {
-  const db = await getChatDB()
-  const tx = db.transaction(['attachments', 'attachmentTexts', 'files'], 'readwrite')
+  const tx = await openChatTransaction(['attachments', 'attachmentTexts', 'files'], 'readwrite')
   const run = async (): Promise<number> => {
     const attachments = tx.objectStore('attachments')
     const record = await attachments.get(id)
@@ -172,8 +178,7 @@ export const removeAttachment = async (id: string): Promise<number> => {
  * 返回删掉的条目数。
  */
 export const sweepOrphanStorage = async (): Promise<number> => {
-  const db = await getChatDB()
-  const tx = db.transaction(['attachments', 'attachmentTexts', 'files'], 'readwrite')
+  const tx = await openChatTransaction(['attachments', 'attachmentTexts', 'files'], 'readwrite')
   const run = async (): Promise<number> => {
     const attachments = tx.objectStore('attachments')
     let removed = 0

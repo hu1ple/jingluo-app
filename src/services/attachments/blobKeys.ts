@@ -1,7 +1,7 @@
 /**
  * #480 文档附件：原件 blob 的键契约（单独一个文件，是因为**两个层要共用它**）。
  *
- * 为什么不让 `chat/db.ts` 直接 import `attachments/store.ts`：store 依赖 db（`getChatDB` /
+ * 为什么不让 `chat/db.ts` 直接 import `attachments/store.ts`：store 依赖 db（`openChatTransaction` /
  * `loadFile` / `saveFiles`），反过来再 import 就是循环依赖。而 #531 的修法本质是
  * 「整包导入替换时，`chat/db.ts` 必须认得哪些键不属于聊天数据」，这个**判定口径**必须只有一份 ——
  * 两处各写一个 `'attachment-'` 字面量，改了一处没改另一处的那天，附件会**静默**被替换清掉。

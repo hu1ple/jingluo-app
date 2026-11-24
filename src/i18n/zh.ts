@@ -259,7 +259,7 @@ export const zh = {
   settingsRowAppearance: '外观',
   settingsRowGeneral: '通用',
   settingsRowVoice: '语音',
-  settingsRowReading: '朗读设置',
+  settingsRowStyle: '样式',
   settingsRowAnnouncement: '公告栏',
   settingsRowHelpFeedback: '帮助与反馈',
   settingsAnnouncementEmpty: '暂无公告',

@@ -436,11 +436,15 @@ const SettingsContent = ({ visible }: { visible: boolean }) => {
       )
     }
     if (page === 'appearance') {
-      // 主题三个选块（原「通用设置」里的 ThemeSetting）+ 聊天背景（原「数据管理」里的 ChatBackgroundField）
+      // 外观：主题 + 聊天背景 + **文字样式**（字号 / 字重 / 行高）。
+      // 这三项只影响消息区的排版，是「长什么样」而不是「怎么说话」——
+      // 放在「语音」页里属于归类错误（朗读音色才是语音维度）。
       return (
         <SettingsCard>
           <ThemeSetting />
           <ChatBackgroundField />
+          <div className={styles.cardLabel}>{t('settingsRowStyle')}</div>
+          <ReadingSettings />
         </SettingsCard>
       )
     }
@@ -455,13 +459,11 @@ const SettingsContent = ({ visible }: { visible: boolean }) => {
       )
     }
     if (page === 'voice') {
-      // 语音：朗读音色 + 朗读设置（字号 / 字重 / 行高）平铺在同一页。
-      // 「朗读设置」这行小标题是卡片内的块标题：字号/字重/行高是**三项**，没有它就看不出这组是「朗读」的。
+      // 语音：只有朗读音色（TTS 的音色）。
+      // 字号 / 字重 / 行高是**文字样式**，已移到「外观 → 样式」，不再放这里。
       return (
         <SettingsCard>
           <TtsVoiceSetting />
-          <div className={styles.cardLabel}>{t('settingsRowReading')}</div>
-          <ReadingSettings />
         </SettingsCard>
       )
     }

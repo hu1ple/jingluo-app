@@ -28,12 +28,15 @@ PSQL=/usr/bin/psql
 WITH_SEED=0
 DATA_ONLY=0
 DO_BACKUP=1
+MAIL_MODE=real          # real（默认，阿里云真发）| sink（本地收信，离线测试用）
 
 for a in "$@"; do
   case "$a" in
     --with-seed) WITH_SEED=1 ;;
     --data-only) DATA_ONLY=1 ;;
     --no-backup) DO_BACKUP=0 ;;
+    --mail-sink) MAIL_MODE=sink ;;
+    --mail-real) MAIL_MODE=real ;;
     -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
     *) echo "[reset-pre] 未知参数: $a" >&2; exit 2 ;;
   esac
@@ -115,7 +118,14 @@ if [ "$WITH_SEED" = 1 ]; then
     echo "  ⚠ 没有 $DIR/seed.upstream.local.sql：预发布将无法聊天（503 no available accounts）"
   fi
 
-  # 预发布专用覆盖（邮件通道指向本机 sink、打开验证码式密码重置）
+  # 邮件通道：真发 / 本地 sink（默认真发，见文件头）
+  MAIL_SQL="$DIR/seed.mail.$MAIL_MODE.sql"
+  if [ -f "$MAIL_SQL" ]; then
+    sudo -u postgres "$PSQL" -d "$DB" -v ON_ERROR_STOP=1 -q -f "$MAIL_SQL" >/dev/null
+    echo "  邮件通道 = $MAIL_MODE（$MAIL_SQL）"
+  fi
+
+  # 预发布专用覆盖（默认分组平台、打开验证码式密码重置）
   if [ -f "$DIR/seed.pre.sql" ]; then
     sudo -u postgres "$PSQL" -d "$DB" -v ON_ERROR_STOP=1 -q -f "$DIR/seed.pre.sql" >/dev/null
     echo "  已灌 seed.pre.sql（password_reset_enabled=true，邮件走本机 mail-sink）"
@@ -183,8 +193,13 @@ if [ "$WITH_SEED" = 1 ]; then
   printf '  %-34s ' "默认分组平台 = openai"
   v=$(sudo -u postgres "$PSQL" -d "$DB" -tAc "select platform from groups where id=1" | tr -d ' ')
   [ "$v" = "openai" ] && echo "OK" || { echo "FAIL（$v，账号选不到）"; fail=1; }
-  printf '  %-34s ' "mail-sink 在跑"
-  systemctl is-active mail-sink >/dev/null 2>&1 && echo "OK" || echo "未启动（验证码邮件无处可去）"
+  printf '  %-34s ' "邮件通道"
+  prov=$(sudo -u postgres "$PSQL" -d "$DB" -tAc "select value from settings where key='email_verify_provider'" | tr -d ' ')
+  if [ "$MAIL_MODE" = "real" ]; then
+    [ "$prov" = "aliyun" ] && echo "OK（阿里云真发）" || { echo "FAIL（$prov，应为 aliyun）"; fail=1; }
+  else
+    [ "$prov" = "" ] && echo "OK（本地 sink）" || { echo "FAIL（$prov，应为空=sink）"; fail=1; }
+  fi
 fi
 printf '  %-34s ' "生产实例未被重启"
 t=$(systemctl show -p ActiveEnterTimestamp --value sub2api-staging)

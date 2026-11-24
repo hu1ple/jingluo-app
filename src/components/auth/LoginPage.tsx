@@ -35,6 +35,13 @@ export type LoginPageProps = {
   noticeKey?: TranslationKey | null
   onSubmit: (values: LoginValues) => void
   onSwitchToRegister: () => void
+  /**
+   * 「忘记密码」→ 找回密码页（`ResetPasswordPage`，同一张卡内换页，不新开弹层）。
+   *
+   * 为什么入口在这里：忘记密码的人**往往正站在这张表单前**，从别处绕过去他找不到。
+   * 显隐**不受** `registration_enabled` 影响 —— 这个开关管注册，不管「已有账号的人能不能回来」。
+   */
+  onSwitchToForgot: () => void
 }
 
 export const LoginPage = ({
@@ -45,6 +52,7 @@ export const LoginPage = ({
   noticeKey = null,
   onSubmit,
   onSwitchToRegister,
+  onSwitchToForgot,
 }: LoginPageProps) => {
   const t = useTranslate()
   const [email, setEmail] = useState('')
@@ -159,6 +167,23 @@ export const LoginPage = ({
             </button>
           </div>
         ) : null}
+
+        {/*
+          「忘记密码」单独一行、**用另一个类名**（`forgotRow` 而不是 `switchRow`）：分段控件那条
+          `.segmented ~ * .switchRow { display: none }` 收掉的是「重复的注册入口」，不能顺手把
+          「进不去账号时唯一的出路」也收掉。
+        */}
+        <div className={styles.forgotRow}>
+          <button
+            type="button"
+            className={styles.linkButton}
+            onClick={onSwitchToForgot}
+            disabled={busy}
+            data-testid="auth-forgot-password"
+          >
+            {t('sub2authForgotPassword')}
+          </button>
+        </div>
       </div>
     </div>
   )

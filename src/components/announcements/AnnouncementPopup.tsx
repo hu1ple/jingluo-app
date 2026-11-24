@@ -5,6 +5,7 @@ import { IconWarningOutline16 } from '../base/icons.js'
 import { Modal } from '../base/Modal.js'
 import { useSettingsDialog } from '../settings/settingsDialogState.js'
 import {
+  announcementsPending,
   hasShownPopup,
   latestUnreadAnnouncement,
   markPopupShown,
@@ -52,14 +53,23 @@ export const AnnouncementPopup = () => {
       if (useSettingsDialog.getState().open) {
         return
       }
-      decided.current = true
       if (hasShownPopup()) {
+        decided.current = true
         return
       }
       const latest = latestUnreadAnnouncement(list)
       if (latest === null) {
+        // 列表来源是远程（`store.ts`）：冷启动时「空列表」可能只是**还没拉到**，
+        // 不是「没有未读公告」。这时候不判定、也不置 decided —— 数据落定后
+        // `publish()` 会换掉快照引用，这个 effect 会再跑一次，那次才是真判定。
+        // （不这么写的话，首屏 fetch 还没回来就把弹窗永久吞掉了。）
+        if (announcementsPending()) {
+          return
+        }
+        decided.current = true
         return
       }
+      decided.current = true
       setCurrent(latest)
       setOpen(true)
     }, 0)

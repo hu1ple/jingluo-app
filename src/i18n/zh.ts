@@ -264,6 +264,7 @@ export const zh = {
   settingsRowHelpFeedback: '帮助与反馈',
   settingsAnnouncementEmpty: '暂无公告',
   settingsAnnouncementMarkAllRead: '一键已读',
+  settingsAnnouncementMarkRead: '已读',
   // 公告栏接上 mock 数据后的新词条（列表 / 红点 / 首次弹窗）。
   // 公告**标题与正文**是产品方指定的中文内容，直接写在 `services/announcements/mock.ts` 里，
   // 不进这张表；这里只有界面标签。
@@ -896,6 +897,12 @@ export const zh = {
   updateDialogClose: '关闭',
   updateDialogCancel: '取消',
   updateDialogSnoozed: '已设为稍后提醒，{hours} 小时内不再弹出该提示。',
+  /**
+   * 启动检查更新（本单）：启动时判出有新版本 / 必须更新后，弹窗上的主按钮。
+   * 动作是「打开设置里的更新入口」—— 下载 / 安装那一整套状态机只在那一处，
+   * 启动弹窗不复制第二份（复制一份就等于让 #373 的进度 bug 有第二个发作点）。
+   */
+  updateGateActionUpdate: '去更新',
   // ---------------------------------------------------------------------------
   // 重构词条骨架（#487 铺路）：登录注册 / 账户与消费 / 卡密兑换 / 邀请 / 邮箱绑定
   // 只新增、不改上面的既有文案；语义依据 #482（支付与消费拆分）与 #484（sub2api 客户端约束）。
@@ -937,6 +944,32 @@ export const zh = {
    * 不知道下一步做什么 —— 所以「后端原话」照抄，再补这一句可操作的。
    */
   settingsAuthForgotNotReady: '密码重置暂未开通，请联系客服',
+  // 验证码式重置密码（两步：邮箱发码 → 6 位码 + 新密码）。
+  // 与上面那批 `settingsAuthForgot*`（链接模式：发重置邮件）分开：两种模式的**动作不同**
+  // （发信 vs 发码），文案不能共用，否则按钮上写的和实际发生的对不上。
+  settingsAuthResetSubmit: '重置密码',
+  settingsAuthResetNewPassword: '新密码（至少 6 位）',
+  /** 第一步本地拦下：邮箱空（格式错另有 `sub2authEmailInvalid`） */
+  settingsAuthResetNeedsEmail: '请输入邮箱地址',
+  /** 服务端契约：`new_password` < 6 位 = 400；本地同口径先拦一次 */
+  settingsAuthResetPasswordTooShort: '密码至少 6 位',
+  /** 码错 / 码过期（6 位码对不上，或服务端说已过期） */
+  settingsAuthResetCodeWrong: '验证码不正确或已过期',
+  /** 服务端 429（发码 5/min、重置 10/min）：措辞要给出「等一会儿」这个动作，别只说失败 */
+  settingsAuthResetRateLimited: '操作太频繁，请稍后再试',
+  /** 其它 4xx/5xx（参数被拒、5xx、表外码）：不猜原因，只给一句可重试的话 */
+  settingsAuthResetFailed: '重置失败，请稍后重试',
+  /** 重置成功后挂在登录页上的那句（`AuthGate` 的 notice / 登录卡的 notice 共用） */
+  settingsAuthResetDone: '密码已重置，请用新密码登录',
+  /**
+   * 演示模式横幅：**必须**让用户看出「这不是真的发了信」（后端 code 模式没开通 / 不可达时才会出现）。
+   * 后半句是硬约束 —— 不说「不会发送真实邮件」，用户就会去等一封永远不来的信。
+   */
+  settingsAuthResetDemoHint: '当前为演示模式，验证码固定 123456，不会发送真实邮件',
+  /** 降级原因是「连不上后端」时追加的一句（另一种原因是「后端没开通」，不需要追加） */
+  settingsAuthResetDemoUnreachable: '（连不上重置服务，已降级到演示）',
+  /** 演示会话里把固定码再摆一次；`{code}` 由页面注入（不写死在文案里） */
+  settingsAuthResetDemoCode: '演示验证码：{code}',
   sub2authPassword: '密码',
   sub2authConfirmPassword: '确认密码',
   sub2authLogin: '登录',
@@ -1311,6 +1344,9 @@ export const zh = {
   sendBlockedNoCredentials:
     '还没有登录，也没有可用的模型渠道，这条消息没有发出：请先登录或选择模型渠道后再发送',
   sendBlockedPickProvider: '去选择渠道',
+  // 发送前拦截「必须更新」（启动检查更新 + 只读模式）：服务端把最低支持版本抬到本机之上，
+  // 或明确下发 mode:"forced"。和上面几条一样写明「这条消息没有发出」，并指明该做什么
+  sendBlockedUpdateRequired: '当前版本已停止服务，请先更新后再发送。',
   // #831 会话级分支（把历史会话分叉成一条独立的新会话；与消息级分支的 `BranchSwitcher` 不是同一件事）
   // 入口文案：会话列表「更多」菜单 / 消息回答下方按钮
   sessionBranchMenuOption: '从此会话分支',

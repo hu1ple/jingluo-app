@@ -36,6 +36,7 @@ import { useAuthStore } from '../../services/auth/store.js'
 import type { ConsumeClient } from '../../services/consume/index.js'
 import { Button } from '../base/Button.js'
 import { IconEyeOffOutline16, IconEyeOutline16 } from '../base/icons.js'
+import { ResetPasswordPage } from '../auth/ResetPasswordPage.js'
 import {
   initialAuthCardState,
   reduceAuthCard,
@@ -139,6 +140,27 @@ export const SettingsAuthCard = ({ consume, onSkip }: SettingsAuthCardProps) => 
     dispatch({ type: 'forgot-sending' })
     run(() => submitForgotPassword(source, state))
   }, [run, source, state])
+
+  // 忘记密码：**卡内换页**（`role="dialog"` 数量不变）。两步骤的实现搬到了
+  // `components/auth/ResetPasswordPage.tsx`（验证码式：邮箱发码 → 6 位码 + 新密码），
+  // 这里只留「进 / 出 + 回执」三件事：
+  //  · 进：`model` 那边的 `settings-auth-forgot` 按钮照旧派 `{type:'step', step:'forgot'}`；
+  //  · 出：`onBack` 回表单页（邮箱带回去，用户不用重打）；
+  //  · 回执：走完两步 → 回表单页 + 复用 model 的 `notice`（`settings-auth-notice` 那块），
+  //    说「密码已重置，请用新密码登录」—— **不**在这张卡里替他登录。
+  if (state.step === 'forgot') {
+    return (
+      <ResetPasswordPage
+        embedded
+        initialEmail={state.email}
+        onBack={() => dispatch({ type: 'step', step: 'form' })}
+        onReset={() => {
+          dispatch({ type: 'step', step: 'form' })
+          dispatch({ type: 'notice', notice: 'settingsAuthResetDone' })
+        }}
+      />
+    )
+  }
 
   return (
     <SettingsAuthCardView

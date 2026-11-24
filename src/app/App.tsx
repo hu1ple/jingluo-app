@@ -1,4 +1,4 @@
-import { useEffect, type CSSProperties } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useTranslate } from '../i18n/index.js'
 import { useSettings } from '../services/settings.js'
 import { useIsMobile, useMobileViewport, usePreventPageScroll } from './viewport.js'
@@ -15,7 +15,7 @@ import { SessionView } from '../components/session/SessionView.js'
 import { SessionBranchDialog } from '../components/session/SessionBranchDialog.js'
 import { MobileHeader } from '../components/session/MobileHeader.js'
 import { Welcome } from '../components/session/Welcome.js'
-import { ensureApiKey } from '../components/settings/settingsDialogState.js'
+import { ensureApiKey, openSettings } from '../components/settings/settingsDialogState.js'
 import { syncManagedKeyFromServer } from '../components/settings/managedKeyRuntime.js'
 import { useAuthStatus } from '../services/auth/useAuthStatus.js'
 import { useApiConfig } from '../services/api/apiConfig.js'
@@ -33,6 +33,9 @@ import { stopReadAloud } from '../services/speech/readAloud.js'
 import { CollapsedSider } from '../components/sider/CollapsedSider.js'
 import { closeMobileSider } from '../components/sider/mobileSiderState.js'
 import { MobileSider, Sider } from '../components/sider/Sider.js'
+import { UpdateDialog } from '../components/update/UpdateDialog.js'
+import { snoozeStartupUpdatePrompt, startUpdateGate, useUpdateGate } from '../services/updateGateState.js'
+import { bundledApp } from '../services/appUpdate.js'
 import styles from './App.module.css'
 
 /**
@@ -100,6 +103,26 @@ export const App = () => {
     // 首次打开先在设置里输入 API Key（启动这一次只为「一个都没有」打开设置，见 #596）
     ensureApiKey({ fromBoot: true })
   }, [])
+
+  /**
+   * 启动检查更新（本单）。
+   *
+   * 为什么必须在这里、而不是只在「设置 → 关于 → 应用更新」里：那一页只有用户主动点进去才跑，
+   * 于是服务端的 `minSupportedVersionCode`（强制更新）等于空转 —— 线上清单 12 条记录里
+   * 一条 `updatePolicy` 都没下发过，就是这个机制从没真正生效过的旁证。
+   *
+   * 三条纪律：
+   *  1. **不阻塞首屏**：`void` 掉它，没有 `await`、没有 `Suspense`；判定要一次网络往返（超时 2.5s）；
+   *  2. **判不出就不拦**：拉不到清单 / 超时 / 脏 JSON / 版本号读不出来，一律当「没什么要说的」
+   *     （逻辑在 `services/updateGate.ts`，本文件不做任何兜底判断）；
+   *  3. **结果只落 store**：`StartupUpdatePrompt` 与 `ChatInput` 的发送门禁读的是同一份判据。
+   */
+  useEffect(() => {
+    void startUpdateGate()
+  }, [])
+
+  /** 只为了让「公告弹窗是否让位」跟着判定结果重渲染；具体档位由下面两个组件自己读 */
+  const updateGateKind = useUpdateGate((state) => state.gate.kind)
 
   /**
    * 恢复登录时也补领：旧版已登录但没有配置模型来源的人，重开 App 就能走到这里。
@@ -180,11 +203,98 @@ export const App = () => {
         <SearchPanel />
       </div>
       <SettingsDialog />
-      {/* 首次进入的公告弹窗（只弹最新一条，本地 mock）：与设置弹窗互斥，见组件内注释 */}
-      <AnnouncementPopup />
+      {/*
+       * 首次进入的公告弹窗（只弹最新一条，本地 mock）：与设置弹窗互斥，见组件内注释。
+       *
+       * 与「启动更新提示」的互斥（本单）：
+       *  · **强制更新优先** → 判出 `forced` 时公告弹窗整个不挂载（公告让位），
+       *    否则两层 dialog 会叠在一起，Esc / 点遮罩都只落到最上面那层，用户看到的是「点了没反应」；
+       *  · `soft` 定时相反：公告先弹出去了就**不再弹**更新提示（先到先得），
+       *    判定在 `<StartupUpdatePrompt>` 里做（那里能看见「现在已经有 dialog 开着」）。
+       * 公告组件本身一个字没改（它有自己的「不弹过 / 没有未读 / 设置开着」三条既定口径）。
+       */}
+      {updateGateKind === 'forced' ? null : <AnnouncementPopup />}
+      {/* 启动更新提示：soft = 可关闭（「稍后提醒」走既有 snooze），forced = 关不掉（只有「去更新」一个出口） */}
+      <StartupUpdatePrompt />
       {/* #831 会话级分支的确认弹层：两个入口（列表「更多」/ 回答下方）共用这一份 */}
       <SessionBranchDialog />
       <Toast />
     </>
+  )
+}
+
+/**
+ * 「现在已经有另一层 dialog 开着吗」——启动更新提示挂载**之前**问一次。
+ *
+ * 为什么用 DOM 判而不是状态：公告弹窗（`AnnouncementPopup`）的开关是它自己的组件内 state，
+ * 没有对外暴露，而本单**不许改**它的文件。`Modal`（`components/base/Modal.tsx`）的卡片上
+ * 恒有 `role="dialog"`，所以「文档里有没有 role=dialog」就是「屏幕上是不是已经有一层弹层」，
+ * 这是能拿到的最直接的事实，也比推断「公告会不会弹」可靠（公告还有「已弹过 / 没有未读 /
+ * 设置开着再判一次」三条口径）。
+ */
+const anotherDialogOpen = (): boolean => {
+  try {
+    return document.querySelector('[role="dialog"]') !== null
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 启动更新提示（本单）。
+ *
+ * | 档位 | 弹不弹 | 关闭方式 |
+ * | --- | --- | --- |
+ * | `none` | 不弹 | —— |
+ * | `soft` | 弹，**但已经有别的 dialog 开着就不弹**（先到先得） | 「稍后提醒」写 snooze / X / Esc / 遮罩 |
+ * | `forced` | 一定弹，且公告弹窗已被让位 | 关不掉；只有「去更新」一个出口 |
+ *
+ * forced 的「去更新」为什么是「收起提示 + 打开设置」而不是在本层做下载：
+ * 下载 / 安装 / 校验 / 失败分类那一整套状态机只长在 `AppUpdateField` 里（#373 / #310 的坑都补在那一处），
+ * 在这里抄一份等于给它开第二个发作点。启动提示只负责**拦人 + 指路**，
+ * 真正的只读约束由 `ChatInput` 的发送门禁承担 —— 用户就算关掉了设置，一样发不出消息。
+ */
+const StartupUpdatePrompt = () => {
+  const t = useTranslate()
+  const gate = useUpdateGate((state) => state.gate)
+  const checked = useUpdateGate((state) => state.checked)
+  /** 用户已经动过手（稍后提醒 / 去更新）：本次运行不再弹 */
+  const [closed, setClosed] = useState(false)
+  /** 判定只做一次：否则每次 store 更新都会重新问一次 `anotherDialogOpen()`，弹出时机漂移 */
+  const decided = useRef(false)
+  const [show, setShow] = useState(false)
+
+  useEffect(() => {
+    if (decided.current || !checked || gate.kind === 'none') {
+      return
+    }
+    decided.current = true
+    // forced 无视别的弹层（它优先级最高）；soft 只有「屏幕上已经有 dialog」才让位（先到先得）
+    setShow(gate.kind === 'forced' || !anotherDialogOpen())
+  }, [checked, gate])
+
+  if (!checked || gate.kind === 'none' || !show || closed) {
+    return null
+  }
+  return (
+    <UpdateDialog
+      release={gate.release}
+      /* 「当前版本」那一格：与设置页同一口径（构建期注入的版本名） */
+      currentVersion={bundledApp().version}
+      policy={gate.policy}
+      primary={{
+        label: t('updateGateActionUpdate'),
+        onClick: () => {
+          setClosed(true)
+          // 设置首页的「关于」组里就是「应用更新」那一行（检查 / 下载 / 安装都在它里面）
+          openSettings('general')
+        },
+      }}
+      onSnooze={() => {
+        snoozeStartupUpdatePrompt()
+        setClosed(true)
+      }}
+      onClose={() => setClosed(true)}
+    />
   )
 }

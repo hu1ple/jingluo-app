@@ -315,6 +315,41 @@
   font-weight: 600;
 }
 
+/* 「忘记密码」那一行：外观与 `.switchRow` 同一档（居中文字链接），但**类名必须不同** ——
+   上面那条 `.segmented ~ * .switchRow { display: none }` 收掉的是「重复的注册入口」，
+   不能顺手把「账号进不去时唯一的出路」也收掉。 */
+.forgotRow {
+  display: block;
+  margin-top: 2px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+/* 二级页的左上返回（找回密码）：一行文字链接。
+   **不新造一套按钮样式**：直接复用 `.linkButton`（auth 页既有的文字按钮：透明底 + brand 色 + 32px 点击区），
+   这里只负责对齐与间距 —— 另起一套就得再抄一遍焦点规则（`:focus` / `:focus-visible` 三段），
+   而那份口径每加一处都要同步 `docs/capabilities/css.md` 的计数（#215），不值得为一条返回链接再加一处。 */
+.backRow {
+  display: block;
+  text-align: left;
+}
+
+/* 演示模式横幅（找回密码的验证码模式在后端未就绪时的降级提示）：
+   用 notice 的中性底色 + 虚线边 —— 它既不是错误，也不该被当成常驻 UI 的一部分。 */
+.demoHint {
+  display: block;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px dashed var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background-color: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  word-break: break-word;
+}
+
 /* #173-fallback:start —— 由 node scripts/gen-flex-gap-fallback.mjs 生成，勿手改（issue #173） */
 :global(html[data-flex-gap-fallback]) .card > *:not(:last-child) {
   margin-bottom: 18px;

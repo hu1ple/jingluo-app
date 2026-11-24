@@ -4,6 +4,7 @@ import { useTranslate } from '../../i18n/index.js'
 import { IconWarningOutline16 } from '../base/icons.js'
 import { relativeTime } from './relativeTime.js'
 import { useAnnouncements } from './useAnnouncements.js'
+import { markRead } from '../../services/announcements/store.js'
 import type { AnnouncementWithReadState } from '../../services/announcements/types.js'
 import styles from './Announcements.module.css'
 
@@ -43,14 +44,15 @@ const AnnouncementBody = ({ body, collapsible }: { body: string; collapsible: bo
  * 「公告栏」页的列表。
  *
  * 每条：**未读红点 + 标题（未读字重 600）+ 相对时间 + 正文摘要（2 行截断，可展开）**。
- * 数据与已读状态全部来自 `services/announcements/store.ts`（本轮是本地 mock + localStorage），
- * 这里只画，不改状态 —— 唯一的交互是展开 / 收起，属于纯本地视图状态。
+ * 数据与已读状态全部来自 `services/announcements/store.ts`（列表来自分发机的 `announcements.json`，
+ * 冷启动先吃缓存、失败静默；`?ann-demo` 时才用本地 mock），这里只画，不改状态 ——
+ * 唯一的交互是展开 / 收起，属于纯本地视图状态。
  */
 export const AnnouncementList = () => {
   const t = useTranslate()
   const { items } = useAnnouncements()
-  // 空态：mock 恒为 4 条，这一支走不到；但接后端之后「今天没有公告」是常态，
-  // 代码路径必须在 —— 渲染「暂无公告」，而不是一张空卡片。
+  // 空态：远程列表「今天没有公告」是常态（首次拉取在飞 / 拉取失败且无缓存时也会短暂命中），
+  // 所以这一支必须渲染「暂无公告」，而不是一张空卡片。
   if (items.length === 0) {
     return (
       <div className={styles.list} role="list" data-testid="settings-announcement-list">
@@ -103,6 +105,19 @@ const AnnouncementRow = ({ item }: { item: AnnouncementWithReadState }) => {
         <span className={styles.itemTime}>{t(time.key, time.params)}</span>
       </div>
       <AnnouncementBody body={item.body} collapsible={collapsible} />
+      {/* 每条未读公告自己一个「已读」按钮：不必为了标一条而按「一键已读」把别的也标掉 */}
+      {item.read ? null : (
+        <div className={styles.itemActions}>
+          <button
+            type="button"
+            className={styles.itemReadButton}
+            data-testid="settings-announcement-mark-read"
+            onClick={() => markRead(item.id)}
+          >
+            {t('settingsAnnouncementMarkRead')}
+          </button>
+        </div>
+      )}
     </div>
   )
 }

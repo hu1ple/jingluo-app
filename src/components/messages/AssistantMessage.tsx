@@ -30,6 +30,7 @@ import { ReadAloudButton } from './ReadAloudButton.js'
 import { CopyButton } from './CopyButton.js'
 import { copyText as copyToClipboard } from '../../utils/clipboard.js'
 import { showToast } from '../base/toastState.js'
+import { updateRequiredNow } from '../../services/updateGateState.js'
 import { useSettings } from '../../services/settings.js'
 import { ReplyArea } from './ReplyArea.js'
 import { WaitNotice } from './WaitNotice.js'
@@ -87,6 +88,20 @@ export const AssistantMessage = memo(function AssistantMessage({
   const waitHint = useChatStore((state) => state.waitHints[sessionId])
   const waitActions = waiting && !!waitHint?.actions
   const summaryEntry = `${message.id}-summary`
+  /**
+   * 强制更新（只读模式）也拦「重新生成 / 继续」：它们同样是**发送入口**，只是不经过输入框，
+   * 所以 `ChatInput` 的 `canSend` 管不到这里。
+   *
+   * 只拦这两个动作，其余全部照旧可用：复制正文、朗读、切换版本、从消息分支、查看历史会话
+   * 都不发请求，也不受只读模式影响（这是「只读」而不是「锁屏」）。
+   */
+  const blockedByUpdateGate = () => {
+    if (!updateRequiredNow()) {
+      return false
+    }
+    showToast({ key: 'sendBlockedUpdateRequired' })
+    return true
+  }
   return (
     <div className={styles.message}>
       {refused ? null : (
@@ -305,6 +320,10 @@ export const AssistantMessage = memo(function AssistantMessage({
                 disabled={busy || refused}
                 onClick={() => {
                   stopReadAloud()
+                  // 强制更新（只读模式）先拦一道：这是发送入口，服务端已经要求「先更新」了
+                  if (blockedByUpdateGate()) {
+                    return
+                  }
                   // #793：重新生成 / 继续都是**发送入口**，但不经过输入框，所以输入框那三道门禁
                   // （身份 / Key / 配置）以前在这里一条都没走 —— 未登录又没有 Key 时点下去，
                   // 请求带着空凭据打上游、界面只剩转圈。三道门禁在这里补一遍，命中就一个请求都不发。
@@ -324,6 +343,10 @@ export const AssistantMessage = memo(function AssistantMessage({
               disabled={busy}
               onClick={() => {
                 stopReadAloud()
+                // 强制更新（只读模式）：与「重新生成」同一条判据
+                if (blockedByUpdateGate()) {
+                  return
+                }
                 // #793：与「重新生成」同一个理由（发送入口之一，且不经过输入框）
                 if (!ensureSendPrerequisites() || !ensureApiKey() || !ensureSendConfig()) {
                   return

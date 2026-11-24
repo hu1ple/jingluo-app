@@ -75,6 +75,8 @@ import { MyCardsTab } from './MyCardsTab.js'
 import { runWalletAutoRedeem, type WalletAutoRedeemOutcome } from './walletAutoRedeem.js'
 import { WALLET_PAY_ENTRY_PAGE, landAfterPayReturn } from './walletPayFlow.js'
 import { runWebPayReturn, subscribeWebPayOpened } from './webPayReturn.js'
+import { record } from '../../services/diagnostics/collector.js'
+import { buildMeta } from '../../services/diagnostics/fields.js'
 import { WalletHeaderView } from './walletHeaderView.js'
 import { formatCurrency, maskedEmail } from './panels.js'
 import { sourceKeyOf } from './SourceSheet.js'
@@ -120,6 +122,9 @@ import styles from './AccountConsume.module.css'
  *  - 上限写死（8 次）而不是一直轮下去：这是**兜底**，不是「客户端负责查单」，
  *    该由用户手动重试的场合必须停在手动重试上（`walletAutoRedeem` 本身也永不自动重试）。
  */
+/** 诊断日志里统一用这个 stage，排「为什么没自动兑现」时按它过滤 */
+const WEB_PAY_STAGE = 'wallet.pay-return'
+
 const WEB_PAY_POLL_MS = 4500
 const WEB_PAY_POLL_MAX = 8
 /** 轮询的墙钟上限（2 分钟）：无论用户有没有切回来，定时器到点自己退场（监听仍留着） */
@@ -521,6 +526,12 @@ export const AccountConsumePage = ({
       subscribeWebPayOpened(() => {
         // 新一次付款 = 新的轮询预算
         webPayAttempts.current = 0
+        record('nav', 'info', 'web pay opened', {
+          ...buildMeta({ stage: WEB_PAY_STAGE }),
+          // 触发方式写在 meta 里：`check:log-coverage` 要求可切片字段 ≥2，
+          // 而且排障时能区分「新标签页导航成功」和将来可能的其它入口。
+          trigger: 'pay-tab-navigated',
+        })
         setWebPayTick((tick) => tick + 1)
       }),
     []
@@ -550,12 +561,20 @@ export const AccountConsumePage = ({
    * 绝不会多兑一张卡、也不会对同一张卡打第二枪。
    */
   useEffect(() => {
-    // 没开过收款页 / 未登录（`loadOrders` 都不会注入，查了也是 skipped）/ 非浏览器环境 → 不挂
-    if (webPayTick === 0 || signedIn !== true || typeof document === 'undefined') {
+    // 没开过收款页 / 非浏览器环境 → 没什么可听的
+    if (webPayTick === 0 || typeof document === 'undefined') {
       return
     }
-    /** 用户离开过本页吗：没离开过说明收款页根本没被看，别自作主张把人拽到卡密页 */
-    let leftOnce = false
+    if (signedIn !== true) {
+      // 未登录：`orders/my` 要 JWT，这条路必然以 `not-signed-in` 收场。与其让用户以为
+      // 「自动兑现坏了」，不如当场说清楚，并在诊断里留痕（#784 的唯一触发点在这里）。
+      record('nav', 'info', 'web pay return skipped', {
+        ...buildMeta({ stage: WEB_PAY_STAGE }),
+        reason: 'not-signed-in',
+      })
+      showToast(t('walletAutoRedeemNeedSignIn'))
+      return
+    }
     let timer: ReturnType<typeof setInterval> | null = null
     const startedAt = Date.now()
 
@@ -576,21 +595,24 @@ export const AccountConsumePage = ({
      * `onPurchased`（= 本文件的 `backToCards`）——换页 + 重拉订单 + 自动兑现，
      * 判定逻辑（`walletAutoRedeem.ts`）一行都没有复制，也没有第二个回调名。
      */
-    function fire(): void {
+    function fire(source: 'visible' | 'poll'): void {
       if (!alive.current) {
         stop()
         return
       }
+      record('nav', 'info', 'web pay return fire', {
+        ...buildMeta({ stage: WEB_PAY_STAGE }),
+        source,
+        attempts: webPayAttempts.current,
+      })
       runWebPayReturn()
     }
     /** 切回来这一下最准：一次就够（之后就交给下面的轮询兜底），摘掉监听 */
     function onVisibility(): void {
       if (document.visibilityState === 'visible') {
         document.removeEventListener('visibilitychange', onVisibility)
-        fire()
-        return
+        fire('visible')
       }
-      leftOnce = true
     }
 
     document.addEventListener('visibilitychange', onVisibility)
@@ -600,10 +622,8 @@ export const AccountConsumePage = ({
         stopPolling()
         return
       }
+      // 本页不可见 = 用户还在收款页，查了也没人看，还会被浏览器节流
       if (document.visibilityState !== 'visible') {
-        return
-      }
-      if (!leftOnce) {
         return
       }
       webPayAttempts.current += 1
@@ -611,11 +631,11 @@ export const AccountConsumePage = ({
         stopPolling()
         return
       }
-      fire()
+      fire('poll')
     }, WEB_PAY_POLL_MS)
 
     return stop
-  }, [signedIn, webPayTick])
+  }, [signedIn, webPayTick, t])
 
   const SOURCE_LABEL_KEYS: Record<string, TranslationKey> = {
     builtin: 'accountConsumeSourceBuiltin',

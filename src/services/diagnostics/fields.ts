@@ -81,6 +81,10 @@ export type Stage =
   | 'quota.order'
   // 钱包（#784）：付款回来 → 自动兑现卡密进账号余额（一条日志一个结论）
   | 'wallet.auto-redeem'
+  // Web 付款回跳（web 适配）：开收款页 → 切回本页 / 轮询 → 触发那一下。
+  // 与 `wallet.auto-redeem` 分开：前者答「有没有触发」，后者答「触发后兑没兑成」，
+  // 排查「没自动兑现」时必须能分开看。
+  | 'wallet.pay-return'
   // 反馈上传
   | 'feedback.upload'
   // 启动与渲染
@@ -116,6 +120,7 @@ export const STAGES: readonly Stage[] = [
   'quota.trail',
   'quota.order',
   'wallet.auto-redeem',
+  'wallet.pay-return',
   'feedback.upload',
   'app.launch',
   'ui.render',

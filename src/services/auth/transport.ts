@@ -54,7 +54,6 @@ import type { ConsumeMessageKey, Sub2ApiError } from '../consume/errors.js'
 import type { ConsumeCallResult } from '../consume/http.js'
 import type {
   ConsumeAuthSession,
-  ConsumePublicSettings,
   ConsumeUser,
   createConsumeClient,
 } from '../consume/index.js'
@@ -311,8 +310,21 @@ export const createAuthTransport = (consume: ConsumeClient): AuthTransport => ({
   logout: async () => unwrap(await consume.auth.revokeAllSessions(), () => undefined),
 })
 
-/** `settings/public` 的读取口子（`flags.ts` 的 `PublicSettingsReader` 形状）：失败给 null = 保守默认 */
-export const createPublicSettingsReader = (consume: ConsumeClient) => async (): Promise<ConsumePublicSettings | null> => {
-  const result = await consume.settings.get()
+/**
+ * `settings/public` 的读取口子（`flags.ts` 的 `PublicSettingsReader` 形状）：失败给 null = 保守默认。
+ *
+ * **必须返回原始对象，不能返回归一化后的 `ConsumePublicSettings`。**
+ * `getPublicSettings()` 用 `bool(raw.registration_enabled)` 把「字段缺失」压成了 `false`，
+ * 于是「服务端没给这个字段」会被上层读成「服务端明确说关闭」——线上 2026-11-24 的
+ * 「注册暂未开放」误拦就是这么来的（那天真正的原因是 `/settings/public` 被 502 打断）。
+ * `flags.ts` 的三态要区分 `unknown` 与 `disabled`，前提就是这里别提前丢信息。
+ */
+export const createPublicSettingsReader = (consume: ConsumeClient) => async (): Promise<unknown> => {
+  const result = await consume.http.call<Record<string, unknown>>({
+    method: 'GET',
+    path: '/api/v1/settings/public',
+    timeout: 'read',
+    auth: null,
+  })
   return result.ok ? result.data : null
 }

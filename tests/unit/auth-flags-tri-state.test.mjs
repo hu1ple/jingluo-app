@@ -346,3 +346,36 @@ test('T6 两次都失败 → unknown，再点注册不会被本地拦（真的�
   // 收尾：别把假 reader 留给同进程的其他用例
   setPublicSettingsReader(null)
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// T13：reader 必须透传**原始对象**（不能是归一化后的 ConsumePublicSettings）
+//
+// 线上事故的最后一段：`getPublicSettings()` 用 `bool(raw.x)` 把「字段缺失」压成 false，
+// 于是「服务端没给这个字段」被读成「服务端明确说关闭」。这两条钉住 reader 这一层不丢信息。
+// ─────────────────────────────────────────────────────────────────────────────
+test('T13 reader 透传原始对象：字段缺失 → unknown（不再被归一化成 disabled）', async () => {
+  const { createPublicSettingsReader } = await import('../../src/services/auth/transport.ts')
+  const reader = createPublicSettingsReader({
+    http: { call: async () => ({ ok: true, data: { unrelated: 1 } }) },
+  })
+  const raw = await reader()
+  assert.deepEqual(raw, { unrelated: 1 }, 'reader 不许做字段归一化')
+  assert.equal(parseAuthFlagsSnapshot(raw).registration, 'unknown', '缺字段 = 没读到，不是"服务端说关"')
+})
+
+test('T14 传递链路：reader → snapshot 三态都对', async () => {
+  const { createPublicSettingsReader } = await import('../../src/services/auth/transport.ts')
+  const cases = [
+    [{ registration_enabled: true }, 'enabled'],
+    [{ registration_enabled: false }, 'disabled'],
+    [{}, 'unknown'],
+    [{ data: { registration_enabled: true } }, 'enabled'],
+  ]
+  for (const [data, expected] of cases) {
+    const reader = createPublicSettingsReader({ http: { call: async () => ({ ok: true, data }) } })
+    assert.equal(parseAuthFlagsSnapshot(await reader()).registration, expected, JSON.stringify(data))
+  }
+  const failing = createPublicSettingsReader({ http: { call: async () => ({ ok: false, error: { status: 502 } }) } })
+  assert.equal(await failing(), null, '传输失败给 null')
+  assert.equal(parseAuthFlagsSnapshot(await failing()).registration, 'unknown')
+})

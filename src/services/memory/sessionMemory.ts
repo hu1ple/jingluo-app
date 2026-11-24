@@ -51,7 +51,7 @@
 
 import type { LinkedMessage } from '../../i18n/index.js'
 import type { EmbeddingResult } from '../api/embedding.js'
-import { getChatDB, type StoredSessionMemory } from '../chat/db.js'
+import { openChatTransaction, runChatStoreRequest, type StoredSessionMemory } from '../chat/db.js'
 import { record } from '../diagnostics/collector.js'
 import { LIMITS, kbOf } from '../limits.js'
 import { EmbeddingDisabledError, embed, isEmbeddingEnabled } from './embeddingGate.js'
@@ -233,8 +233,7 @@ export const saveMemoryEntry = async (
   }
 
   const now = Date.now()
-  const db = await getChatDB()
-  const tx = db.transaction('sessionMemory', 'readwrite')
+  const tx = await openChatTransaction(['sessionMemory'], 'readwrite')
   const run = async (): Promise<{ entry: MemoryEntry; evictedKeys: string[] }> => {
     const store = tx.objectStore('sessionMemory')
     const existing = await store.get(id)
@@ -339,14 +338,18 @@ export const readMemoryEntry = async (
   key: string
 ): Promise<MemoryEntry | undefined> => {
   assertSessionId(sessionId)
-  const row = await (await getChatDB()).get('sessionMemory', memoryEntryId(sessionId, key))
+  const row = await runChatStoreRequest('sessionMemory', 'readonly', (store) =>
+    store.get(memoryEntryId(sessionId, key))
+  )
   return row === undefined ? undefined : toEntry(row)
 }
 
 /** 读一个会话的全部记忆，按 `createdAt` 升序（= 上游 chunk 的写入顺序） */
 export const listMemoryEntries = async (sessionId: string): Promise<MemoryEntry[]> => {
   assertSessionId(sessionId)
-  const rows = await (await getChatDB()).getAllFromIndex('sessionMemory', 'sessionId', sessionId)
+  const rows = await runChatStoreRequest('sessionMemory', 'readonly', (store) =>
+    store.index('sessionId').getAll(sessionId)
+  )
   return rows
     .sort((a, b) => (a.createdAt === b.createdAt ? (a.id < b.id ? -1 : 1) : a.createdAt - b.createdAt))
     .map(toEntry)
@@ -355,9 +358,8 @@ export const listMemoryEntries = async (sessionId: string): Promise<MemoryEntry[
 /** 删一条记忆；返回是否真删掉了（用于「覆盖写 / 重复删」这类断言） */
 export const deleteMemoryEntry = async (sessionId: string, key: string): Promise<boolean> => {
   assertSessionId(sessionId)
-  const db = await getChatDB()
   const id = memoryEntryId(sessionId, key)
-  const tx = db.transaction('sessionMemory', 'readwrite')
+  const tx = await openChatTransaction(['sessionMemory'], 'readwrite')
   const run = async (): Promise<boolean> => {
     const store = tx.objectStore('sessionMemory')
     if ((await store.count(id)) === 0) {
@@ -379,8 +381,7 @@ export const deleteMemoryEntry = async (sessionId: string, key: string): Promise
  */
 export const clearSessionMemory = async (sessionId: string): Promise<number> => {
   assertSessionId(sessionId)
-  const db = await getChatDB()
-  const tx = db.transaction('sessionMemory', 'readwrite')
+  const tx = await openChatTransaction(['sessionMemory'], 'readwrite')
   const run = async (): Promise<number> => {
     const store = tx.objectStore('sessionMemory')
     const keys: string[] = []

@@ -99,6 +99,14 @@ export type AuthError = {
   retryable: boolean
   /** 唯一该上屏的东西 */
   messageKey: TranslationKey
+  /**
+   * 服务端 `Retry-After` 归一化后的毫秒数（没有这个头 = undefined）。
+   *
+   * 只用于 429 的**倒计时**：界面按它显示「请 N 秒后再试」，客户端不自造频控窗口。
+   * 之前这一位在 `toAuthError` 里被丢掉了，于是注册/登录/发码只能按 60s 兜底；
+   * `Sub2ApiError` 本来就有这个字段（`services/consume/errors.ts` 的 `retryAfterOf`），这里只是别丢。
+   */
+  retryAfterMs?: number
 }
 
 /** 「没有返回体」的成功态（logout / sendCode）：用它代替 `void` 作泛型参数 */

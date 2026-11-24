@@ -241,6 +241,8 @@ const toAuthError = (error: Sub2ApiError): AuthError => ({
   status: error.status,
   retryable: error.retryable,
   messageKey: messageKeyFor(error),
+  // 429 的等待秒数：不往下传的话，界面只能按 60s 兜底（与真实 `Retry-After` 不符）
+  ...(error.retryAfterMs === undefined ? {} : { retryAfterMs: error.retryAfterMs }),
 })
 
 /** `expires_in`（**秒**）→ 绝对到期时刻；没给就 null（不主动预刷新，只在 401 后按过期处理） */

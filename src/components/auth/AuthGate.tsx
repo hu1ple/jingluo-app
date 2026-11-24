@@ -37,6 +37,7 @@ import type { LoginValues, RegisterValues } from './authForm.js'
 import { LoginPage } from './LoginPage.js'
 import { RegisterPage } from './RegisterPage.js'
 import { ResetPasswordPage } from './ResetPasswordPage.js'
+import { rateLimitSecondsOf, type SendCodeOutcome } from './submitGuard.js'
 import styles from './AuthPages.module.css'
 
 /**
@@ -182,22 +183,29 @@ export const AuthGate = ({ children, variant = 'page', segmented = false }: Auth
     setMode('login')
   }
 
-  const handleLogin = (values: LoginValues) => {
-    void signIn(values)
-  }
+  /**
+   * 三个出口都**返回请求的 promise**（而不是 `void` 掉）：页面的 ref 闩要用它 held 到请求结束
+   * —— 只按同一 tick 释放的话，第二次点击就得靠 `busy` 那一帧接力，慢一帧还是多发一次请求。
+   * 失败文案仍由 store 的 `error.messageKey` 负责，页面不解析结果。
+   */
+  const handleLogin = (values: LoginValues) => signIn(values)
 
-  const handleRegister = (values: RegisterValues) => {
-    void signUp({
+  const handleRegister = (values: RegisterValues) =>
+    signUp({
       email: values.email,
       password: values.password,
       verifyCode: values.verifyCode,
       invitationCode: values.invitationCode,
     })
-  }
 
-  const handleSendCode = async (email: string): Promise<boolean> => {
+  /** 发码：429 要能说「等 N 秒」（`Retry-After`），所以把归一化后的秒数一并交给页面 */
+  const handleSendCode = async (email: string): Promise<SendCodeOutcome> => {
     const result = await sendCode({ email })
-    return result.ok
+    if (result.ok) {
+      return { ok: true }
+    }
+    const seconds = rateLimitSecondsOf(result.error)
+    return seconds === null ? { ok: false } : { ok: false, retryAfterSeconds: seconds }
   }
 
   // 接缝生效（仅测试构建）：直接放行主界面 —— 放在所有登录态判定之前短路。

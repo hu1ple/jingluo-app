@@ -40,6 +40,7 @@ import {
 import { Button } from '../base/Button.js'
 import { IconToastError16 } from '../base/icons.js'
 import { isValidEmail } from './authForm.js'
+import { RATE_LIMIT_FALLBACK_SECONDS, tickCooldown } from './submitGuard.js'
 import styles from './AuthPages.module.css'
 
 /** 服务端发码限流 5/min → 本地冷却 60s（只影响重发按钮可用时间，服务端仍然说了算） */
@@ -47,6 +48,9 @@ const CODE_COOLDOWN_SECONDS = 60
 
 /** 出问题的字段（本地校验只标红框 + 就地一句提示，不阻止用户继续改） */
 type ResetField = 'email' | 'code' | 'password' | 'confirm'
+
+/** 这一轮发码倒计时是哪来的：真发出去了 / 被 429 挡回来（后者不能说「已发送」） */
+type CooldownReason = 'sent' | 'limited'
 
 type FieldIssue = { field: ResetField; key: TranslationKey }
 
@@ -113,8 +117,18 @@ export const ResetPasswordPage = ({
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [cooldown, setCooldown] = useState(0)
+  /** 这一轮倒计时为什么起（`limited` = 429） */
+  const [cooldownReason, setCooldownReason] = useState<CooldownReason>('sent')
+  /** 提交被 429 挡回来之后的冷却秒数（>0 = 主按钮禁用 + 显示剩余秒数） */
+  const [submitCooldown, setSubmitCooldown] = useState(0)
   const [sending, setSending] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  /**
+   * 两把同步闩（`sending` / `submitting` 都是 state，同一 tick 连点两次会都读到旧值 ——
+   * 与 `AppUpdateField` 那个坑同源）。state 仍负责置灰与 `aria-busy`，闩负责「一个都不放行」。
+   */
+  const sendInFlight = useRef(false)
+  const submitInFlight = useRef(false)
   /** 演示会话（`null` = 走的是真后端）；`reason` 决定提示里那句补充怎么讲 */
   const [demo, setDemo] = useState<{ reason: DemoReason } | null>(null)
   /** 条幅级失败（限流 / 网络 / 后端没开 / 其它）：一次只能有一条 */
@@ -137,9 +151,18 @@ export const ResetPasswordPage = ({
     if (cooldown <= 0) {
       return
     }
-    const timer = window.setTimeout(() => setCooldown((seconds) => (seconds > 0 ? seconds - 1 : 0)), 1000)
+    const timer = window.setTimeout(() => setCooldown(tickCooldown), 1000)
     return () => window.clearTimeout(timer)
   }, [cooldown])
+
+  // 提交链路的 429 冷却：同一套逐秒步进
+  useEffect(() => {
+    if (submitCooldown <= 0) {
+      return
+    }
+    const timer = window.setTimeout(() => setSubmitCooldown(tickCooldown), 1000)
+    return () => window.clearTimeout(timer)
+  }, [submitCooldown])
 
   const clearIssue = () => {
     if (issue !== null) {
@@ -147,9 +170,9 @@ export const ResetPasswordPage = ({
     }
   }
 
-  /** 第一步：发验证码（成功 → 进第二步；失败 → 条幅，留在原地） */
+  /** 第一步：发验证码（成功 → 进第二步；失败 → 条幅，留在原地；429 → 冷却倒计时，留在原地） */
   const sendCode = async () => {
-    if (sending || cooldown > 0) {
+    if (sending || cooldown > 0 || sendInFlight.current) {
       return
     }
     if (!isValidEmail(email)) {
@@ -161,25 +184,39 @@ export const ResetPasswordPage = ({
     }
     setIssue(null)
     setErrorKey(null)
+    sendInFlight.current = true
     setSending(true)
-    const result = await requestResetCode(email)
-    if (!alive.current) {
-      return
+    try {
+      const result = await requestResetCode(email)
+      if (!alive.current) {
+        return
+      }
+      if (!result.ok) {
+        if (result.reason === 'rate-limited') {
+          // 429 不是失败：按服务端 `Retry-After` 进冷却（没有该头就 60s），按钮禁用 + 显示剩余秒数
+          setCooldownReason('limited')
+          setCooldown(result.retryAfterSeconds ?? RATE_LIMIT_FALLBACK_SECONDS)
+          return
+        }
+        setErrorKey(requestFailureKey(result.reason))
+        return
+      }
+      setDemo(result.demo ? { reason: result.demoReason } : null)
+      setCooldownReason('sent')
+      setCooldown(CODE_COOLDOWN_SECONDS)
+      setStep('code')
+    } finally {
+      sendInFlight.current = false
+      if (alive.current) {
+        setSending(false)
+      }
     }
-    setSending(false)
-    if (!result.ok) {
-      setErrorKey(requestFailureKey(result.reason))
-      return
-    }
-    setDemo(result.demo ? { reason: result.demoReason } : null)
-    setCooldown(CODE_COOLDOWN_SECONDS)
-    setStep('code')
   }
 
   /** 第二步：提交（本地先拦三道，再发请求；码错留在第二步并标红） */
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (submitting) {
+    if (submitting || submitInFlight.current || submitCooldown > 0) {
       return
     }
     if (!isValidResetCode(code)) {
@@ -196,26 +233,38 @@ export const ResetPasswordPage = ({
     }
     setIssue(null)
     setErrorKey(null)
+    submitInFlight.current = true
     setSubmitting(true)
-    const result = await resetPasswordWithCode(email, code, password)
-    if (!alive.current) {
-      return
-    }
-    setSubmitting(false)
-    if (!result.ok) {
-      // 「码错」与「密码太弱」落到字段上（用户能直接改那一个格子），其余落条幅
-      if (result.reason === 'invalid-code' || result.reason === 'weak-password') {
-        setIssue({
-          field: result.reason === 'invalid-code' ? 'code' : 'password',
-          key: resetFailureKey(result.reason),
-        })
+    try {
+      const result = await resetPasswordWithCode(email, code, password)
+      if (!alive.current) {
         return
       }
-      setErrorKey(resetFailureKey(result.reason))
-      return
+      if (!result.ok) {
+        if (result.reason === 'rate-limited') {
+          // 429：不是「重置失败」，是「太频繁」—— 冷却 + 禁用 + 剩余秒数，倒计时结束自动恢复
+          setSubmitCooldown(result.retryAfterSeconds ?? RATE_LIMIT_FALLBACK_SECONDS)
+          return
+        }
+        // 「码错」与「密码太弱」落到字段上（用户能直接改那一个格子），其余落条幅
+        if (result.reason === 'invalid-code' || result.reason === 'weak-password') {
+          setIssue({
+            field: result.reason === 'invalid-code' ? 'code' : 'password',
+            key: resetFailureKey(result.reason),
+          })
+          return
+        }
+        setErrorKey(resetFailureKey(result.reason))
+        return
+      }
+      resetPasswordDemoState()
+      onReset()
+    } finally {
+      submitInFlight.current = false
+      if (alive.current) {
+        setSubmitting(false)
+      }
     }
-    resetPasswordDemoState()
-    onReset()
   }
 
   const back = () => {
@@ -231,6 +280,9 @@ export const ResetPasswordPage = ({
   const passwordIssue = issueOf('password')
   const confirmIssue = issueOf('confirm')
   const resendDisabled = sending || cooldown > 0
+  /** 哪条链路正在 429 冷却里（冷却期间不讲「失败」，只讲「太频繁」） */
+  const codeLimited = cooldown > 0 && cooldownReason === 'limited'
+  const submitDisabled = submitting || submitCooldown > 0
   const demoHint =
     demo === null
       ? null
@@ -261,7 +313,7 @@ export const ResetPasswordPage = ({
           </p>
         ) : null}
 
-        {errorKey !== null ? (
+        {errorKey !== null && !codeLimited && submitCooldown <= 0 ? (
           <div className={styles.banner} role="alert" data-testid="reset-password-error">
             <span className={styles.bannerIcon} aria-hidden="true">
               <IconToastError16 />
@@ -312,7 +364,8 @@ export const ResetPasswordPage = ({
                 variant="primary"
                 size="l"
                 block
-                disabled={sending}
+                // 第一步被 429 挡回来后同样要禁用（冷却没走完再点一定还是 429）
+                disabled={sending || cooldown > 0}
                 aria-busy={sending}
                 testId="reset-password-send"
               >
@@ -322,6 +375,14 @@ export const ResetPasswordPage = ({
                 </span>
               </Button>
             </div>
+
+            {cooldown > 0 ? (
+              <p className={styles.hint} role="status" data-testid="reset-password-rate-limited">
+                {codeLimited
+                  ? t('sub2authTooManyTries', { seconds: cooldown })
+                  : t('sub2authCodeSent', { seconds: cooldown })}
+              </p>
+            ) : null}
           </form>
         ) : (
           <form className={styles.form} noValidate onSubmit={submit}>
@@ -368,8 +429,14 @@ export const ResetPasswordPage = ({
                   {t(codeIssue)}
                 </span>
               ) : cooldown > 0 ? (
-                <span className={styles.hint} role="status">
-                  {t('sub2authCodeSent', { seconds: cooldown })}
+                <span
+                  className={styles.hint}
+                  role="status"
+                  data-testid={codeLimited ? 'reset-password-rate-limited' : undefined}
+                >
+                  {codeLimited
+                    ? t('sub2authTooManyTries', { seconds: cooldown })
+                    : t('sub2authCodeSent', { seconds: cooldown })}
                 </span>
               ) : null}
             </div>
@@ -427,7 +494,7 @@ export const ResetPasswordPage = ({
                 variant="primary"
                 size="l"
                 block
-                disabled={submitting}
+                disabled={submitDisabled}
                 aria-busy={submitting}
                 testId="reset-password-submit"
               >
@@ -437,6 +504,12 @@ export const ResetPasswordPage = ({
                 </span>
               </Button>
             </div>
+
+            {submitCooldown > 0 ? (
+              <p className={styles.hint} role="status" data-testid="reset-password-submit-rate-limited">
+                {t('sub2authTooManyTries', { seconds: submitCooldown })}
+              </p>
+            ) : null}
 
             {demoHint !== null ? (
               // 演示会话里把「码是什么」再说一次：`secret`-style 提示不放，这里本来就是公开常量

@@ -84,7 +84,11 @@ export type RequestResetCodeResult =
   /** `demo: false` = 真后端受理了，会说「已发送」；`demo: true` = 演示会话已开，界面**必须**标注 */
   | { ok: true; demo: false }
   | { ok: true; demo: true; demoReason: DemoReason }
-  | { ok: false; reason: RequestResetFailure }
+  /**
+   * `rate-limited` 时带上 {@link retryAfterSeconds}：界面要把它变成「请 N 秒后再试」的倒计时，
+   * 而不是一句「失败」。秒数只来自服务端 `Retry-After`（没有这个头就不给 —— 客户端不另算间隔）。
+   */
+  | { ok: false; reason: RequestResetFailure; retryAfterSeconds?: number }
 
 /** 重置失败的原因（同上：每种一句自己的话） */
 export type ResetWithCodeFailure =
@@ -101,7 +105,8 @@ export type ResetWithCodeFailure =
 export type ResetWithCodeResult =
   /** `demo: true` = 演示码对上了，**没有任何后端参与**，界面不许说成「账号已改」 */
   | { ok: true; demo: boolean }
-  | { ok: false; reason: ResetWithCodeFailure }
+  /** 同上：`rate-limited` 带 {@link retryAfterSeconds}，界面据此禁用 + 倒计时 */
+  | { ok: false; reason: ResetWithCodeFailure; retryAfterSeconds?: number }
 
 // --------------------------------------------------------------------------- 失败映射（纯函数）
 
@@ -224,6 +229,20 @@ export const classifyResetFailure = (error: Sub2ApiError): ResetWithCodeFailure 
   return 'failed'
 }
 
+/**
+ * 服务端 `Retry-After` → 秒数（向上取整、至少 1 秒）；没有这个头 → `undefined`。
+ *
+ * **只转不改**：值来自 `errors.ts` 的 `retryAfterOf`（只认秒数形态的 `Retry-After`），
+ * 本函数不猜间隔、不自己造频控窗口 —— 429 的节奏以服务端为准（`services/consume/auth.ts:440`）。
+ */
+const retryAfterSecondsOf = (error: Sub2ApiError): number | undefined => {
+  const ms = error.retryAfterMs
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) {
+    return undefined
+  }
+  return Math.max(1, Math.ceil(ms / 1000))
+}
+
 // --------------------------------------------------------------------------- 演示会话状态
 
 /**
@@ -311,7 +330,10 @@ export const requestResetCode = async (email: string): Promise<RequestResetCodeR
     demoSession = { email: email.trim() }
     return { ok: true, demo: true, demoReason: reason === 'network' ? 'unreachable' : 'not-enabled' }
   }
-  return { ok: false, reason }
+  const retryAfterSeconds = retryAfterSecondsOf(result.error)
+  return retryAfterSeconds === undefined
+    ? { ok: false, reason }
+    : { ok: false, reason, retryAfterSeconds }
 }
 
 /**
@@ -349,5 +371,9 @@ export const resetPasswordWithCode = async (
     demoSession = null
     return { ok: true, demo: false }
   }
-  return { ok: false, reason: classifyResetFailure(result.error) }
+  const retryAfterSeconds = retryAfterSecondsOf(result.error)
+  const reason = classifyResetFailure(result.error)
+  return retryAfterSeconds === undefined
+    ? { ok: false, reason }
+    : { ok: false, reason, retryAfterSeconds }
 }

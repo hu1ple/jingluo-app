@@ -989,6 +989,8 @@ export const en = {
   sub2authSendCode: 'Send verification code',
   /** Countdown placeholder: {seconds} comes from the server cooldown, never hardcoded */
   sub2authCodeSent: 'Code sent, resend in {seconds}s',
+  /** 429 — not a failure: too many attempts, wait `{seconds}` (from `Retry-After`, 60s fallback) */
+  sub2authTooManyTries: 'Too many attempts. Please try again in {seconds}s.',
   sub2authCodeInvalid: 'Incorrect verification code',
   sub2authEmailInvalid: 'Invalid email address',
   sub2authCredentialInvalid: 'Incorrect account or password',

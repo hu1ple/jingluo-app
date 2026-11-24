@@ -978,6 +978,12 @@ export const zh = {
   sub2authSendCode: '发送验证码',
   /** 倒计时占位：{seconds} 由调用方按服务端冷却时间注入，不在代码里写死秒数 */
   sub2authCodeSent: '验证码已发送，{seconds}s 后可重新发送',
+  /**
+   * 429（服务端限流）——**不是失败**，是「太频繁，等一等」：注册 / 登录 / 重置发码与提交四处的
+   * 冷却提示共用这一句。`{seconds}` 来自服务端 `Retry-After`（没有该头就 60s），
+   * 由各自的倒计时注入，不写死在文案里。
+   */
+  sub2authTooManyTries: '操作太频繁，请 {seconds} 秒后再试',
   sub2authCodeInvalid: '验证码错误',
   sub2authEmailInvalid: '邮箱格式错误',
   sub2authCredentialInvalid: '账号或密码错误',

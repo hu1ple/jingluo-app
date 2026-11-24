@@ -37,6 +37,7 @@ import type { ConsumeClient } from '../../services/consume/index.js'
 import { Button } from '../base/Button.js'
 import { IconEyeOffOutline16, IconEyeOutline16 } from '../base/icons.js'
 import { ResetPasswordPage } from '../auth/ResetPasswordPage.js'
+import { createInFlightLatch, isRateLimited, rateLimitSecondsOf } from '../auth/submitGuard.js'
 import {
   initialAuthCardState,
   reduceAuthCard,
@@ -69,7 +70,16 @@ export const SettingsAuthCard = ({ consume, onSkip }: SettingsAuthCardProps) => 
 
   const [state, dispatch] = useReducer(reduceAuthCard, undefined, () => initialAuthCardState())
   const [countdown, setCountdown] = useState(0)
+  /** 这一轮发码倒计时是 429 挡回来的（提示要说「太频繁」，不能说「已发送」） */
+  const [countdownRateLimited, setCountdownRateLimited] = useState(false)
   const alive = useRef(true)
+  /**
+   * 提交闩（事故根因）：`submitting` 是 store 里的渲染态，同一 tick 连点两次会都读到旧值。
+   * 容器这只 ref 是**主防线**（跨渲染稳定、同步可读）；模型里还有一层模块级兜底，两处都在。
+   */
+  const submitLatch = useRef(createInFlightLatch())
+  /** 发码闩：`sendingCode` 同样是 state，同理（冷却只覆盖「已经发出去」之后） */
+  const sendLatch = useRef(createInFlightLatch())
 
   useEffect(() => {
     alive.current = true
@@ -96,6 +106,22 @@ export const SettingsAuthCard = ({ consume, onSkip }: SettingsAuthCardProps) => 
     }
   }, [countdown])
 
+  // 提交链路的 429 冷却：秒数在模型状态里，这里只负责每秒派一次 `cooldown-tick`
+  // （归零后 `authCardCanSubmit` 自己恢复可点，不需要额外事件）
+  useEffect(() => {
+    if (state.submitCooldown <= 0) {
+      return
+    }
+    const timer = window.setTimeout(() => {
+      if (alive.current) {
+        dispatch({ type: 'cooldown-tick' })
+      }
+    }, 1000)
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [state.submitCooldown])
+
   /** 卡里四个网络口子（真机实现；判定在 `settingsAuthCardModel.ts`，这里只是接线） */
   const source = useMemo<AuthCardSource>(
     () => ({
@@ -121,16 +147,42 @@ export const SettingsAuthCard = ({ consume, onSkip }: SettingsAuthCardProps) => 
         submitting,
         registrationLoaded: flags.loaded,
         registrationEnabled: flags.registrationEnabled,
+        // 主防线：同一 tick 的第二次点击在模型里被这只闩挡掉（模块级还有一层兜底）
+        latch: submitLatch.current,
       })
     )
   }, [run, source, state, submitting, flags.loaded, flags.registrationEnabled])
 
+  /**
+   * 发验证码。两条链路的口气不同：发出去 → 60s 界面节奏（`sub2authCodeSent`）；
+   * 被 429 挡回来 → 按服务端 `Retry-After` 倒计时（没有就 60s）并标成 `limited`。
+   *
+   * 倒计时**等结果回来才起**：以前是「一调用就乐观地起 60s」，429 时同样起 60s，
+   * 于是「太频繁」和「已发送」在屏幕上长得一模一样。
+   */
   const requestCode = useCallback(() => {
     if (sendingCode || countdown > 0 || state.email.trim() === '') {
       return
     }
+    const latch = sendLatch.current
+    if (!latch.enter()) {
+      return
+    }
     void sendCode({ email: state.email.trim() })
-    setCountdown(CODE_COUNTDOWN)
+      .then((result) => {
+        if (!alive.current) {
+          return
+        }
+        const limited = rateLimitSecondsOf(result.ok ? null : result.error)
+        setCountdownRateLimited(limited !== null)
+        setCountdown(limited ?? CODE_COUNTDOWN)
+      })
+      .catch(() => {
+        // 传输层不抛（`AuthResult` 不抛异常）；真抛了也只是「没有结论」——不要把倒计时锁死
+      })
+      .finally(() => {
+        latch.exit()
+      })
   }, [sendingCode, countdown, state.email, sendCode])
 
   const forgotSubmit = useCallback(() => {
@@ -173,7 +225,10 @@ export const SettingsAuthCard = ({ consume, onSkip }: SettingsAuthCardProps) => 
       submitting={submitting}
       sendingCode={sendingCode}
       countdown={countdown}
-      errorKey={error === null ? null : error.messageKey}
+      countdownRateLimited={countdownRateLimited}
+      // 429 的文案**不上屏**：store 把它归一成「登录失败，请重试」，而这是一句「太频繁」的冷却提示；
+      // 一起给会把「等一等」说成「出错了」。冷却结束后也不该再冒出来（同一次失败，同一句话）。
+      errorKey={error === null || isRateLimited(error) ? null : error.messageKey}
       registrationLoaded={flags.loaded}
       registrationEnabled={flags.registrationEnabled}
       onEvent={dispatch}

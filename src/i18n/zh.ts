@@ -249,6 +249,21 @@ export const zh = {
   avatarMenuSettingsDialogThemeSelectLightOption: '浅色',
   avatarMenuSettingsDialogThemeSelectDarkOption: '深色',
   avatarMenuSettingsDialogThemeSelectSystemOption: '跟随系统',
+  // 设置改版（iOS 风格「分组列表 + 二级页」）：分组标题与一级 / 二级页的新词条。
+  // 既有词条一律复用，这里只补以前没有的「分组名」和「公告栏」等标签。
+  settingsGroupAccount: '账户',
+  settingsGroupData: '数据',
+  settingsGroupApp: '应用',
+  settingsGroupAnnouncement: '公告',
+  settingsGroupAbout: '关于',
+  settingsRowAppearance: '外观',
+  settingsRowGeneral: '通用',
+  settingsRowVoice: '语音',
+  settingsRowReading: '朗读设置',
+  settingsRowAnnouncement: '公告栏',
+  settingsRowHelpFeedback: '帮助与反馈',
+  settingsAnnouncementEmpty: '暂无公告',
+  settingsAnnouncementMarkAllRead: '一键已读',
   apiKeyStart: '输入 API Key 开始使用',
   apiKeyEdit: '修改 API Key',
   apiKeyPlaceholder: '请输入 API Key',
@@ -794,9 +809,10 @@ export const zh = {
   historyImportSkipReasonFiles: '附件数据损坏（图片路径越界或重复）',
   // #314：归档里的 reason 来自别的版本 / 第三方构造，认不出来时给一句人话，不再把裸字符串当 key 查表
   historyImportSkipReasonUnknown: '未识别的跳过原因（来自别的版本或第三方归档）',
-  // 抖音号展示项（用户直接指定的改动）：值可点、可复制
-  settingDouyinLabel: '抖音号',
-  settingDouyinDescription: '点一下号码即可复制，去抖音搜索就能找到。',
+  // 「关于」组里的开发团队社媒渠道（第六轮）：抖音号只是这个渠道的具体值
+  settingsSocialLabel: '开发团队社媒',
+  settingsSocialFreeNotice:
+    '本软件本体完全免费，不会以任何名义收费；如有人向你收费，请通过这个渠道联系我们举报。',
   settingDouyinCopyAria: '复制抖音号',
   settingDouyinCopied: '抖音号已复制',
   oursErrCustomerNeedsKey:

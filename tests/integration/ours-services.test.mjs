@@ -23,7 +23,6 @@ import {
   APP_URL,
   finish,
   fillBaseUrl,
-  openSettingsDataSection,
   selectProviderKind,
 } from '../helpers/helpers.mjs'
 import { verifyAppUrl } from '../helpers/env.mjs'
@@ -115,7 +114,18 @@ try {
 
   // ---------- [A] 入口只在自有渠道出现（#166） ----------
   console.log('\n[A] 渠道门禁')
-  await openSettingsDataSection(page)
+  // 2026-11-24 设置改版：分组从「顶栏 tab」变成「分组列表 + 二级页」，
+  // 「账户与消费」入口挂在**一级列表**上（`openSettingsDataSection` 会进到「数据管理」二级页，
+  // 那一屏看不到它）。所以这里只需要把设置弹层开在一级：若当前已在某个二级页，先点「返回」。
+  if ((await page.getByRole('dialog').count()) === 0) {
+    await page.getByRole('button', { name: /设置|Settings/ }).last().click()
+    await page.waitForTimeout(600)
+  }
+  const backBtn = page.getByTestId('settings-back')
+  if ((await backBtn.count()) > 0) {
+    await backBtn.first().click()
+    await page.waitForTimeout(600)
+  }
   eq(await openRow(), 1, '自有渠道下有「账户与消费」入口')
   eq(await oldRow(), 0, '旧 `ours-services-row` 已退役（一处分都不留）')
   eq(await oldDialog(), 0, '旧 `ours-services-dialog` 已退役')

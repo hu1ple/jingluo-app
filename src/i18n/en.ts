@@ -251,6 +251,21 @@ export const en = {
   avatarMenuSettingsDialogThemeSelectLightOption: 'Light',
   avatarMenuSettingsDialogThemeSelectDarkOption: 'Dark',
   avatarMenuSettingsDialogThemeSelectSystemOption: 'System',
+  // Settings redesign (iOS-style grouped list + second-level pages): group titles and new labels.
+  // Existing strings are reused as-is; only the group names and the announcement labels are new.
+  settingsGroupAccount: 'Account',
+  settingsGroupData: 'Data',
+  settingsGroupApp: 'App',
+  settingsGroupAnnouncement: 'Announcements',
+  settingsGroupAbout: 'About',
+  settingsRowAppearance: 'Appearance',
+  settingsRowGeneral: 'General',
+  settingsRowVoice: 'Voice',
+  settingsRowReading: 'Reading settings',
+  settingsRowAnnouncement: 'Announcement board',
+  settingsRowHelpFeedback: 'Help & feedback',
+  settingsAnnouncementEmpty: 'No announcements yet',
+  settingsAnnouncementMarkAllRead: 'Mark all as read',
   apiKeyStart: 'Enter an API Key to get started',
   apiKeyEdit: 'Edit API Key',
   apiKeyPlaceholder: 'Enter API Key',
@@ -806,8 +821,10 @@ export const en = {
     'attachment data is damaged (image path escapes the folder, or the image is duplicated)',
   historyImportSkipReasonUnknown:
     'Unrecognized skip reason (from another version or a third-party archive)',
-  settingDouyinLabel: 'Douyin ID',
-  settingDouyinDescription: 'Tap the ID to copy it, then search for it in Douyin.',
+  // Developer social channel row in "About" (round 6): the Douyin id is just this channel's value
+  settingsSocialLabel: 'Developer social media',
+  settingsSocialFreeNotice:
+    'The app itself is completely free and will never charge you. Report anyone who does through this channel.',
   settingDouyinCopyAria: 'Copy Douyin ID',
   settingDouyinCopied: 'Douyin ID copied',
   oursErrCustomerNeedsKey:

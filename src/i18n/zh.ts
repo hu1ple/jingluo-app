@@ -318,6 +318,9 @@ export const zh = {
   historySelectModeExit: '退出选择',
   historySelectAll: '全选',
   historySelectInvert: '反选',
+  historyDeleteSelected: '删除选中',
+  historyDeleteSelectedWarning: '将彻底删除选中的 {count} 个会话及其聊天记录。删除后无法恢复。',
+  historyConfirmDelete: '确认删除',
   historyExportSelected: '导出选中',
   // #536：选中导出改为和老出口同一个落盘函数后，提示要带上**真正写下去的文件名**
   // （Android 的 SAF 面板可能按重名规则改名；只报条数的话，用户无从确认文件到底落没落盘）。

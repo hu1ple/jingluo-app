@@ -9,7 +9,6 @@ import { BackupError, exportHistory } from '../../services/chat/backup.js'
 import { saveHistoryArchive } from '../../services/chat/history/saveArchive.js'
 import { newChat, removeSession, useChatStore } from '../../services/chat/store.js'
 import { sweepOrphanAttachmentsAfterDelete } from '../attachments/index.js'
-import type { SessionSummary } from '../../services/chat/types.js'
 import { MOTION_EXIT, usePresence } from '../../utils/usePresence.js'
 import { Button } from '../base/Button.js'
 import { IconButton } from '../base/IconButton.js'
@@ -49,7 +48,7 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
     }
     return titles
   }, [sessions])
-  const [deleting, setDeleting] = useState<SessionSummary | null>(null)
+  const [deleting, setDeleting] = useState<string[] | null>(null)
   const [deletePending, setDeletePending] = useState(false)
   // #390 选择性导出：进入「选择」模式后逐条勾选，只导出勾中的会话（包格式与全量导出一致）。
   const [selecting, setSelecting] = useState(false)
@@ -116,6 +115,28 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
       )
     } finally {
       setExporting(false)
+    }
+  }
+
+  const confirmDelete = async () => {
+    if (!deleting || deletePending) return
+    setDeletePending(true)
+    try {
+      const failed: string[] = []
+      for (const id of deleting) {
+        if (!(await removeSession(id))) failed.push(id)
+      }
+      if (failed.length < deleting.length) void sweepOrphanAttachmentsAfterDelete()
+      if (failed.length > 0) {
+        setDeleting(failed)
+        if (selecting) setSelected(failed)
+        showToast({ key: 'sessionDeleteFailed', type: 'error' })
+      } else {
+        setDeleting(null)
+        if (selecting) exitSelection()
+      }
+    } finally {
+      setDeletePending(false)
     }
   }
 
@@ -194,7 +215,7 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
                   selecting={selecting}
                   selected={selectedSet.has(session.id)}
                   onToggle={toggleSelected}
-                  onDelete={() => setDeleting(session)}
+                  onDelete={() => setDeleting([session.id])}
                 />
               ))}
             </div>
@@ -219,6 +240,8 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
             <button type="button" className={styles.selectionAction} onClick={invertSelection}>
               {t('historySelectInvert')}
             </button>
+          </div>
+          <div className={styles.selectionActions}>
             <Button
               variant="outlined"
               size="m"
@@ -227,6 +250,18 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
               onClick={() => void exportSelected()}
             >
               {t('historyExportSelected')}
+            </Button>
+            <Button
+              variant="dangerOutlined"
+              size="m"
+              disabled={exporting || selected.length === 0}
+              data-testid="sider-delete-selected"
+              onClick={() => {
+                const ids = sessions.filter((session) => selectedSet.has(session.id)).map((session) => session.id)
+                if (ids.length > 0) setDeleting(ids)
+              }}
+            >
+              {t('historyDeleteSelected')}
             </Button>
           </div>
         </div>
@@ -247,7 +282,7 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
       </div>
       {deleting ? (
         <Modal
-          title={t('deleteSessionModalContentTitle')}
+          title={t(selecting ? 'historyDeleteSelected' : 'deleteSessionModalContentTitle')}
           onClose={() => {
             if (!deletePending) {
               setDeleting(null)
@@ -261,31 +296,14 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
               <Button
                 variant="danger"
                 disabled={deletePending}
-                onClick={async () => {
-                  setDeletePending(true)
-                  try {
-                    if (await removeSession(deleting.id)) {
-                      setDeleting(null)
-                      /**
-                       * 文档附件孤儿清扫（#480 / #527）：会话删除事务提交**之后**再扫，
-                       * 先收集「当前仍被任一消息引用的附件 id」，再连元数据 / 全文 / 原件一起回收。
-                       * 不 await：清理失败不该让「删除会话」这条主流程看起来失败（失败会自己 toast）。
-                       */
-                      void sweepOrphanAttachmentsAfterDelete()
-                    } else {
-                      showToast({ key: 'sessionDeleteFailed', type: 'error' })
-                    }
-                  } finally {
-                    setDeletePending(false)
-                  }
-                }}
+                onClick={() => void confirmDelete()}
               >
-                {t('delete')}
+                {t(selecting ? 'historyConfirmDelete' : 'delete')}
               </Button>
             </>
           }
         >
-          {t('deleteSessionWithFilesDescription')}
+          {selecting ? t('historyDeleteSelectedWarning', { count: deleting.length }) : t('deleteSessionWithFilesDescription')}
         </Modal>
       ) : null}
     </div>

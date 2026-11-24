@@ -49,6 +49,24 @@
 }
 
 /* ── 字号档 ────────────────────────────────────────────────────────────── */
+:root[data-ds-reading-size='xsmall'] {
+  --ds-reading-size-body: 12px;
+  --ds-reading-line-body: 21px;
+  --ds-reading-size-secondary: 11px;
+  --ds-reading-line-secondary: 19px;
+  --ds-reading-size-table: 12px;
+  --ds-reading-line-table: 20px;
+  --ds-reading-size-h1: 18px;
+  --ds-reading-line-h1: 26px;
+  --ds-reading-size-h2: 17px;
+  --ds-reading-line-h2: 25px;
+  --ds-reading-size-h3: 15px;
+  --ds-reading-line-h3: 23px;
+  --ds-reading-size-h4: 12px;
+  --ds-reading-line-h4: 21px;
+  --ds-reading-line-bubble: 18px;
+}
+
 :root[data-ds-reading-size='small'] {
   --ds-reading-size-body: 14px;
   --ds-reading-line-body: 24px;
@@ -119,6 +137,24 @@
   --ds-reading-size-h4: 20px;
   --ds-reading-line-h4: 34px;
   --ds-reading-line-bubble: 30px;
+}
+
+:root[data-ds-reading-size='xxlarge'] {
+  --ds-reading-size-body: 22px;
+  --ds-reading-line-body: 37px;
+  --ds-reading-size-secondary: 20px;
+  --ds-reading-line-secondary: 33px;
+  --ds-reading-size-table: 21px;
+  --ds-reading-line-table: 34px;
+  --ds-reading-size-h1: 33px;
+  --ds-reading-line-h1: 46px;
+  --ds-reading-size-h2: 31px;
+  --ds-reading-line-h2: 44px;
+  --ds-reading-size-h3: 28px;
+  --ds-reading-line-h3: 39px;
+  --ds-reading-size-h4: 22px;
+  --ds-reading-line-h4: 37px;
+  --ds-reading-line-bubble: 33px;
 }
 
 /* ── 字重档 ────────────────────────────────────────────────────────────── */

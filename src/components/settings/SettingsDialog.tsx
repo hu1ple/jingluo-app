@@ -42,6 +42,7 @@ import { useChatStore, type HistoryImportSummary } from '../../services/chat/sto
 import {
   setLocale,
   setEnterKeyMode,
+  readingFontSizes,
   setReadingFontSize,
   setReadingFontWeight,
   setReadingLineHeight,
@@ -1690,12 +1691,14 @@ const ExportHistory = ({ disabled }: { disabled: boolean }) => {
  * 只作用于消息区（聊天正文、思考正文、用户气泡）；设置面板自身与输入框不跟着变。
  * 三项默认档等于改造前的固定字号字重行高，没动过设置的人看到的观感不变。
  */
-const readingFontSizeOptions: { value: ReadingFontSize; label: TranslationKey }[] = [
-  { value: 'small', label: 'settingDialogReadingSizeSmall' },
-  { value: 'standard', label: 'settingDialogReadingSizeStandard' },
-  { value: 'large', label: 'settingDialogReadingSizeLarge' },
-  { value: 'xlarge', label: 'settingDialogReadingSizeXLarge' },
-]
+const readingSizeLabels: Record<ReadingFontSize, TranslationKey> = {
+  xsmall: 'settingDialogReadingSizeXSmall',
+  small: 'settingDialogReadingSizeSmall',
+  standard: 'settingDialogReadingSizeStandard',
+  large: 'settingDialogReadingSizeLarge',
+  xlarge: 'settingDialogReadingSizeXLarge',
+  xxlarge: 'settingDialogReadingSizeXXLarge',
+}
 
 const readingFontWeightOptions: { value: ReadingFontWeight; label: TranslationKey }[] = [
   { value: 'regular', label: 'settingDialogReadingWeightRegular' },
@@ -1716,22 +1719,42 @@ const ReadingSettings = () => {
   const readingLineHeight = useSettings((state) => state.readingLineHeight)
   return (
     <>
-      <SettingCell
-        label={t('settingDialogReadingFontSize')}
-        description={t('settingDialogReadingGroupLabel')}
-        status={null}
-        action={
-          <Select
-            ariaLabel={t('settingDialogReadingFontSize')}
-            value={readingFontSize}
-            options={readingFontSizeOptions.map((option) => ({
-              value: option.value,
-              label: t(option.label),
-            }))}
-            onChange={setReadingFontSize}
-          />
-        }
-      />
+      <div className={styles.sizePanel}>
+        <div className={styles.sizeHeading}>
+          <span>{t('settingDialogReadingFontSize')}</span>
+          <button
+            type="button"
+            className={styles.sizeReset}
+            disabled={readingFontSize === 'standard'}
+            onClick={() => setReadingFontSize('standard')}
+          >
+            <IconRefreshOutline16 /> {t('settingDialogReadingReset')}
+          </button>
+        </div>
+        <div className={styles.sizePreview}>
+          <span>{t('settingDialogReadingSample')}</span>
+          <span>{t('settingDialogReadingSampleReply')}</span>
+        </div>
+        <div className={styles.sizeControl}>
+          <small aria-hidden="true">{t('settingDialogReadingSizeSmall')}</small>
+          <div className={styles.sizeTrack}>
+            <div className={styles.sizeTicks} aria-hidden="true">
+              {readingFontSizes.map((size) => <i key={size} />)}
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={readingFontSizes.length - 1}
+              step={1}
+              value={readingFontSizes.indexOf(readingFontSize)}
+              aria-label={t('settingDialogReadingFontSize')}
+              aria-valuetext={t(readingSizeLabels[readingFontSize])}
+              onChange={(event) => setReadingFontSize(readingFontSizes[event.currentTarget.valueAsNumber])}
+            />
+          </div>
+          <strong aria-hidden="true">{t('settingDialogReadingSizeLarge')}</strong>
+        </div>
+      </div>
       <SettingCell
         label={t('settingDialogReadingFontWeight')}
         status={null}

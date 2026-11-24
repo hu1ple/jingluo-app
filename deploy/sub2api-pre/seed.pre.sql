@@ -29,4 +29,9 @@ INSERT INTO settings (key, value, updated_at) VALUES
 UPDATE settings SET value = 'false', updated_at = now() WHERE key IN ('ses_enabled', 'aliyun_dm_enabled');
 UPDATE settings SET value = '',      updated_at = now() WHERE key = 'email_verify_provider';
 
+-- 4) 默认分组的平台：迁移默认给的是 `anthropic`，而生产 group 1 是 `openai`。
+--    不一致的后果是**静默 503**：账号的 platform 是 openai，分组却要 anthropic →
+--    候选集永远为空 → 网关回 `No available accounts`（本次实测踩到，排查了半天）。
+UPDATE groups SET platform = 'openai', updated_at = now() WHERE id = 1;
+
 COMMIT;

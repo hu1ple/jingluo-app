@@ -59,3 +59,4 @@ dl-release-token*
 
 # 预发布环境秘密项（只在 140 上，不进 git）
 deploy/sub2api-pre/seed.local.env
+deploy/sub2api-pre/seed.upstream.local.sql

@@ -19,6 +19,7 @@
     "dev": "rspack serve -c rspack.config.ts",
     "build": "node scripts/build.mjs",
     "build:internal": "node scripts/build.mjs --internal",
+    "build:staging": "node scripts/build.mjs --staging --allow-insecure",
     "type": "tsc -p tsconfig.json",
     "check:legacy": "node scripts/check-bundle-syntax.mjs",
     "check:bundle-target": "node scripts/check-bundle-target.mjs",

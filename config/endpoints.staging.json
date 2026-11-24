@@ -1,0 +1,49 @@
+{
+  "feedbackUrl": "https://apia.ecsafe.cn/feedback",
+  "legacyHosts": [
+    "123.207.199.196",
+    "62.106.70.167"
+  ],
+  "allowedHosts": [
+    "apia.ecsafe.cn",
+    "140.210.13.146"
+  ],
+  "allowedPorts": [
+    443,
+    16100
+  ],
+  "download": {
+    "primaryBase": "http://jingluo.nekoai.com.cn",
+    "fallbackBase": "https://dl.rose7.cn"
+  },
+  "consume": {
+    "baseUrl": "http://140.210.13.146:16100",
+    "apiV1Prefix": "/api/v1",
+    "gatewayPrefix": "/v1",
+    "timeoutMs": {
+      "read": 10000,
+      "write": 20000,
+      "redeem": 30000
+    }
+  },
+  "pay": {
+    "baseUrl": "https://apia.ecsafe.cn",
+    "timeoutMs": {
+      "read": 10000,
+      "write": 20000
+    }
+  },
+  "migration": {
+    "enabled": false,
+    "baseUrl": "",
+    "endpoint": "/legacy/claim",
+    "timeoutMs": 20000
+  },
+  "update": {
+    "privateManifest": {
+      "enabled": false,
+      "url": "",
+      "tokenEnv": "DL_PRIVATE_TOKEN"
+    }
+  }
+}

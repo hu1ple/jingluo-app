@@ -45,6 +45,25 @@ export const ENDPOINTS_FILE = path.resolve(LIB_DIR, '..', '..', 'config', 'endpo
 export const ENDPOINTS_LABEL = 'config/endpoints.json'
 
 /**
+ * 环境 profile → 配置文件（Issue：预发布与生产要用不同地址，但**不允许**第二份真相源靠人手改）。
+ *
+ * - `production`（默认）：`config/endpoints.json`，唯一正式来源；
+ * - `staging`：`config/endpoints.staging.json`，只用于预发布联调包（`pnpm build:staging`）。
+ *
+ * 为什么不是「改 endpoints.json 里的地址」：那份是**所有正式产物**的地址来源，
+ * 改它等于给线上换后端。两份文件各自演进，判据（https / 回环 / 废弃域 / consume≠pay）同一套，
+ * 由 `loadConsumePay(profile 的路径)` 原样复用到预发布这份上。
+ */
+export const ENDPOINTS_PROFILES = Object.freeze({
+  production: 'config/endpoints.json',
+  staging: 'config/endpoints.staging.json',
+})
+
+/** 取 profile 对应的配置文件相对路径；未知 profile 回落到 production，不抛 */
+export const resolveEndpointsLabel = (profile) =>
+  ENDPOINTS_PROFILES[profile] ?? ENDPOINTS_PROFILES.production
+
+/**
  * 废弃域黑名单（#484 §6.3 第 2 条 / §七 第 1 条）。
  * 这里必须写出这些字面量才能拦住它们，所以整行带 `check-ip-allow`（理由写在这行后面）。
  */

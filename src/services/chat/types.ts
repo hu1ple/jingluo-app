@@ -48,6 +48,8 @@ export type UserMessage = MessageBranch & {
    * 点名提示（哪个附件、为什么没发）。空 / 缺省 = 这条消息没有附件被跳过。
    */
   unavailable?: UnavailableAttachment[]
+  /** 有跳过项时，记录同次检查中可用的附件；旧消息没有这份快照。 */
+  availableAtSend?: Pick<FileAttachment, 'id' | 'name'>[]
 }
 
 /** 思考块：thinking_delta 累积，签名随 signature_delta 到达；历史轮次的思考服务端会丢弃，不回传 */

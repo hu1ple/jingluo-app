@@ -5,7 +5,7 @@
 // 这是**用户可见 bug**，所以这一层不看内部状态，只钉四件用户在屏幕上能看到的事（4 行场景表）：
 //
 //   [1] 导入会话 + 附件**源缺失**（元信息在、原件不在）+ 发纯文字
-//       → 消息真的发出去（有回答）、**没有**「上传失败」、消息里有一条**持久**提示点名是哪个附件；
+//       → 消息真的发出去（有回答）、**没有**「上传失败」、消息里有一条**持久**提示说明附件已跳过；
 //   [2] 导入会话 + 附件**源存在**
 //       → 与正常会话一致：消息照发，**不误报**「附件不可用」；
 //   [3] 新会话带附件
@@ -27,6 +27,7 @@
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate'
 import { chromium } from 'playwright'
 import { buildArchiveZip } from '../fixtures/domain05/archive-fixture.mjs'
 
@@ -37,6 +38,7 @@ const API_KEY = 'sk-379-official-0123456789'
 const ANSWER = '收到，我们接着聊。'
 /** 导入档案里那条附件的文件名（archive-fixture 的 fragment 字段） */
 const ATTACHMENT_NAME = 'image.png'
+const REPEATED_NAME = '历史附件-重复名称.docx'
 const TITLE_NO_SOURCE = '导入无原件会话'
 const TITLE_WITH_SOURCE = '导入带原件会话'
 /** 归档里那条历史提问的正文（两个包都只有这一轮，内容一字不差） */
@@ -126,6 +128,15 @@ const run = async () => {
     locale: 'zh-CN',
     viewport: { width: 1280, height: 900 },
   })
+  // 本测试只使用本机静态站和下方的模拟 API。
+  await context.route('**/*', (route) => {
+    const url = new URL(route.request().url())
+    if (url.origin === new URL(APP_URL).origin) return route.continue()
+    if (url.pathname.endsWith('/settings/public')) return route.fulfill({ json: {} })
+    if (url.pathname.endsWith('/announcements.json')) return route.fulfill({ json: [] })
+    if (url.pathname.endsWith('/releases.json')) return route.fulfill({ json: [] })
+    return route.abort()
+  })
   const page = await context.newPage()
   const consoleErrors = []
   page.on('console', (message) => {
@@ -171,6 +182,7 @@ const run = async () => {
   await page.evaluate(
     ([base, key]) => {
       window.localStorage.clear()
+      window.localStorage.setItem('chat-demo:announcements-popup-shown', 'true')
       window.localStorage.setItem('chat-demo:provider-kind', 'deepseek')
       window.localStorage.setItem('chat-demo:api-key', key)
       // 官方渠道（deepseek）的地址本来内置；这里指到假域名，请求全被 route 接住。
@@ -189,17 +201,32 @@ const run = async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'issue379-'))
   const zipNoSource = path.join(dir, 'no-source.zip')
   const zipWithSource = path.join(dir, 'with-source.zip')
-  await writeFile(
-    zipNoSource,
-    buildArchiveZip({
-      sessionCount: 1,
-      imageBytes: 2048,
-      imageExportPath: 'none',
-      // 两个包的会话 id 必须岔开：合并导入按 id 判「是不是同一条会话」（#390 的 resolveConflict）
-      idPrefix: 'issue379-no-source',
-      titlePrefix: TITLE_NO_SOURCE,
+  const missing = unzipSync(buildArchiveZip({
+    sessionCount: 1,
+    imageBytes: 2048,
+    imageExportPath: 'none',
+    idPrefix: 'issue379-no-source',
+    titlePrefix: TITLE_NO_SOURCE,
+  }))
+  const sessionPath = 'chat_sessions/issue379-no-source-1.json'
+  const history = JSON.parse(strFromU8(missing[sessionPath]))
+  const files = history.messages[0].fragments.find(fragment => fragment.type === 'FILE').files
+  // 多个不同 id 共用文件名，模拟旧会话导入后提示占满聊天页。
+  for (let index = 0; index < 12; index++) {
+    files.push({
+      ...files[0],
+      id: `missing-doc-${index}`,
+      file_name: REPEATED_NAME,
+      is_image: false,
+      width: null,
+      height: null,
     })
-  )
+  }
+  const presentPath = 'chat_sessions/issue379-no-source-1_files/available-map_行程图.png'
+  files.push({ ...files[0], id: 'available-map', file_name: '行程图.png', export_path: presentPath })
+  missing[presentPath] = new Uint8Array(await readFile(PNG))
+  missing[sessionPath] = strToU8(JSON.stringify(history))
+  await writeFile(zipNoSource, zipSync(missing))
   await writeFile(
     zipWithSource,
     buildArchiveZip({
@@ -219,7 +246,7 @@ const run = async () => {
         .click()
     }
     await page
-      .getByRole('tab', { name: /数据管理|Data/ })
+      .getByTestId('settings-row-data')
       .first()
       .click()
     await page.locator('input[type="file"][accept*="zip"]').setInputFiles(zipPath)
@@ -250,11 +277,19 @@ const run = async () => {
     uploads.length === uploadsBefore,
     `uploads +${uploads.length - uploadsBefore}`
   )
-  const notice = page.getByRole('note').filter({ hasText: '在本机不可用' })
+  const notice = page.getByRole('note').filter({ hasText: '附件详情' })
   check('消息里有一条「附件不可用」提示', (await notice.count()) === 1)
-  const noticeText = (await notice.count()) > 0 ? await notice.first().innerText() : ''
-  check('提示点名了是哪个附件', noticeText.includes(ATTACHMENT_NAME), noticeText)
-  check('提示说明本条按纯文字发出', noticeText.includes('本条已按纯文字发送'), noticeText)
+  const noticeText = (await notice.count()) > 0 ? await notice.locator('summary').innerText() : ''
+  check('默认只显示跳过数量', noticeText.includes('13') && !noticeText.includes(ATTACHMENT_NAME) && !noticeText.includes(REPEATED_NAME), noticeText)
+  check('提示说明不可用附件已跳过', noticeText.includes('已跳过'), noticeText)
+  const summary = notice.locator('summary')
+  check('默认收起文件清单', !(await notice.locator('li').first().isVisible()))
+  await summary.click()
+  check('展开后列出可用与缺原件的文件', (await notice.innerText()).includes('发送时可用（1）') &&
+    (await notice.innerText()).includes('行程图.png') && (await notice.innerText()).includes('缺少原件，已跳过（13）') &&
+    (await notice.locator('li').count()) === 14 && await notice.getByText(REPEATED_NAME).first().isVisible())
+  await summary.click()
+  check('再次点击可收起', !(await notice.locator('li').first().isVisible()))
   const bodyNoSource = chats[chats.length - 1] ?? ''
   check(
     '官方渠道请求体里没有这个附件（既无 file_id，也无 file 块）',
@@ -266,12 +301,12 @@ const run = async () => {
   await closeSettings(page)
   await page.locator('textarea').first().waitFor({ timeout: 30000 })
   await openSession(page, TITLE_NO_SOURCE)
-  const noticeAfterReload = page.getByRole('note').filter({ hasText: '在本机不可用' })
+  const noticeAfterReload = page.getByRole('note').filter({ hasText: '附件详情' })
   check('刷新后提示仍在', (await noticeAfterReload.count()) === 1)
   check(
-    '刷新后提示里仍然点名附件',
+    '刷新后提示仍为缩略摘要',
     (await noticeAfterReload.count()) > 0 &&
-      (await noticeAfterReload.first().innerText()).includes(ATTACHMENT_NAME)
+      !(await noticeAfterReload.locator('li').first().isVisible())
   )
   check('刷新后仍然没有「上传失败」', (await page.getByText('上传失败').count()) === 0)
 
@@ -283,7 +318,7 @@ const run = async () => {
   check('源存在时没有「上传失败」', (await page.getByText('上传失败').count()) === 0)
   check(
     '源存在时不许出现「附件不可用」提示（误报比不报更糟）',
-    (await page.getByRole('note').filter({ hasText: '在本机不可用' }).count()) === 0
+    (await page.getByRole('note').filter({ hasText: '附件详情' }).count()) === 0
   )
   const bodyWithSource = chats[chatsBeforeSource] ?? ''
   check(
@@ -317,7 +352,7 @@ const run = async () => {
   check('新会话没有「上传失败」', (await page.getByText('上传失败').count()) === 0)
   check(
     '新会话没有「附件不可用」提示（本轮真附件不受本改动影响）',
-    (await page.getByRole('note').filter({ hasText: '在本机不可用' }).count()) === 0
+    (await page.getByRole('note').filter({ hasText: '附件详情' }).count()) === 0
   )
   const newBody = chats[chatsBeforeNew] ?? ''
   check('新会话请求体里带着 file_id（deepseek 通路不变）', newBody.includes('file-api-379'))
@@ -345,12 +380,26 @@ const run = async () => {
   await openSession(page, TITLE_NO_SOURCE)
   for (const width of [390, 360]) {
     await page.setViewportSize({ width, height: 780 })
-    const narrowNotice = page.getByRole('note').filter({ hasText: '在本机不可用' })
+    const narrowNotice = page.getByRole('note').filter({ hasText: '附件详情' })
     await narrowNotice.first().waitFor({ timeout: 15000 })
     await page.screenshot({ path: path.join(shots, `issue379-notice-${width}.png`) })
     check(`${width} 宽下提示仍可见`, (await narrowNotice.count()) === 1)
   }
   console.log(`  截图：${shots}`)
+
+  // 编辑导入会话中的旧提问，重发会继承该提问原有的附件。
+  await page.setViewportSize({ width: 1280, height: 900 })
+  const oldId = await page.locator('[data-row-id]').filter({ hasText: HISTORY_TEXT }).first().getAttribute('data-row-id')
+  const oldQuestion = page.locator(`[data-row-id="${oldId}"]`)
+  await oldQuestion.getByRole('button', { name: '编辑消息' }).click()
+  await oldQuestion.getByRole('textbox').fill('修改以前的提问')
+  await oldQuestion.getByRole('button', { name: '发送', exact: true }).click()
+  const edited = page.locator('[data-row-id]').filter({ hasText: '修改以前的提问' })
+  const editedNotice = edited.getByRole('note')
+  await editedNotice.waitFor()
+  const editedText = await editedNotice.locator('summary').innerText()
+  check('旧提问重发后仍说明跳过不可用附件，并缩短文件列表',
+    editedText.includes('已跳过') && !editedText.includes(ATTACHMENT_NAME) && !editedText.includes(REPEATED_NAME), editedText)
 
   console.log('\n[6] 整条通路没有 console error / 未捕获异常')
   check('console error = 0', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | '))

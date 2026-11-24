@@ -72,7 +72,7 @@ export const UserMessage = memo(function UserMessage({
   const files = asArray(message.files)
   /**
    * #379：这条消息**发送时**因源缺失被跳过的附件（导入的历史会话只有元信息）。
-   * 它不是错误态 —— 消息已经按剩下的内容发出去了，这里只负责「说清楚是哪几个附件没跟着发」。
+   * 它不是错误态 —— 这里只提示附件已跳过，避免长会话的历史文件名占满消息区。
    * 用持久的一行提示而不是 toast：用户回看这条消息时，原因必须还在。
    */
   const unavailable = asArray(message.unavailable)
@@ -157,9 +157,21 @@ export const UserMessage = memo(function UserMessage({
       ) : null}
       {unavailable.length > 0 ? (
         <div className={styles.unavailable} role="note">
-          {t('attachUnavailableSent', {
-            names: unavailable.map((item) => item.name).join('、'),
-          })}
+          <details>
+            <summary>{t('attachUnavailableSent', { count: unavailable.length })}</summary>
+            <div className={styles.attachmentDetails}>
+              {Array.isArray(message.availableAtSend) ? (
+                <>
+                  <strong>{t('attachAvailableList', { count: message.availableAtSend.length })}</strong>
+                  {message.availableAtSend.length > 0 && (
+                    <ul>{message.availableAtSend.map((file) => <li key={file.id}>{file.name}</li>)}</ul>
+                  )}
+                </>
+              ) : <p>{t('attachOlderNotice')}</p>}
+              <strong>{t('attachMissingList', { count: unavailable.length })}</strong>
+              <ul>{unavailable.map((file) => <li key={file.id}>{file.name}</li>)}</ul>
+            </div>
+          </details>
         </div>
       ) : null}
       {editing ? (

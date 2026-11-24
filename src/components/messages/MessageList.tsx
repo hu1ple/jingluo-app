@@ -142,6 +142,18 @@ export const MessageList = ({
   // 实测结果存在 ref 里，靠这个版本的计数触发重算占位。
   const [, setMeasureVersion] = useState(0)
   const [metrics, setMetrics] = useState({ top: 0, viewport: 0 })
+  const [editingIds, setEditingIds] = useState(() => new Set<string>())
+  const onEditingChange = useCallback((id: string, editing: boolean) => {
+    setEditingIds((previous) => {
+      const next = new Set(previous)
+      if (editing) {
+        next.add(id)
+      } else {
+        next.delete(id)
+      }
+      return next
+    })
+  }, [])
   const messages = getVisibleMessages(session)
   const [previousVersions, setPreviousVersions] = useState(() =>
     buildMessageVersions(session, new Map())
@@ -440,6 +452,7 @@ export const MessageList = ({
           busy={streaming}
           versions={versions.get(message.id) ?? EMPTY_VERSIONS}
           onSelectVersion={selectVersion}
+          onEditingChange={onEditingChange}
         />
       ) : (
         <AssistantMessage
@@ -452,7 +465,7 @@ export const MessageList = ({
           onSelectVersion={selectVersion}
         />
       ),
-    [lastIndex, selectVersion, session.id, streaming, uploadRetryId, versions]
+    [lastIndex, onEditingChange, selectVersion, session.id, streaming, uploadRetryId, versions]
   )
 
   // 按钮挂在输入区里（输入框上方），所以状态与动作从列表这一层传给 footer 子树
@@ -469,6 +482,7 @@ export const MessageList = ({
             <div ref={contentRef} className={styles.column}>
               <VirtualRows
                 items={messages}
+                retainedIds={editingIds}
                 measured={measured}
                 estimate={estimate}
                 scrollTop={metrics.top}

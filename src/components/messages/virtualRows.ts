@@ -9,8 +9,8 @@ import { Fragment, createElement, type ReactElement, type ReactNode } from 'reac
  * 这里的约定：
  * 1. **高度一行都不许假设是固定值。** 一条消息的高度只有挂载后实测才知道（流式增长的回答还在变），
  *    未实测的行用估值占位，实测到的行立刻覆盖估值 —— 见 `buildLayout`。
- * 2. **挂载窗口只看滚动位置，不看总条数。** 视口高度 + 上下各一段 overscan 之外的行一律不挂载，
- *    未挂载的行用上下两块占位（topPad / bottomPad）撑住滚动高度，滚动条长度、滚回顶部都不变。
+ * 2. **挂载窗口只看滚动位置，不看总条数。** 视口高度 + 上下各一段 overscan 之外仅保留正在编辑的行，
+ *    未挂载的连续行用占位块（topPad / bottomPad）撑住滚动高度，滚动条长度、滚回顶部都不变。
  * 3. 窗口计算和真正决定「挂载哪些节点」的是同一份代码（`findWindow` → `VirtualRows`），
  *    所以 `tests/unit/message-list-virtual.test.mjs` 用 renderToStaticMarkup 数出来的节点数，
  *    就是组件实际挂载的节点数。
@@ -134,6 +134,7 @@ export const findWindow = ({
 export type VirtualRowsProps<T> = {
   /** 全量数据（长会话可能是几千条）。 */
   items: readonly T[]
+  retainedIds?: ReadonlySet<string>
   /** 与 `items` 对齐的实测高度表，没有实测的位置留 undefined。 */
   measured: readonly (number | undefined)[]
   /** 未实测行的估值。 */
@@ -156,6 +157,7 @@ export type VirtualRowsProps<T> = {
  */
 export const VirtualRows = <T,>({
   items,
+  retainedIds,
   measured,
   estimate = DEFAULT_ESTIMATE,
   scrollTop = 0,
@@ -169,35 +171,40 @@ export const VirtualRows = <T,>({
   const window = findWindow({ layout, scrollTop, viewport, overscan, anchorEnd })
 
   const children: ReactNode[] = []
-  if (window.topPad > 0) {
-    children.push(
-      createElement('div', {
-        key: 'virtual-top-spacer',
-        'data-virtual-spacer': 'top',
-        'aria-hidden': true,
-        style: { height: window.topPad },
-      })
-    )
+  let cursor = 0
+  const addSpacer = (end: number) => {
+    if (end <= cursor) {
+      return
+    }
+    const bottom = end === items.length
+    const endOffset = bottom ? layout.total : layout.offsets[end]
+    children.push(createElement('div', {
+      key: bottom ? 'virtual-bottom-spacer' : `virtual-spacer-before:${getId(items[end], end)}`,
+      'data-virtual-spacer': bottom ? 'bottom' : cursor === 0 ? 'top' : 'gap',
+      'aria-hidden': true,
+      style: { height: endOffset - layout.offsets[cursor] },
+    }))
   }
-  for (let index = window.start; index < window.end; index += 1) {
+  const addRow = (index: number) => {
+    addSpacer(index)
     const id = getId(items[index], index)
-    children.push(
-      createElement(
-        'div',
-        { key: id, 'data-row-id': id, 'data-row-index': index },
-        renderItem(items[index], index)
-      )
-    )
+    children.push(createElement(
+      'div',
+      { key: `row:${id}`, 'data-row-id': id, 'data-row-index': index },
+      renderItem(items[index], index)
+    ))
+    cursor = index + 1
   }
-  if (window.bottomPad > 0) {
-    children.push(
-      createElement('div', {
-        key: 'virtual-bottom-spacer',
-        'data-virtual-spacer': 'bottom',
-        'aria-hidden': true,
-        style: { height: window.bottomPad },
-      })
-    )
+
+  // 窗口外仅挂载正在编辑的行。保持原有顺序和 key，让输入框、光标与输入法状态一起保留下来。
+  const hasRetained = Boolean(retainedIds?.size)
+  const start = hasRetained ? 0 : window.start
+  const end = hasRetained ? items.length : window.end
+  for (let index = start; index < end; index += 1) {
+    if ((index >= window.start && index < window.end) || retainedIds?.has(getId(items[index], index))) {
+      addRow(index)
+    }
   }
+  addSpacer(items.length)
   return createElement(Fragment, null, children)
 }

@@ -56,3 +56,6 @@ dl-release-token*
 
 # #456：跨 runner 判定的运行记录（每个 runner/分片一份，CI 里作为 artifact 上传，不入库）
 .flaky-runs/
+
+# 预发布环境秘密项（只在 140 上，不进 git）
+deploy/sub2api-pre/seed.local.env

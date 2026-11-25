@@ -12,7 +12,7 @@
  *
  * | 项 | 验什么 | 判据 | 不判什么 |
  * | --- | --- | --- | --- |
- * | A1 | 旧体系已断 | `src/` `android/` 里 0 处 `140.210.13.146` / `:60013` / `device_id` 鉴权参数 | 不查残留变量名 |
+ * | A1 | 旧体系已断 | `src/` `android/` 里 0 处 `140.210.13.146`（check-ip-allow: A1 判据原文，须写出地址才拦得住）/ `:60013` / `device_id` 鉴权参数 | 不查残留变量名 |
  * | A2 | 调用归位白名单 | 跑 `scripts/check-consume-api.mjs`，exit 0 | 不判调用写得好不好 |
  * | A3 | 身份走 JWT | `src/` 有 `auth/login` / `auth/register` 调用；`Bearer` 使用处能分出 JWT 与 `sk-` 两条通道 | 不查 token 存哪、怎么刷新 |
  * | A4 | 额度来自后端 | `src/` 无 `remaining_points` / `pointsCache` / 本地余额持久化 | 不查缓存策略 |
@@ -229,6 +229,7 @@ const readCorpus = (root, dirs) => {
  * 「白名单标记」—— 与 `scripts/check-hardcoded-ip.mjs`（`check:ip`）**同一个 token、同一套语义**
  * （#590 ②）：同一行、或紧跟其上的前一行带 `check-ip-allow` 的字面量，不判违规。
  *
+ * check-ip-allow: 下面这句复述 A1 判据原文（同样必须写出地址形状），不是可调地址。
  * 为什么 A1 需要它：A1 的判据是「`140.210.13.146` / `:60013` 在 `src/` `android/` 里 grep 到 0 命中」，
  * 但**废弃域黑名单本身**必须把这个地址写出来才能拦住它 ——
  * `android/app/build.gradle` 的 `CONSUME_DEPRECATED_MARKERS` 就是拿它去比对 `consume.baseUrl` /

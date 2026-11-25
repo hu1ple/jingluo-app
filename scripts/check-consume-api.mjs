@@ -13,6 +13,8 @@
  *      #484 §三 的表里（`scripts/lib/consumeApiAudit.mjs` 的 `PATH_WHITELIST`）。
  *      白名单外的调用一律 exit 1；旧路径（W1-D / W1-E 还没删的）走 `LEGACY_PATHS` 豁免，
  *      且**只许出现在登记过的文件里**（扩散 = 红）。
+ *   下面这条 R4 要写出废弃域地址才说清「不许出现什么」；它不可调、不发请求，属判据自身。
+ *   check-ip-allow: R4 判据原文，名单本体在 scripts/lib/consumeEndpoints.mjs 的 DEPRECATED_MARKERS
  *   R4 **废弃域**：`140.210.13.146`、`:60013`、`legacyHosts` 里的旧机器，`src/**` 与 `android/**`
  *      一律不许出现（A1 的 grep 判据）。
  *   R5 **明文 http**：`src/**` 里除本机回环（和 URL 解析哨兵）外不许出现 `http://`。

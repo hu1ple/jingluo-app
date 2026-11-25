@@ -6,8 +6,7 @@
     "src/components/settings/settingsDialogState.ts::nav::close-settings#1",
     "src/components/settings/settingsDialogState.ts::nav::open-settings#1",
     "src/services/chat/store.ts::nav::select-session#1",
-    "src/services/chat/backup.ts::import_stage::import: write staging stores#1",
-    "src/services/diagnostics/collector.ts::warning::#1"
+    "src/services/chat/backup.ts::import_stage::import: write staging stores#1"
   ],
   "//reviewBy": "复核期限：过了这一天整本登记簿作废（FAIL），必须逐条重新认领。续期＝改这个日期，进 diff 有人看见。",
   "reviewBy": "2027-01-31"

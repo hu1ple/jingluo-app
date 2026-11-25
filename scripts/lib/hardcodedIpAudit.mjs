@@ -39,6 +39,7 @@ const ALLOW_MARK = 'check-ip-allow'
 /**
  * 当前**合法**的线上地址（主机白名单）：唯一来源是 `config/endpoints.json` 的 `allowedHosts`。
  *
+ * check-ip-allow: 门禁自身历史（#274 之前白名单是手写的），非可调地址
  * Issue #274 之前这里是手写的一份 `new Set(['140.210.13.146'])`，注释还要求「换域名时改这里，
  * 并同步 providers.ts / invite/api.ts / diagnostics/config.ts」—— 一个门禁的豁免名单要人去手工
  * 同步四个文件，保护方向就反了。现在门禁与源码读同一份 JSON，天然同步。

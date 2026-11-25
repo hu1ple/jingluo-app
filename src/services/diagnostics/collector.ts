@@ -1036,8 +1036,17 @@ const installConsoleHook = (): void => {
     const original = console[level].bind(console)
     console[level] = (...args: unknown[]) => {
       try {
+        /**
+         * meta 不能只有一个 `stage`（#301 表 3 / `check-log-coverage` R3）：这条埋点记的是**别人**的
+         * console 输出，光有「来自 console hook」切不出维度；且 `console.error(err)` 这种最常见写法里
+         * `safeString(err)` 只留 `Error: xxx`，**栈在这一步就没了**。故补实参个数，并在首个实参是
+         * `Error` 时并入 `errorMeta`（`error.name` / `error.stack` / `http.status`，与 window.onerror /
+         * unhandledrejection 同一套字段）。
+         */
         record(level === 'warn' ? 'warning' : 'error', level, args.map((arg) => safeString(arg)).join(' '), {
           stage: 'console',
+          'console.args': args.length,
+          ...(args[0] instanceof Error ? errorMeta(args[0]) : {}),
         })
       } catch {
         // 采集异常不能影响业务日志输出

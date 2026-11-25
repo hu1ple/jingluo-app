@@ -26,6 +26,7 @@
  *      （staging-only，`verify:apk` 不带 `--allow-insecure` 直接 exit 1）。**只认字面 true**：
  *      `yes` / `1` / `false` 一律按配置错误处理 —— 逃生舱不能靠拼写猜。
  *      未设置（默认）→ 与以前逐字一致：非回环明文仍然中止。原生侧同一开关是 `-PallowInsecureConsume=true`。
+ *      check-ip-allow: 下面第 2 条要写出废弃域地址（名单本体就是本文件的 DEPRECATED_MARKERS，也带标记）
  *   2. base 不得命中废弃域黑名单（`140.210.13.146` / `:60013` / `legacyHosts` 里的旧机器）；
  *   3. `consume.baseUrl` 与 `pay.baseUrl` 不得相同（两个后端职责不能混）。**唯一例外**（#869 单一 BASE）：
  *      两者都等于统一网关 BASE `UNIFIED_GATEWAY_BASE` 时允许相等；只有一边是它、或两边相等但不是它，照旧拒；

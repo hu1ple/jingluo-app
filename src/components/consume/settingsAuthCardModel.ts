@@ -23,6 +23,10 @@
  *     这类具体的话，仍然不是「未知错误」），也**不**追加重置未开通 —— 网络问题不等于功能没开。
  *  3. **不弹第二层**（本卡文件头的老规矩）：忘记密码是**卡内的一个小页**（`step: 'forgot'`），
  *     不是盖在设置弹层上的第二层 dialog。
+ *  4. **注册 / 重置结束都回登录表单**（产品口径 2026-11-25）：{@link reduceAuthCard} 的
+ *     `back-to-login` 是这两条链路唯一的终点 —— `mode: 'login'` + 邮箱预填 + 清空密码 / 验证码 +
+ *     一句成功提示（`authRegisterDonePleaseLogin` / `authResetDonePleaseLogin`）。
+ *     注册成功**不**建立会话（`store.signUp` 的 `autoSignIn: false`），登录只由用户自己点一次。
  *
  * 另外一条（2026-11-24 线上事故）：**「没读到开关」不等于「服务端关了注册」**。
  * 注册闸门是三态（{@link registrationGateOfContext}）：只有 `'disabled'`（服务端真的回了
@@ -115,6 +119,15 @@ export type AuthCardEvent =
   | { type: 'submit-blocked' }
   /** 请求已发出：恢复隐藏（#797「提交后恢复隐藏」） */
   | { type: 'form-submitted' }
+  /**
+   * **回到登录表单**（产品口径 2026-11-25：注册成功 / 重置密码成功之后都落在这一格）。
+   *
+   * 一个事件干四件事，所以必须由 reducer 一次做完（分成四个事件会在中间渲染出一帧「注册 tab +
+   * 残留密码」）：① `mode: 'login'`；② 邮箱预填（`email` 由调用方给：注册用表单里那个，
+   * 重置用重置页里那个 —— 用户可能在里面改过）；③ 清空密码 / 确认密码 / 验证码与找回密码的结局；
+   * ④ 挂一句成功提示。
+   */
+  | { type: 'back-to-login'; notice: AuthCardNotice; email: string }
   | { type: 'notice'; notice: AuthCardNotice }
   /** 提交撞 429：进冷却（秒数由 `submitAuthCard` 从 `Retry-After` 算出） */
   | { type: 'cooldown'; seconds: number }
@@ -190,6 +203,14 @@ export const reduceAuthCard = (state: AuthCardState, event: AuthCardEvent): Auth
         passwordVisible: false,
         confirmVisible: false,
         notice: null,
+      }
+    case 'back-to-login':
+      // 回到登录表单 = 一张**新的登录表单**：注册 / 重置留下的东西（密码、确认密码、验证码、
+      // 校验痕迹、冷却、找回密码结局）全部丢掉，只把邮箱和一句回执带过去。
+      return {
+        ...initialAuthCardState('login'),
+        email: event.email,
+        notice: event.notice,
       }
     case 'notice':
       return { ...state, notice: event.notice }
@@ -393,7 +414,7 @@ const submitAuthCardLocked = async (
       input.verifyCode = verifyCode
     }
     // #839：无论 `invitation_code_enabled` 是 true 还是 false，注册请求都不带邀请码
-    return cooldownOrSubmitted(await source.signUp(input))
+    return registerSubmitted(await source.signUp(input), email)
   }
   return cooldownOrSubmitted(await source.signIn({ email, password: state.password }))
 }
@@ -408,6 +429,24 @@ const cooldownOrSubmitted = (outcome: AuthCardCallOutcome): AuthCardEvent[] => {
   const seconds = outcome.ok ? null : rateLimitSecondsOf(outcome.error)
   if (seconds !== null) {
     return [{ type: 'cooldown', seconds }]
+  }
+  return [{ type: 'form-submitted' }]
+}
+
+/**
+ * **注册**的结局 → 事件：429 走冷却，失败留在原表单，**成功回登录表单**。
+ *
+ * 产品口径（2026-11-25）：注册结束不等于登录 —— 注册成功后卡片切回登录 tab、邮箱预填、
+ * 密码清空，并挂一句「注册成功，请登录」；会话不在这里建立（见 `store.signUp` 的
+ * `autoSignIn: false`，界面两个入口都传它）。
+ */
+const registerSubmitted = (outcome: AuthCardCallOutcome, email: string): AuthCardEvent[] => {
+  const seconds = outcome.ok ? null : rateLimitSecondsOf(outcome.error)
+  if (seconds !== null) {
+    return [{ type: 'cooldown', seconds }]
+  }
+  if (outcome.ok) {
+    return [{ type: 'back-to-login', notice: 'authRegisterDonePleaseLogin', email }]
   }
   return [{ type: 'form-submitted' }]
 }

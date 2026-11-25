@@ -305,7 +305,12 @@ for (const flag of [true, false]) {
       registerState({ invitationCode: 'INV819' }),
       { submitting: false, registrationLoaded: true, registrationEnabled: true, invitationCodeEnabled: flag }
     )
-    assert.deepEqual(events, [{ type: 'form-submitted' }], '注册照常发出')
+    // 注册成功 → 回登录表单（产品口径 2026-11-25；形状的完整断言在 `auth-after-success.test.mjs`）
+    assert.deepEqual(
+      events,
+      [{ type: 'back-to-login', notice: 'authRegisterDonePleaseLogin', email: 'invitee@example.com' }],
+      '注册照常发出'
+    )
     assert.deepEqual(scene.sequence(), ['POST /api/v1/auth/register'], '只打注册这一条')
     const body = JSON.parse(scene.calls[0].body)
     assert.equal('invitation_code' in body, false, '请求体里没有 invitation_code 这个键')

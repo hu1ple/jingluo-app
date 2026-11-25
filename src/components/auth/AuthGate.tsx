@@ -26,6 +26,11 @@
  *
  * 「登录已过期」（`expired`：续期失败 / JWT 不被认）同样落在表单上，额外挂一句 `sub2authSessionExpired`，
  * 让用户知道不是他填错了密码。
+ *
+ * **注册成功 / 重置密码成功都回登录表单**（产品口径 2026-11-25，`backToLogin` 是这两个出口的唯一实现）：
+ * 邮箱预填、密码与验证码随组件卸载带走、顶上挂一句回执（`authRegisterDonePleaseLogin` /
+ * `authResetDonePleaseLogin`）。注册成功**不建立会话** —— `signUp` 传 `{ autoSignIn: false }`，
+ * 登录只由用户自己点一次（不做「自动登录」补偿）。
  */
 
 import { useEffect, useState, type ReactNode } from 'react'
@@ -136,12 +141,19 @@ export const AuthGate = ({ children, variant = 'page', segmented = false }: Auth
   const flags = useAuthFlags()
   const [mode, setMode] = useState<AuthMode>('login')
   /**
-   * 刚走完「找回密码」：回到登录页时顶上挂一句 `settingsAuthResetDone`（密码已重置，请用新密码登录）。
+   * 登录表单上要预填的邮箱：注册成功 / 重置密码成功之后，用户刚打过一遍，不该让他再打一次。
+   */
+  const [email, setEmail] = useState('')
+  /**
+   * 刚刚发生的那件事的回执（注册成功 / 密码已重置），挂在**登录页**顶上。
    *
    * 为什么不复用 `noticeKey` 的 `expired` 那一支：那句来自**服务端判定**（`authState`），
    * 这句来自**本地刚发生的事**；两个来源混在一个字段里，一刷新就分不清谁该在。
+   *
+   * 产品口径 2026-11-25：注册成功与重置密码成功的**终点都是登录表单**（不是主界面、
+   * 也不是停在注册 / 重置那一步），所以这两条链路都只是「回登录 + 挂一句回执」。
    */
-  const [resetDone, setResetDone] = useState(false)
+  const [loginNotice, setLoginNotice] = useState<TranslationKey | null>(null)
 
   useEffect(() => {
     void loadAuthFlags()
@@ -171,16 +183,25 @@ export const AuthGate = ({ children, variant = 'page', segmented = false }: Auth
 
   const switchTo = (next: AuthMode) => {
     dismissError()
-    // 换页 = 上一次「已重置」的提示不该跟着走（它是**那一次**事件的回执，不是常驻状态）
-    setResetDone(false)
+    // 换页 = 上一次那件事的回执不该跟着走（它是**那一次**事件的回执，不是常驻状态）
+    setLoginNotice(null)
     setMode(next)
   }
 
-  /** 找回密码走完两步：回登录页 + 挂回执。**不碰 `signIn`** —— 重置不等于登录成功 */
-  const handleResetDone = () => {
+  /**
+   * 两条「结束」都收敛到这一个终点（产品口径 2026-11-25）：**回登录表单** + 邮箱预填 + 一句回执。
+   * 中间态（密码 / 验证码 / 找回密码的两步）由各自组件的卸载带走 —— 这里只换 `mode`。
+   */
+  const backToLogin = (nextEmail: string, notice: TranslationKey) => {
     dismissError()
-    setResetDone(true)
+    setEmail(nextEmail)
+    setLoginNotice(notice)
     setMode('login')
+  }
+
+  /** 找回密码走完两步：回登录表单 + 挂回执。**不碰 `signIn`** —— 重置不等于登录成功 */
+  const handleResetDone = (resetEmail: string) => {
+    backToLogin(resetEmail, 'authResetDonePleaseLogin')
   }
 
   /**
@@ -190,13 +211,27 @@ export const AuthGate = ({ children, variant = 'page', segmented = false }: Auth
    */
   const handleLogin = (values: LoginValues) => signIn(values)
 
-  const handleRegister = (values: RegisterValues) =>
-    signUp({
-      email: values.email,
-      password: values.password,
-      verifyCode: values.verifyCode,
-      invitationCode: values.invitationCode,
-    })
+  /**
+   * 注册：成功后**不建立会话**（`autoSignIn: false`，服务端回的 token 不接管），界面回到登录表单
+   * 并预填这次注册的邮箱 —— 产品口径「注册结束后回到登录界面」，让用户自己登录一次。
+   *
+   * 仍然把请求的 promise 返回出去：`RegisterPage` 的 ref 闩要 held 到请求结束（见文件头第 3 条）。
+   */
+  const handleRegister = async (values: RegisterValues) => {
+    const result = await signUp(
+      {
+        email: values.email,
+        password: values.password,
+        verifyCode: values.verifyCode,
+        invitationCode: values.invitationCode,
+      },
+      { autoSignIn: false }
+    )
+    if (result.ok) {
+      backToLogin(values.email.trim(), 'authRegisterDonePleaseLogin')
+    }
+    return result
+  }
 
   /** 发码：429 要能说「等 N 秒」（`Retry-After`），所以把归一化后的秒数一并交给页面 */
   const handleSendCode = async (email: string): Promise<SendCodeOutcome> => {
@@ -229,10 +264,10 @@ export const AuthGate = ({ children, variant = 'page', segmented = false }: Auth
   }
 
   // 「登录已过期」要说清楚原因：不然用户会以为是自己密码填错了。
-  // 「刚重置完密码」是另一句本地回执（见 `resetDone`），优先级低于「会话失效」——两件事同时成立时，
-  // 更该说的是「你得重新登录」。
+  // 「注册成功 / 刚重置完密码」是另一句本地回执（见 `loginNotice`），优先级低于「会话失效」——
+  // 两件事同时成立时，更该说的是「你得重新登录」。
   const noticeKey: TranslationKey | null =
-    authState === 'expired' ? 'sub2authSessionExpired' : resetDone ? 'settingsAuthResetDone' : null
+    authState === 'expired' ? 'sub2authSessionExpired' : loginNotice
 
   /** #727：分段控件只在开关允许注册时才有第二段（`registration_enabled=false` 时整块隐藏） */
   const switcher = segmented ? (
@@ -263,7 +298,14 @@ export const AuthGate = ({ children, variant = 'page', segmented = false }: Auth
   // 找回密码（验证码式两步）：**同一张卡内换页** —— 不渲染分段控件（它不是第三个 tab，
   // 而是一条离开本卡的路径），也不新开弹层（宿主设置弹层的 `role="dialog"` 数量必须不变）。
   if (mode === 'forgot') {
-    return <ResetPasswordPage embedded={inline} onBack={() => switchTo('login')} onReset={handleResetDone} />
+    return (
+      <ResetPasswordPage
+        embedded={inline}
+        initialEmail={email}
+        onBack={() => switchTo('login')}
+        onReset={handleResetDone}
+      />
+    )
   }
 
   if (mode === 'register') {
@@ -289,6 +331,7 @@ export const AuthGate = ({ children, variant = 'page', segmented = false }: Auth
       {switcher}
       <LoginPage
         embedded={inline}
+        initialEmail={email}
         showRegisterEntry={flags.registrationEnabled}
         noticeKey={noticeKey}
         busy={busy}

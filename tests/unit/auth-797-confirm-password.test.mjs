@@ -126,7 +126,13 @@ test('① 两次一致：允许提交，且真的发出注册请求（请求体�
   assert.deepEqual(calls.signUp[0], { email: 'ui@mock.local', password: 'abcd1234' })
   // #797：确认密码**只在客户端校验**，不进请求体
   assert.equal('confirmPassword' in calls.signUp[0], false, '确认密码不许传给服务端')
-  assert.deepEqual(events, [{ type: 'form-submitted' }], '请求发出后要派「已提交」（界面据此恢复隐藏）')
+  // 注册成功 → **回登录表单**（产品口径 2026-11-25）：这一页整块换成登录表单，密码可见性
+  // 随组件卸载一起复位 —— #797「提交后恢复隐藏」这条要求因此仍然成立，只是不再由 `form-submitted` 承担。
+  assert.deepEqual(
+    events,
+    [{ type: 'back-to-login', notice: 'authRegisterDonePleaseLogin', email: 'ui@mock.local' }],
+    '注册成功要回登录表单（不是停在注册 tab）'
+  )
   assert.equal(calls.signIn.length, 0, '注册 tab 不该走登录')
 })
 

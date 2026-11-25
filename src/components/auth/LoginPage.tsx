@@ -30,6 +30,12 @@ export type LoginPageProps = {
   /** 上一次提交的失败（归一结果，`messageKey` 就是上屏文案） */
   error: AuthError | null
   /**
+   * 进页时预填的邮箱（可选）。产品口径 2026-11-25：注册成功 / 重置密码成功之后回到登录表单，
+   * 邮箱**预填**——用户刚打过一遍（注册邮箱 / 重置用的邮箱），没理由让他再打一次。
+   * 仍可改：邮箱只影响这一次登录。
+   */
+  initialEmail?: string
+  /**
    * 进门就先说明的一句提示（还没有 `error` 时用）：`expired` = 登录已过期，需要重新登录。
    * 与 `error` 分开：提示不是「你填错了」，样式也不该是错误条那样抢眼。
    */
@@ -55,12 +61,13 @@ export const LoginPage = ({
   busy,
   error,
   noticeKey = null,
+  initialEmail = '',
   onSubmit,
   onSwitchToRegister,
   onSwitchToForgot,
 }: LoginPageProps) => {
   const t = useTranslate()
-  const [email, setEmail] = useState('')
+  const [email, setEmail] = useState(initialEmail)
   const [password, setPassword] = useState('')
   const [issues, setIssues] = useState<AuthIssue[]>([])
   /** 登录被 429 挡回来之后的冷却秒数（>0 = 主按钮禁用 + 显示「请 N 秒后再试」） */

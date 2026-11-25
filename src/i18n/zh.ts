@@ -997,8 +997,17 @@ export const zh = {
   settingsAuthResetRateLimited: '操作太频繁，请稍后再试',
   /** 其它 4xx/5xx（参数被拒、5xx、表外码）：不猜原因，只给一句可重试的话 */
   settingsAuthResetFailed: '重置失败，请稍后重试',
-  /** 重置成功后挂在登录页上的那句（`AuthGate` 的 notice / 登录卡的 notice 共用） */
-  settingsAuthResetDone: '密码已重置，请用新密码登录',
+  /**
+   * 注册成功后回到登录表单时挂的那句（产品口径 2026-11-25：注册结束后回登录界面，用户自己登录一次）。
+   * 与新加的 `authResetDonePleaseLogin` 成对；**不复用**任何登录失败 / 会话过期语义的旧 key。
+   */
+  authRegisterDonePleaseLogin: '注册成功，请登录',
+  /**
+   * 重置密码成功后回到登录表单时挂的那句（设置卡的 notice / `AuthGate` 的登录页 notice 共用）。
+   * 「请用新密码登录」这句不是客套：匿名重置没有可回查的会话，重置成功只等于服务端受理了，
+   * 真正的确认就是用户用新密码登一次。
+   */
+  authResetDonePleaseLogin: '密码已重置，请用新密码登录',
   /**
    * `settings/public` 没读到时注册卡底部那一行（可点重试，`data-testid="settings-auth-flags-retry"`）。
    *

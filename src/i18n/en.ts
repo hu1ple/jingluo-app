@@ -1006,8 +1006,17 @@ export const en = {
   settingsAuthResetRateLimited: 'Too many attempts — try again in a minute',
   /** Other 4xx/5xx: no guessing, just a retryable sentence */
   settingsAuthResetFailed: 'Reset failed. Please try again.',
-  /** Shown on the sign-in card once the reset flow finished (shared by AuthGate notice and the settings card) */
-  settingsAuthResetDone: 'Password reset. Sign in with your new password.',
+  /**
+   * Shown on the sign-in card once **sign-up** finished: sign-up returns to the sign-in form
+   * (product decision 2026-11-25) and the user signs in explicitly.
+   */
+  authRegisterDonePleaseLogin: 'Registration complete — please sign in.',
+  /**
+   * Shown on the sign-in card once the **reset** flow finished (shared by the settings card notice and
+   * the `AuthGate` sign-in page). "with your new password" is not decorative: an anonymous reset has no
+   * verifiable session, so signing in with the new password is the only real confirmation.
+   */
+  authResetDonePleaseLogin: 'Password reset — please sign in with your new password.',
   /**
    * The line under the sign-up card when `settings/public` could not be read (tap to retry).
    * Must NOT say "sign-up is not open" — "we failed to read the flag" is not "the server turned sign-up off".

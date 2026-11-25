@@ -35,6 +35,8 @@ import {
   sessionEntry,
   setFault,
 } from '../fixtures/domain01-02/idb-fault.mjs'
+import { BUILTIN_KEY_CLAIM_STUB } from '../fixtures/consume-gateway-stubs/builtin-key-claim.mjs'
+
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, '../..')
@@ -106,7 +108,7 @@ const boot = async ({ entries, fault }) => {
    * #686：出站总闸，**必须在 `page.goto` 之前**装上（首屏请求一旦发出去就收不回来，#673 的 g16 就是这么漏的）。
    * 本用例只读本机 IndexedDB、只跟被测产物自己的 origin 打交道，白名单里只需要它。
    */
-  await installEgressGate(page, { appUrl: APP_URL })
+  await installEgressGate(page, { stubs: [BUILTIN_KEY_CLAIM_STUB], appUrl: APP_URL })
   // 故障补丁必须在应用脚本之前注入；此时策略为空，不影响建库
   await page.addInitScript(installFaultPatch)
   await page.goto(APP_URL, { waitUntil: 'domcontentloaded' })

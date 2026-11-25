@@ -139,7 +139,7 @@ test('N7 删除所有对话：只清会话与附件，设置 / 设备码 / 诊�
       await page.getByRole('button', { name: /设置|Settings/ }).last().click()
     }
     await settle(page)
-    const dataTab = page.getByRole('tab', { name: /数据管理|Data/ })
+    const dataTab = page.getByTestId('settings-row-data')
     if ((await dataTab.count()) > 0) await dataTab.first().click()
     await settle(page, 400)
     await page.getByRole('button', { name: '删除', exact: true }).first().click()

@@ -27,6 +27,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { chromium } from 'playwright'
 import { serveDir, verifyAppUrl, verifyDist } from '../helpers/env.mjs'
+import { installBuiltinKeyClaimStub } from '../fixtures/consume-gateway-stubs/builtin-key-claim.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, '../..')
@@ -94,6 +95,9 @@ const openPage = async (options = {}) => {
   const context = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1280, height: 900 } })
   // 反馈服务的真实地址一律拦掉：用例只允许走 mock，一旦有人偷偷发真请求立刻看得见
   await context.route('**/feedback.rose7.cn/**', (route) => route.abort())
+  // #803 + 测试接缝：未配置首屏会真的去领内置 Key（并留下一条 401 console error）。
+  // 就地按「这台设备还没有服务端下发的 Key」应答 —— 见 tests/fixtures/consume-gateway-stubs/builtin-key-claim.mjs
+  await installBuiltinKeyClaimStub(context)
   const page = await context.newPage()
   const realRequests = []
   page.on('request', (request) => {
@@ -552,7 +556,7 @@ try {
   if ((await ui.getByRole('dialog').count()) === 0) {
     await ui.getByRole('button', { name: /设置|Settings/ }).last().click()
   }
-  await ui.getByRole('tab', { name: /数据管理|Data/ }).first().click()
+  await ui.getByTestId('settings-row-data').first().click()
   await ui.waitForTimeout(300)
   const row = ui.getByText('反馈与日志').first()
   check((await row.count()) > 0, '设置页有「反馈与日志」一行', '设置页没有「反馈与日志」')

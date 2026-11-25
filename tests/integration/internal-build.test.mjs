@@ -160,7 +160,7 @@ const openSettings = async () => {
   if ((await page.getByRole('dialog').count()) === 0) {
     await page.getByRole('button', { name: /设置|Settings/ }).last().click()
   }
-  await page.getByRole('tab', { name: /数据管理|Data/ }).first().click()
+  await page.getByTestId('settings-row-data').first().click()
   await page.waitForTimeout(400)
   return page.getByRole('dialog').first()
 }
@@ -292,7 +292,7 @@ try {
   await shot('channel-ours')
 
   // 通用分组仍无位置信息项（历史契约不回退）
-  await page.getByRole('tab', { name: /通用|General/ }).first().click()
+  await page.getByTestId('settings-row-general').first().click()
   await page.waitForTimeout(300)
   const generalText = await dialog.innerText()
   const locationHits = [/位置信息/, /所在地/, /省份/, /^Location$/m, /Province/].filter((re) =>
@@ -306,7 +306,7 @@ try {
 
   // ---------- [E] ours 的 Key 只读（#596）+ localStorage ----------
   console.log('\n[E] ours 的 Key 行只读 + localStorage')
-  await page.getByRole('tab', { name: /数据管理|Data/ }).first().click()
+  await page.getByTestId('settings-row-data').first().click()
   await page.waitForTimeout(300)
   await expectManagedKeyRow(dialog, 'ours 渠道（数据管理）')
   const oursValue = (await dialog.locator('[data-testid="settings-managed-key-value"]').innerText()).trim()

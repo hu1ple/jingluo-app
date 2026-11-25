@@ -60,8 +60,24 @@ const waitFor = async (page, predicate, timeout = 15_000) => {
 }
 const waitForText = (page, part, timeout = 15_000) =>
   waitFor(page, async () => (await bodyText(page)).includes(part), timeout)
-/** 屏幕上现在有几层弹层（`role="dialog"` 是本仓唯一的「弹层在场」判据，见 src/app/App.tsx） */
+/** 屏幕上现在有几层弹层（`role="dialog"` 是本仓「有没有弹层」的判据，见 src/app/App.tsx） */
 const dialogCount = async (page) => page.getByRole('dialog').count()
+
+/**
+ * 「**设置层**在场吗」——按设置层自己的标识判，**不是**按 `role="dialog"` 的个数。
+ *
+ * 为什么不能用 dialog 计数（这条用例的历史教训就长在这里）：公告弹层
+ * （`settings-announcement-popup`）、启动更新提示（`StartupUpdatePrompt`）、分支确认、
+ * 图片预览、附件面板**全都**是 `Modal` → 全都带 `role="dialog"`。用「有几层 dialog」
+ * 当「设置开着」，等于把这五样东西当成同一个 —— 改前那条「无 Key 首启会自动打开设置」
+ * 的断言就是这么被**公告弹层**蒙过去的：它当时已经不再成立，却一直绿着。
+ *
+ * 设置层自己的两个标识（`src/components/settings/SettingsDialog.tsx`）：
+ * 一级列表 `settings-list`、二级页 `settings-page-<page>`。任一在场 = 设置层在场。
+ * 这样断言的含义才与产品口径同源：**「有没有把用户拽进设置」与「屏幕上还有没有别的弹层」无关**。
+ */
+const SETTINGS_LAYER = '[data-testid="settings-list"], [data-testid^="settings-page-"]'
+const settingsLayer = (page) => page.locator(SETTINGS_LAYER)
 
 /**
  * 首启时可能先出现「公告」弹层（`AnnouncementPopup`，首次强制阅读 5 秒 —— 见 #533 那次提交）。
@@ -128,12 +144,14 @@ try {
   // 先把「公告」那层关掉（它与设置共用 role="dialog"，不清掉会把两者混为一谈），
   // 再等一会儿判「设置层没有自己冒出来」—— 避免把「延迟 1 秒才弹」误判成「没弹」。
   await waitForText(page, '今天有什么可以帮到你', 10_000)
+  // 公告弹层现在**不是**这条断言的前提了（它只是会挡住输入框，所以要关掉才能继续往下走）。
+  // 设置层是否自己冒出来，靠 `settingsLayer` 判，公告在不在都不影响结论。
   const hadAnnouncement = await dismissAnnouncementIfAny(page)
   ok(`F1-09 首启公告弹层：${hadAnnouncement ? '出现过，已按「开始阅读」关掉' : '没有（已读）'}`)
   await page.waitForTimeout(1200)
   expect(
-    (await dialogCount(page)) === 0,
-    'F1-09 无 Key 首启不自动打开设置弹层（不打断用户，首屏照常可用）'
+    (await settingsLayer(page).count()) === 0,
+    'F1-09 无 Key 首启**不**自动打开设置层（按设置层自己的标识判；公告/更新提示也是 dialog，不算）'
   )
 
   // 分支 2（F1-01）：同一时刻首屏仍然是可用的（不是只给一个弹层 + 白屏）
@@ -154,17 +172,22 @@ try {
   expect(noticeShown, `F1-09 无 Key 点发送给出通知（文案「${NOTICE_NO_CREDENTIALS}」）`)
   expect(messageCalls === 0, `F1-09 被拦下时一个上游请求都不发（实际 ${messageCalls} 次）`)
   expect(
-    (await dialogCount(page)) === 0,
-    'F1-09 拦下时**不**自动打开设置（要用户自己点通知上的按钮）'
+    (await settingsLayer(page).count()) === 0,
+    'F1-09 拦下时**不**自动打开设置层（要用户自己点通知上的按钮）'
   )
   const noticeAction = notice.getByRole('button', { name: NOTICE_ACTION }).first()
   expect((await noticeAction.count()) > 0, 'F1-09 通知上有「去选择渠道」按钮（唯一出口）')
   await noticeAction.click()
 
-  const dialogShown = await waitFor(page, async () => (await dialogCount(page)) > 0, 8_000)
-  expect(dialogShown, 'F1-09 点通知上的按钮才打开设置弹层')
+  const dialogShown = await waitFor(page, async () => (await settingsLayer(page).count()) > 0, 8_000)
+  expect(dialogShown, 'F1-09 点通知上的按钮才打开设置层')
   if (dialogShown) {
-    const dialogText = await page.getByRole('dialog').first().innerText()
+    // 设置层那一层 dialog 的正文（按设置层标识反查，不按「第几个 dialog」取位置）
+    const dialogText = await page
+      .locator('[role="dialog"]')
+      .filter({ has: page.locator(SETTINGS_LAYER) })
+      .first()
+      .innerText()
     expect(
       /模型来源|账户与消费/.test(dialogText),
       'F1-09 落在「账户与消费」（一级列表：模型来源 / 我的钱包 / 账号）'
@@ -188,12 +211,18 @@ try {
   await keyInput.fill(KEY)
   await page.locator('[data-testid="settings-source-official-confirm"]').first().click()
   await page.waitForTimeout(400)
-  const stillOpen = page.getByRole('dialog').first()
+  const stillOpen = settingsLayer(page)
   if ((await stillOpen.count()) > 0) {
-    await stillOpen.getByRole('button', { name: /^关闭$|^Close$/ }).first().click()
+    await page
+      .locator('[role="dialog"]')
+      .filter({ has: page.locator(SETTINGS_LAYER) })
+      .first()
+      .getByRole('button', { name: /^关闭$|^Close$/ })
+      .first()
+      .click()
     await page.waitForTimeout(400)
   }
-  expect((await dialogCount(page)) === 0, 'F1-09 存 Key 后弹层能关掉（回到主界面）')
+  expect((await settingsLayer(page).count()) === 0, 'F1-09 存 Key 后设置层能关掉（回到主界面）')
 
   // 草稿应当还在输入框里（拦下只是不发请求，不该把用户打的字吃掉）；不管在不在都补一遍，
   // 免得这条断言依赖「发送按钮在空草稿时是否可点」这种与本用例无关的实现细节。
@@ -214,8 +243,8 @@ try {
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(800)
   expect(
-    (await dialogCount(page)) === 0,
-    'F1-09 存下的 Key 在刷新后仍然生效（不再弹设置）'
+    (await settingsLayer(page).count()) === 0,
+    'F1-09 存下的 Key 在刷新后仍然生效（不再自动打开设置层）'
   )
   await context.close()
 } catch (error) {

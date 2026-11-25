@@ -19,12 +19,14 @@ import { chromium } from 'playwright'
 import { seedClaimedApiKey } from '../helpers/ours-claim.mjs'
 import { requireDist, serveDist } from '../helpers/runtime.mjs'
 import { verifyAppUrl } from '../helpers/env.mjs'
-import { MESSAGES_SSE_OK, providerKindTrigger } from '../helpers/helpers.mjs'
+import { MESSAGES_SSE_OK } from '../helpers/helpers.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, '../..')
 const DIST = await requireDist(process.env.DIST_DIR || path.join(ROOT, 'dist'))
 const KEY = 'sk-testkey-quota-299'
+/** 第三方服务的服务地址：请求已被 `page.route` 拦下（`/v1/chat/completions`），这里只要格式合法 */
+const THIRD_BASE = 'https://relay.example.com'
 const name = 'tests/integration/quota-exhausted.test.mjs'
 
 const failures = []
@@ -53,41 +55,106 @@ const openPage = async () => {
   return { context, page }
 }
 
-/** 设置弹窗 → 数据管理 → 填 Key → 确定（弹窗保持打开，方便接着切渠道） */
+/**
+ * 「设置层在场吗」——按设置层自己的标识判，**不是**按「屏幕上有没有一层 `role="dialog"`」。
+ * 公告弹层 / 启动更新提示 / 分支确认 / 图片预览 / 附件面板都是 `Modal` → 都是 `role="dialog"`。
+ * 设置层自己的标识见 `src/components/settings/SettingsDialog.tsx`：一级列表 `settings-list`、
+ * 二级页 `settings-page-<page>`。
+ */
+const SETTINGS_LAYER = '[data-testid="settings-list"], [data-testid^="settings-page-"]'
+const settingsLayer = (scope) => scope.locator(SETTINGS_LAYER)
+/** 设置那一层 dialog 本体（带关闭按钮 / 标题的那个），用于在层内点击 */
+const settingsDialog = (page) => page.locator('[role="dialog"]').filter({ has: page.locator(SETTINGS_LAYER) })
+
+/** 打开设置层（首屏 → 侧栏「设置」），并按**设置层自己的标识**等它出现 */
+const openSettings = async (page) => {
+  if ((await settingsLayer(page).count()) === 0) {
+    await page.getByRole('button', { name: /^设置$|^Settings$/ }).first().click()
+  }
+  await settingsLayer(page).first().waitFor({ state: 'visible', timeout: 10000 })
+}
+
+/**
+ * 用**界面给出的那条路**配好 DeepSeek 官方 Key：设置 → 账户与消费 → 模型来源 →
+ * 「DeepSeek 官方服务」行 → 填 Key → 「确认使用」。
+ *
+ * 改前这里是「设置 → 数据管理 → 填 Key → 确定」。两处口径都已过期，而**失效的断言一直在绿**：
+ *  · 2026-11-24 设置改版：分组从 `role="tab"` 变成「一级列表 + 二级页」，全仓再没有 role=tab；
+ *  · #807 来源页做成三行手风琴：Key 在「第三方 / 官方」两行的草稿里，`数据管理` 页里**没有** Key 输入框；
+ *    而「渠道」下拉在这页是 `hideProviderKind` 隐藏的 —— 生效来源只能靠行底的「确认使用」切。
+ * 它现在守护的事：**没有 Key 的产物能靠界面把官方 Key 配好并切成生效来源**（不是靠直写 localStorage）。
+ */
 const setupKey = async (page, key = KEY) => {
-  if ((await page.getByRole('dialog').count()) === 0) {
-    await page.getByRole('button', { name: /设置|Settings/ }).last().click()
-    await page.waitForTimeout(300)
-  }
-  await page.getByRole('tab', { name: /数据管理|Data/ }).first().click()
-  await page.waitForSelector('input[type="password"]', { timeout: 3000 }).catch(() => {})
-  await page.locator('input[type="password"]').first().fill(key)
-  await page.getByRole('button', { name: /^确定$|^Confirm$/ }).first().click()
-  await page.waitForTimeout(400)
+  await openSettings(page)
+  // 一级列表 → 账户与消费 → 模型来源
+  await page.getByTestId('account-consume-open').first().click()
+  await page.getByTestId('account-consume-source').first().click()
+  // 手风琴单层展开：先点行头把「官方服务」展开（同一时间只展开一行）
+  const officialRow = page.getByTestId('settings-source-official').first()
+  await officialRow.waitFor({ state: 'visible', timeout: 10000 })
+  await officialRow.click()
+  const keyInput = page
+    .getByTestId('settings-source-official-panel')
+    .locator('[data-testid="settings-source-draft-apiKey"]')
+    .first()
+  await keyInput.waitFor({ state: 'visible', timeout: 10000 })
+  await keyInput.fill(key)
+  await page.getByTestId('settings-source-official-confirm').first().click()
+  // 落盘判据：生效来源真的切成官方（`chat-demo:provider-kind`）+ Key 存进去了
+  await page.waitForFunction(
+    () => window.localStorage.getItem('chat-demo:provider-kind') === 'deepseek' &&
+      Boolean(window.localStorage.getItem('chat-demo:api-key')),
+    null,
+    { timeout: 10000 },
+  )
 }
 
-/** 关掉设置弹窗 */
+/** 关掉设置层（只点设置那一层上的关闭，不碰别的 dialog） */
 const closeSettings = async (page) => {
-  const dialog = page.getByRole('dialog').first()
-  if ((await dialog.count()) > 0) {
-    await dialog.getByRole('button', { name: /^关闭$|^Close$/ }).first().click()
-    await page.waitForTimeout(400)
+  if ((await settingsLayer(page).count()) === 0) {
+    return
   }
+  await settingsDialog(page).first().getByRole('button', { name: /^关闭$|^Close$/ }).first().click()
+  await settingsLayer(page).first().waitFor({ state: 'detached', timeout: 10000 })
 }
 
-/** 切到「我们的渠道」（只有它才有额度 / 卡密的钱入口） */
-const selectOursChannel = async (page) => {
-  // #555：这里原来写的是 `getByRole('button', { name: /渠道|Channel|服务类型|Service type/ }).first()`。
-  // #480/#538 之后聊天页多了一个**禁用态**的文档入口图标按钮，aria-label 是
-  // 「当前渠道不支持文档附件：…请切换到其他渠道」—— 含「渠道」二字、DOM 顺序在设置弹窗之前、
-  // 且 `aria-disabled="true"`。宽松选择器 `.first()` 正好命中它，Playwright 的 enabled 检查
-  // 一路不让点，最终抛 `locator.click: Timeout 30000ms exceeded`（不是产品坏了，是选择器撞了）。
-  // 改用共享的 `providerKindTrigger`（`aria-label` 整串锚定），并且限定在设置弹窗内。
-  await providerKindTrigger(page.getByRole('dialog').first()).first().click()
-  await page.getByRole('option', { name: /我们的渠道|Our Channel/ }).first().click()
-  await page.waitForTimeout(400)
-  // #596：切渠道不会动 Key，但 ours 的 Key 只能由服务端下发 —— 补上「已领取」形态（Key + 下发标记）
+/**
+ * 场景 [2] 的前置：让**内置服务**（ours，「我们的渠道」）成为生效来源 —— 只有它有
+ * 「去充值 / 兑换卡密」→「我的钱包」那个按钮（`AssistantMessage.tsx` 里 `oursChannel ? 按钮 : 外链`），
+ * 所以 #817 那半条断言必须在内置渠道里跑。
+ *
+ * 改前面临的两个过期点：
+ *  1. 它点的是设置里的「渠道」下拉（`providerKindTrigger` → 「我们的渠道」）。#807 把来源页做成
+ *     三行手风琴后，`ApiConfigFields` 在来源页里 `hideProviderKind` —— 下拉不渲染，
+ *     那条选择器已经点不到任何东西（`tests/helpers/helpers.mjs` 里的 helper 也成了死代码）。
+ *  2. 内置服务那一行现在是**一行动作**（点即向付费网关领取，#807 `runBuiltinClaim`），
+ *     本用例上游全是 `page.route` 打桩，点它只会得到「领取失败」。
+ *
+ * 所以这里用产物自己的两个存储键写成「已领取 + 生效来源 = ours」（与 #596 之后其它 ours 用例
+ * 同一口径，指纹取自真实现），并把领 Key 的查重接口按**空列表**打桩：
+ * 实测不带这条桩时，重载后那次真实的 401 会让产物把刚种下的 Key 判成「未领取」并清掉
+ * （`kind/key` 双null），带上之后 Key 原样保留。**被测物仍然只有「额度类错误怎么分类」。**
+ */
+const useBuiltinSource = async (page) => {
+  // 只桩「领 Key」的那条查重接口（`/api/v1/keys`）；同一 host 上的 `{base}/v1/chat/completions`
+  // 必须继续落到下面 `runScenario` 里那份按状态码作答的桩上，否则会把聊天请求也答成 Key 列表。
+  await page.route(/apia\.ecsafe\.cn\/api\/v1\/keys/, (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' },
+      body: JSON.stringify({ items: [], total: 0 }),
+    })
+  )
   await seedClaimedApiKey(page, KEY)
+  await page.evaluate(() => window.localStorage.setItem('chat-demo:provider-kind', 'ours'))
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.waitForFunction(
+    () =>
+      window.localStorage.getItem('chat-demo:provider-kind') === 'ours' &&
+      window.localStorage.getItem('chat-demo:api-key') === 'sk-testkey-quota-299',
+    null,
+    { timeout: 10000 },
+  )
 }
 
 /** 发一条消息 */
@@ -122,7 +189,7 @@ const runScenario = async ({
   label,
   messagesPath = /\/anthropic\/v1\/messages$/,
   respond,
-  prepare,
+  configure = setupKey,
   expectText,
 }) => {
   const { page } = await openPage()
@@ -154,10 +221,7 @@ const runScenario = async ({
         body,
       })
     })
-    await setupKey(page)
-    if (prepare) {
-      await prepare(page)
-    }
+    await configure(page)
     await closeSettings(page)
     await sendChat(page)
     // 等界面稳定：出现期望文案上限 20s（内含自动重试的退避时间）
@@ -213,7 +277,7 @@ try {
     const { page, calls, text } = await runScenario({
       label: '429/insufficient_quota',
       messagesPath: /\/v1\/chat\/completions$/,
-      prepare: selectOursChannel,
+      configure: useBuiltinSource,
       respond: () =>
         jsonError(429, {
           message:

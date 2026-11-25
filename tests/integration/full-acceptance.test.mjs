@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { defaultDist, verifyAppUrl } from '../helpers/env.mjs'
 import { assertNoEgress, installEgressGate, providerKindTrigger } from '../helpers/helpers.mjs'
+import { BUILTIN_KEY_CLAIM_STUB } from '../fixtures/consume-gateway-stubs/builtin-key-claim.mjs'
 
 // 证据目录：原来写死 /root/deepseek-app/...（Linux 一次性机器），在任何别的机器上都 ENOENT
 // → 整条用例「用例异常」，属于环境假红。改成相对仓库根解析。
@@ -237,6 +238,7 @@ const page = await context.newPage()
  * （`startMock()` 的 `127.0.0.1:<随机端口>`，「零外网」的被测输入就是它）。
  */
 await installEgressGate(page, {
+  stubs: [BUILTIN_KEY_CLAIM_STUB],
   appUrl: APP_URL,
   allowHosts: [new URL(APP_URL).host, new URL(mockOk.base).host],
 })
@@ -280,7 +282,7 @@ const openSettings = async () => {
   if ((await page.getByRole('dialog').count()) === 0) {
     await page.getByRole('button', { name: /设置|Settings/ }).last().click()
   }
-  await page.getByRole('tab', { name: /数据管理|Data/ }).first().click()
+  await page.getByTestId('settings-row-data').first().click()
   await page.waitForTimeout(250)
 }
 const closeSettings = async () => {

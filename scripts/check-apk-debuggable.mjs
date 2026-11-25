@@ -119,7 +119,13 @@ function main(argv) {
     if (dbg.length) {
       console.error(`禁止发布：${dbg.length} 个 APK 是 debuggable 构建（android:debuggable="true"）。`);
       console.error('  这些包可被任何已授权 adb 的机器 run-as 读私有数据 / 挂 JDWP 调试（Issue #60）。');
-      console.error('  正确处理：用 ./gradlew :app:assembleRelease -PartifactVariant=internal 重新出包，不要上传这个文件。');
+      // 「怎么修」必须指对路：debuggable 是**构建类型**（assembleDebug）的产物属性，
+      // 与 artifactVariant（internal/standard）无关。以前这里写「-PartifactVariant=internal 重新出包」，
+      // 那是把「内测包」当成「非 debuggable 包」——照着做会得到一个变体标成 internal、
+      // 却仍可能 debuggable 的包（自动更新把它当内测包推）。正确的修法只有一条：用 release 构建类型。
+      console.error('  正确处理：用 release 构建类型重新出包 —— ./build-apk.sh release（或 cd android && ./gradlew :app:assembleRelease）。');
+      console.error('  debuggable 是构建类型（assembleDebug）的属性，与 artifactVariant（internal/standard）无关：');
+      console.error('  换变体参数不能把它去掉。debug 产物只用于本地联调 / 模拟器烟测，不要上传这个文件。');
     }
     if (unknown.length) {
       console.error(`判不出来：${unknown.length} 个文件无法确认 debuggable 状态（按禁止发布处理）。`);

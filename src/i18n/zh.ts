@@ -1407,6 +1407,13 @@ export const zh = {
   sendBlockedBaseUrlEndpointPath: '地址填得太长啦 (´･_･`)',
   sendBlockedModelEmpty: '模型名为空，这条消息没有发出：请先填写模型名',
   sendBlockedModelSpace: '模型名里有空格（首尾或中间），这条消息没有发出：模型名必须是连续的一串字符',
+  /**
+   * 「一个 Key 都没有」的那一条（2026-11-25 产品决定）：**不弹设置层**，改成一条带按钮的通知。
+   * 既有几条 `sendBlocked*` 都对着某个填错的字段，没有一条说「什么都还没有」，
+   * 所以这里补一条 —— 必须写明「这条消息没有发出」，否则用户会以为发出去只是没回。
+   * 按钮复用 `sendBlockedPickProvider`（去选择渠道）。
+   */
+  sendBlockedNoApiKey: '还没有可用的 API Key，这条消息没有发出：请先选择模型渠道或填写 API Key',
   // 发送前拦截「没有身份」（#793）：未登录 + 没有可用 Key 时，请求只会带着空凭据打上游。
   // 两句话缺一不可：第一句说清为什么没发出去，第二句是 toast 上的按钮（直达「服务 Tab → 模型来源」）
   sendBlockedNoCredentials: '我还不认识你呢 (｡•́︿•̀｡)',

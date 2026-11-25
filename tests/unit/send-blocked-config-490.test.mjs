@@ -693,7 +693,7 @@ test('[5] 正向对照：未登录但自己填了能用的 Key，照旧发车（
   assert.ok(fetchCalls >= 1, `同一条链路在有 Key 时会发请求，实际 ${fetchCalls}`)
 })
 
-test('[5] 已登录、只是还没 Key：新门放行，仍由 ensureApiKey 说「去填 Key / 去领取」', () => {
+test('[5] 已登录、只是还没 Key：新门放行，改由 ensureApiKey 发通知（不自动弹设置）', () => {
   reset()
   signIn()
   apiConfig.setProviderKind('openai')
@@ -701,11 +701,19 @@ test('[5] 已登录、只是还没 Key：新门放行，仍由 ensureApiKey 说�
   assert.equal(dialogState.ensureSendPrerequisites(), true, '已登录时新门不该抢话')
   assert.equal(useToast.getState().message, null, '新门没说话')
   assert.equal(dialogState.ensureApiKey(), false, 'Key 那道门照旧拦下')
+  // 产品决定 2026-11-25：拦下只发通知，不进设置层；「打开设置」在按钮上，由用户点
+  assert.equal(dialogState.useSettingsDialog.getState().open, false, '不许自动弹设置')
+  const toast = useToast.getState()
+  assert.deepEqual(toast.message, { key: 'sendBlockedNoApiKey' }, '提示说清「还没有可用的 API Key」')
+  assert.equal(toast.action?.key, 'sendBlockedPickProvider', '提示上带「去选择渠道」按钮')
+  toast.action.run()
+  assert.equal(dialogState.useSettingsDialog.getState().open, true, '点了按钮才进设置')
   assert.equal(
     dialogState.useSettingsDialog.getState().section,
     'account',
-    '仍然落在第三个 tab（Key 那一行在这一页）'
+    '落在第三个 tab（Key 那一行在这一页）'
   )
+  dialogState.closeSettings()
   signOut()
 })
 

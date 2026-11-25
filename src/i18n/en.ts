@@ -1391,6 +1391,10 @@ export const en = {
     'The model name is empty, so this message was not sent. Fill in a model name first.',
   sendBlockedModelSpace:
     'The model name contains a space, so this message was not sent. A model name must be one continuous string.',
+  // No key at all (product decision 2026-11-25): no auto-opened settings layer, just a toast with a button.
+  // The other `sendBlocked*` lines all point at a field that is filled in wrong; this one says "nothing yet".
+  sendBlockedNoApiKey:
+    'There is no usable API key yet, so this message was not sent. Choose a provider or fill in a key first.',
   // Pre-send guard for a missing identity (#793): not signed in and no usable key — the request would
   // only carry empty credentials. The second line is the toast button (straight to Settings → Service → Provider)
   sendBlockedNoCredentials: 'I don’t know you yet (｡•́︿•̀｡)',

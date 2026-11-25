@@ -22,7 +22,7 @@ import { SessionView } from '../components/session/SessionView.js'
 import { SessionBranchDialog } from '../components/session/SessionBranchDialog.js'
 import { MobileHeader } from '../components/session/MobileHeader.js'
 import { Welcome } from '../components/session/Welcome.js'
-import { ensureApiKey, openSettings, useSettingsDialog } from '../components/settings/settingsDialogState.js'
+import { openSettings, useSettingsDialog } from '../components/settings/settingsDialogState.js'
 import { syncManagedKeyFromServer } from '../components/settings/managedKeyRuntime.js'
 import { useAuthStatus } from '../services/auth/useAuthStatus.js'
 import { useApiConfig } from '../services/api/apiConfig.js'
@@ -41,7 +41,7 @@ import { CollapsedSider } from '../components/sider/CollapsedSider.js'
 import { closeMobileSider } from '../components/sider/mobileSiderState.js'
 import { MobileSider, Sider } from '../components/sider/Sider.js'
 import { UpdateDialog } from '../components/update/UpdateDialog.js'
-import { snoozeStartupUpdatePrompt, startUpdateGate, updateRequiredNow, useUpdateGate } from '../services/updateGateState.js'
+import { snoozeStartupUpdatePrompt, startUpdateGate, useUpdateGate } from '../services/updateGateState.js'
 import { bundledApp } from '../services/appUpdate.js'
 import styles from './App.module.css'
 
@@ -153,17 +153,14 @@ export const App = () => {
   useEffect(() => {
     void initChat()
     /**
-     * 首次打开先把 API Key 填了（启动这一次只为「一个都没有」打开设置，见 #596）。
+     * 启动期**不再**打开设置层（产品决定 2026-11-25）。
      *
-     * **但强制更新优先级更高**：判定结果出来之前不要抢屏，否则「无 Key 首启 + 服务端要求强制更新」
-     * 会同时叠两层弹窗（实测：设置弹窗盖在强制更新上，用户既看不到原因也点不到「去更新」）。
-     * 判定是 fail-open 的（拉不到＝不拦），所以正常情况下这只是把 Key 引导推迟到一次网络往返之后。
+     * 这里曾经是「无 Key 首启就把设置弹出来让用户先填 Key」（`ensureApiKey({ fromBoot: true })`，
+     * 还排在 `startUpdateGate()` 之后以免两层弹窗叠在一起）—— 那个功能被明确否掉了：
+     * 没有 Key 时该出现的是发送时的一条**通知**（上面带「去选择渠道」按钮，用户自己点才进设置），
+     * 而不是用户什么都没做就先被一层弹层打断。启动期的判定现在什么都不用做，
+     * 更新检查由下面那个独立的 effect 负责（`void startUpdateGate()`）。
      */
-    void startUpdateGate().then(() => {
-      if (!updateRequiredNow()) {
-        ensureApiKey({ fromBoot: true })
-      }
-    })
   }, [])
 
   /**
@@ -357,9 +354,12 @@ const StartupUpdatePrompt = () => {
       return
     }
     /**
-     * soft 让位给「先到先得」，但**必须等一个宏任务再判**：
-     * 「无 Key 首启」那条路会在本次判定之后、同一个 tick 内把设置弹层打开（`ensureApiKey`），
-     * 立刻问 `anotherDialogOpen()` 只会得到 false，于是两层弹窗叠在一起（实测）。
+     * soft 让位给「先到先得」，判定放在一个宏任务之后。
+     *
+     * 这条延迟原本的理由是「无 Key 首启」那条路会在本次判定之后、同一个 tick 内把设置弹层打开
+     * （`ensureApiKey({ fromBoot: true })`），立刻问 `anotherDialogOpen()` 只会得到 false，
+     * 于是两层弹窗叠在一起（实测）。2026-11-25 起启动期不再自动打开设置，那个理由消失了；
+     * 但「等一帧再判弹层叠不叠」本身是这条更新提示的既有现场行为，本次改动不动它（只改注释）。
      */
     const timer = setTimeout(() => {
       // 设置弹层「已打开」以 store 为准（DOM 要等 React 提交，宏任务里可能还没落）；再兜一层 DOM 检查

@@ -36,6 +36,22 @@ installChatBridge()
 // 构建期注入值（`__API_ORIGIN__` / `__ENDPOINTS__`）：apiConfig 顶层就要读
 installEndpointsGlobals()
 const dom = setupDom()
+/**
+ * toast 的计时器走 `window.setTimeout / clearTimeout`（`components/base/toastState.ts`），
+ * 而最小 DOM 替身只给了 addEventListener。补两个转发到全局的实现（与 send-blocked-config-490 同一套），
+ * 计时器 `unref()` 掉：不然 8s 的动作时长会把测试进程拖住。
+ *
+ * 为什么本文件现在需要它：ours + 没有 Key / Key 是旧的，这两条拦截从「弹设置」改成了
+ * 「发通知」（产品决定 2026-11-25），第一次真的会调 `showToast`。
+ */
+globalThis.window.setTimeout = (callback, milliseconds) => {
+  const timer = setTimeout(callback, milliseconds)
+  timer.unref?.()
+  return timer
+}
+globalThis.window.clearTimeout = (timer) => clearTimeout(timer)
+
+const { useToast } = await import('../../src/components/base/toastState.ts')
 
 const { zh } = await import('../../src/i18n/zh.ts')
 const { en } = await import('../../src/i18n/en.ts')
@@ -205,38 +221,48 @@ test('[3] ours + 没有 Key：发送被拦，设置页说「请先领取 Key」'
   assert.equal(apiConfig.checkApiKeyBeforeSend(), 'claim', 'ours 没 Key 必须是 claim 档（不是 missing）')
   assert.equal(dialogState.ensureApiKey(), false, '必须拦下，不许带着空 Key 发请求')
   const state = dialogState.useSettingsDialog.getState()
-  assert.equal(state.open, true, '拦截要打开设置')
+  // 产品决定 2026-11-25：拦下只发通知，**不**自动打开设置层（没有「自动弹设置」这个功能）
+  assert.equal(state.open, false, '拦截不许自己把设置弹出来')
+  assert.equal(state.managedKeyBlocked, 'unclaimed', '设置页要知道这次是「还没领取」（用户点进来时显示）')
+  // 可见提示：正文说「请先领取 Key」，按钮是唯一的出口 —— 点了才进设置
+  const toast = useToast.getState()
+  assert.deepEqual(toast.message, { key: 'settingsManagedKeyBlockedClaim' }, '提示说明「请先领取 Key」')
+  assert.equal(toast.action?.key, 'openSettingsEntry', '提示上有「打开设置」按钮')
+  toast.action.run()
   // #727 阶段 1：Key 那一行搬到了第三个 tab（账户与消费）。断言口径不变（「落在 Key 所在的那个
   // 分组」），只是分组值从旧 IA 的 `data` 换成新 IA 的 `account` —— 落在 `data` 会让用户看到
   // 一个没有 Key 输入框的面板（SettingsDialog 的 data tab 已明确不留渠道 / Key / 模型）。
-  assert.equal(state.section, 'account', '落在「账户与消费」')
-  assert.equal(state.managedKeyBlocked, 'unclaimed', '设置页要知道这次是「还没领取」')
+  assert.equal(dialogState.useSettingsDialog.getState().section, 'account', '落在「账户与消费」')
+  dialogState.closeSettings()
 })
 
-test('[3] 启动那一次不弹窗（手上已经有一把时），发送那一次一定拦', () => {
+test('[3] 发送那一次一定拦，而且**任何一次都不弹设置层**（启动期那次调用已删）', () => {
+  // 手上有 Key（没有下发标记）：发送被拦 + 一条通知，设置层不出现
   reset()
   apiConfig.setProviderKind('ours')
   apiConfig.setApiKey(HAND_KEY) // 有一把、但没有下发标记（老版本残留 / 手填）
-
-  // 启动：不打扰用户（只有「一个都没有」才弹设置，与 #451 之前的既有路径一致）
-  assert.equal(dialogState.ensureApiKey({ fromBoot: true }), false)
-  assert.equal(
-    dialogState.useSettingsDialog.getState().open,
-    false,
-    '启动时手上有 Key 就不该弹设置：用户还没做任何事，弹窗只会打断他'
-  )
-
-  // 发送：拦下并把原因写进设置（这才是有用的一刻）
-  assert.equal(dialogState.ensureApiKey(), false)
-  assert.equal(dialogState.useSettingsDialog.getState().open, true)
+  assert.equal(dialogState.ensureApiKey(), false, '发送那一次一定拦')
+  assert.equal(dialogState.useSettingsDialog.getState().open, false, '拦下也不弹设置层')
   assert.equal(dialogState.useSettingsDialog.getState().managedKeyBlocked, 'unclaimed')
 
-  // 启动 + 一个 Key 都没有：仍然弹设置（既有行为不变）
+  // 一个 Key 都没有：同样只发通知（改前这里断言的是「没有 Key 时启动就打开设置」）
   reset()
   apiConfig.setProviderKind('ours')
-  dialogState.useSettingsDialog.setState({ open: false })
-  assert.equal(dialogState.ensureApiKey({ fromBoot: true }), false)
-  assert.equal(dialogState.useSettingsDialog.getState().open, true, '没有 Key 时启动就该打开设置')
+  assert.equal(dialogState.ensureApiKey(), false)
+  assert.equal(dialogState.useSettingsDialog.getState().open, false, '没有 Key 也不自动弹设置')
+  assert.deepEqual(useToast.getState().message, { key: 'settingsManagedKeyBlockedClaim' })
+
+  /**
+   * 源码级（`App.tsx` / `.tsx` 在纯 Node 下 import 不了）：启动期的自动弹层调用被整段删掉，
+   * 连同只为它存在的 `fromBoot` 选项 —— 留着就是死代码。
+   */
+  const boot = codeOf('src/app/App.tsx')
+  assert.equal(boot.includes('ensureApiKey'), false, 'App 的启动 effect 不许再调 ensureApiKey')
+  assert.equal(
+    codeOf('src/components/settings/settingsDialogState.ts').includes('fromBoot'),
+    false,
+    '`fromBoot` 已无调用方，类型与分支一起删干净（不留死代码）'
+  )
 })
 
 test('[3] 拦截文案含「领取」，且不含「服务器繁忙 / 未知错误」这类掩盖性说法', () => {

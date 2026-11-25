@@ -169,75 +169,89 @@ export const openAccountConsume = (tab: AccountConsumeTab = 'cards') => {
 }
 
 /**
+ * 通知按钮上的动作：**用户点了**才打开设置（落在第三个 tab：渠道 / API Key / 模型都在那里）。
+ *
+ * 为什么单独提一个函数、而不是在 `ensureApiKey` 里写内联箭头：那条路径必须一眼看出
+ * 「打开设置只可能来自一次点击」。源码门禁 `tests/unit/no-auto-settings.test.mjs` 直接断言
+ * `ensureApiKey` 函数体里**不出现** `openSettings(` —— 内联写法就算是点击回调也会被它判红，
+ * 而这条门禁要防的正是「发送时顺手把设置弹出来」（产品决定 2026-11-25：不许自动弹设置层）。
+ */
+const openSettingsFromHint = () => {
+  openSettings('account')
+}
+
+/**
  * 发送前的 Key 守卫：返回是否放行（每个发送入口 —— 输入行、编辑后重发、重新生成 —— 都会调它）。
  *
- * 三条路，顺序不能换（Issue #451 第 2 点在这条链路上落地）：
+ * **拦下就只是拦下 + 一条通知，绝不打开设置层**（产品决定 2026-11-25）：
+ * 「没有 key 就自动弹设置」这个功能被否掉了 —— 没有 Key 时该出现的是**通知**，
+ * 通知上有「去选择渠道 / 打开设置」按钮，用户**自己点**才进设置（`openSettings('account')`）。
+ * 自动弹层会打断用户（尤其启动时他还没做任何事），也让「点一下就走」变成「先关一层弹层」。
+ *
+ * 五条路，顺序不能换（Issue #451 第 2 点在这条链路上落地）：
  *
  *  1. `ok`            → 放行，一个多余的判断都不多做；
- *  2. `missing`（**既有路径，一字不改**）→ 打开设置并选中「数据管理」，让用户去填 Key；
- *  3. `format`（#451 新增）→ 同样是打开设置，但多带一个标记：设置页在 Key 那一行直接写清
- *     「格式不对，这条消息没有发出去」。**不发请求**，所以也不会有一次 401 和一条
- *     「API Key 无效或已被删除」的误导文案（用户手上明明有一把 Key，那句话只会让他以为 Key 被删了）。
+ *  2. `missing`       → 一个 Key 都没有（**既有路径**，只是落点从「弹设置」改成「弹通知 + 按钮」）；
+ *  3. `format`（#451）→ 有 Key 但格式明显不对：同样只发通知，**不发请求** ——
+ *     所以不会有一次 401 和一条「API Key 无效或已被删除」的误导文案
+ *     （用户手上明明有一把 Key，那句话只会让他以为 Key 被删了）；
+ *  4. `claim`（#596）→ 本机没有服务端下发的那把 Key（没领过 / 手填的 / 老版本留下的）；
+ *  5. `stale`（#596）→ 本机这把与服务端下发标记不一致（服务端换过了）。
+ *
+ * 第 4/5 条**刻意不使用**「服务器繁忙」「未知错误」这类掩盖性说法：那正是 #596 第 1 条事故里
+ * 用户被误导的原因（本地存着旧 Key，服务端换了，401 被读成「服务器忙」）。
+ *
+ * 通知的两段：正文说清「这条消息没有发出 / 下一步做什么」，按钮是**唯一出口**
+ * （toast 3 秒就没了，带按钮的给到 `ACTION_DURATION` 8 秒 —— 点不到等于没有入口）。
+ *
+ * 为什么还要写 `managedKeyBlocked` / `apiKeyFormatBlocked` 这两个 marker（**不是**为了「让弹窗显示原因」）：
+ * 设置页本来就逐字渲染它们（`ManagedKeyField` / `ApiConfigFields` 读 store，与「怎么打开的」无关），
+ * 用户点通知上的按钮进来时，Key 那一行会直接写出「为什么刚才没发出去」，不用他自己猜。
+ * 用户从侧栏自己点进来也一样读得到 —— marker 跟着这次拦截，`closeSettings()` 清掉，不留僵尸提示。
  *
  * 判据统一在 `apiConfig.checkApiKeyBeforeSend()`（底层是 #374 的 `isKeyFormatInvalid`）：
  * 拦截与失败文案看同一份口径，不会出现「发送时说过格式没错、失败文案说格式不对」。
- *
- * #596 又多两条路，只对「我们的渠道」成立（另外三个渠道一字不改）：
- *
- *  4. `claim` → 本机没有服务端下发的那把 Key（没领过 / 手填的 / 老版本留下的）。**不发请求**，
- *     打开设置并在 Key 那一行写「请先领取 Key」+「重新领取」按钮；
- *  5. `stale` → 本机这把与服务端下发标记不一致（服务端换过了）。同样不发请求，写「Key 已更新，
- *     请重新领取」。
- *
- * 这两条**刻意不使用**「服务器繁忙」「未知错误」这类掩盖性说法：那正是 #596 第 1 条事故里
- * 用户被误导的原因（本地存着旧 Key，服务端换了，401 被读成「服务器忙」）。
  */
-export type EnsureApiKeyOptions = {
-  /**
-   * 启动时的那一次调用（`App` 里「首次打开先配 Key」）。
-   *
-   * 只为「一个 Key 都没有」打开设置 —— 与 #374 之前那条既有路径完全一致。
-   * 「有一把、但不是服务端下发的那把」（`claim` / `stale`）**不在启动时弹窗**：
-   * 用户没做任何事，弹一层设置只会打断他；等发送时再拦（那时才是他需要知道的一刻），
-   * 而设置页只要被打开就会自己把原因写在 Key 那一行（`managedKeyBlocked`）。
-   */
-  fromBoot?: boolean
-}
-
-export const ensureApiKey = (options: EnsureApiKeyOptions = {}) => {
+export const ensureApiKey = () => {
   const status = checkApiKeyBeforeSend()
   if (status === 'ok') {
     return true
   }
   if (status === 'missing') {
-    // #727 阶段 1：渠道 / API Key / 模型都搬到了第三个 tab（账户与消费），
-    // 所以「去填 Key」要落在**第三个 tab**，否则用户被送到一个没有 Key 输入框的面板。
-    openSettings('account')
+    // 一个 Key 都没有：说「还没有可用的 API Key」，按钮「去选择渠道」——
+    // #727 阶段 1：渠道 / API Key / 模型都在第三个 tab（账户与消费），所以落点是 `account`
+    // （落在「数据管理」会把用户送到一个没有 Key 输入框的面板）。点了才开，不点不开。
+    showToast(
+      { key: 'sendBlockedNoApiKey' },
+      { action: { key: 'sendBlockedPickProvider', run: openSettingsFromHint } }
+    )
     return false
   }
   if (status === 'claim' || status === 'stale') {
-    if (options.fromBoot === true && getApiKey().trim() !== '') {
-      // 启动 + 手上已经有一把（只是不对）：不弹设置，留给发送时那一拦（见 EnsureApiKeyOptions）
-      return false
-    }
     const blocked = status === 'stale' ? 'stale' : 'unclaimed'
     // 「我们的渠道」的 Key 只能由服务端下发（#596）：这两种状态下本地那把**一定**不是服务端那把，
-    // 发出去只会换回一次 401。先在诊断里留痕（只记判定档位与长度，Key 原文不进日志），再打开设置。
+    // 发出去只会换回一次 401。先在诊断里留痕（只记判定档位与长度，Key 原文不进日志），再发通知。
     recordConfigRejection('apiKey', status)
     recordAction('nav', 'block-send-managed-key', {
       reason: status,
       length: getApiKey().length,
     })
-    openSettings('account')
     useSettingsDialog.setState({ managedKeyBlocked: blocked })
+    showToast(
+      { key: blocked === 'stale' ? 'settingsManagedKeyBlockedStale' : 'settingsManagedKeyBlockedClaim' },
+      { action: { key: 'openSettingsEntry', run: openSettingsFromHint } }
+    )
     return false
   }
-  // format：先在诊断里留痕（这类「有 Key 却发不出去」只看状态是查不出来的），再打开设置
+  // format：先在诊断里留痕（这类「有 Key 却发不出去」只看状态是查不出来的），再发通知
   recordConfigRejection('apiKey', 'format')
   // 只记「有没有 / 多长」这类可切片字段，Key 原文一个字都不进日志（与 setApiKey 同一口径）
   recordAction('nav', 'block-send-invalid-key', { reason: 'format', length: getApiKey().length })
-  openSettings('account')
   useSettingsDialog.setState({ apiKeyFormatBlocked: true })
+  showToast(
+    { key: 'settingsApiKeyFormatBlocked' },
+    { action: { key: 'openSettingsEntry', run: openSettingsFromHint } }
+  )
   return false
 }
 
@@ -304,8 +318,8 @@ export const ensureSendPrerequisites = (): boolean => {
  *     （`sendConfigBlocked`，由 `ApiConfigFields` 的地址 / 模型行读取）；
  *  3. **返回 false**：调用方据此不再往下走 —— 请求数为 0 是这条拦截的全部价值。
  *
- * 不放行「启动时那次」：本函数只在发送入口被调用（`App` 的启动检查走 `ensureApiKey`），
- * 用户还没做任何事时不该因为一个历史遗留的空模型被弹窗打断。
+ * 本函数只在**发送入口**被调用，启动链路一次都不走（2026-11-25 起 `App` 的启动 effect 连
+ * `ensureApiKey` 都不调了）：用户还没做任何事时，不该因为一个历史遗留的空模型被弹窗打断。
  */
 export const ensureSendConfig = (): boolean => {
   const verdict = checkCurrentSendConfig()

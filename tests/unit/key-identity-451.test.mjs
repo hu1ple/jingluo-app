@@ -23,10 +23,25 @@ import { installChatBridge, installEndpointsGlobals, setupDom } from '../helpers
 installChatBridge()
 installEndpointsGlobals()
 const dom = setupDom()
+/**
+ * toast 的计时器走 `window.setTimeout / clearTimeout`（`components/base/toastState.ts`），
+ * 而最小 DOM 替身只给了 addEventListener。补两个转发到全局的实现（与 send-blocked-config-490 同一套），
+ * 计时器 `unref()` 掉：不然 8s 的动作时长会把测试进程拖住。
+ *
+ * 为什么本文件现在需要它：「没有 Key / Key 格式不对」的拦截从「弹设置」改成了「发通知」
+ * （产品决定 2026-11-25），这条路径第一次真的会调 `showToast`。
+ */
+globalThis.window.setTimeout = (callback, milliseconds) => {
+  const timer = setTimeout(callback, milliseconds)
+  timer.unref?.()
+  return timer
+}
+globalThis.window.clearTimeout = (timer) => clearTimeout(timer)
 
 const identity = await import('../../src/services/invite/keyIdentity.ts')
 const apiConfig = await import('../../src/services/api/apiConfig.ts')
 const dialogState = await import('../../src/components/settings/settingsDialogState.ts')
+const { useToast } = await import('../../src/components/base/toastState.ts')
 const { isKeyFormatInvalid } = await import('../../src/services/api/keyFailure.ts')
 const { translate } = await import('../../src/i18n/index.ts')
 const { useSettings } = await import('../../src/services/settings.ts')
@@ -219,26 +234,41 @@ test('[2] ensureApiKey：合法放行 / 没填走既有路径 / 格式错才拦�
   assert.equal(dialogState.ensureApiKey(), true, '有合法 Key 必须放行')
   assert.equal(dialogState.useSettingsDialog.getState().open, false, '不该顺手把设置弹窗打开')
 
-  // ② 没填：既有路径（打开设置 + 选中「账户与消费」），但**不能**戴上「格式不对」的帽子
-  // #727 阶段 1：渠道 / API Key / 模型搬到了第三个 tab（账户与消费）。落在「数据管理」会让
-  // 用户被送到一个**没有 Key 输入框**的面板（SettingsDialog 里那个 tab 已明确不留这三行），
-  // 所以这里钉的是新 IA —— 断言不变，只换分组值。
+  // ② 没填：拦下 + **一条通知**（产品决定 2026-11-25：不再自动打开设置层）。
+  // 「打开设置」的入口搬到通知上的按钮里，由用户自己点 —— 下面三段一起钉住这件事。
   apiConfig.setApiKey('')
   dialogState.closeSettings()
   assert.equal(dialogState.ensureApiKey(), false)
   const missing = dialogState.useSettingsDialog.getState()
-  assert.equal(missing.open, true, '没填 Key 时打开设置（#374 之前就有的行为）')
-  assert.equal(missing.section, 'account', 'Key 在「账户与消费」分组里（#727 后的位置）')
+  assert.equal(missing.open, false, '没填 Key 时**不**自动弹设置（自动弹层已被产品否掉）')
   assert.equal(missing.apiKeyFormatBlocked, false, '「没填」与「格式错」必须分开说')
+  const missingToast = useToast.getState()
+  assert.deepEqual(
+    missingToast.message,
+    { key: 'sendBlockedNoApiKey' },
+    '必须给一条可见提示（否则点发送什么都不发生 = 静默失败）'
+  )
+  assert.equal(missingToast.action?.key, 'sendBlockedPickProvider', '提示上有「去选择渠道」按钮')
+  missingToast.action.run()
+  const opened = dialogState.useSettingsDialog.getState()
+  assert.equal(opened.open, true, '**点了按钮**才打开设置')
+  assert.equal(opened.section, 'account', 'Key 在「账户与消费」分组里（#727 后的位置）')
+  dialogState.closeSettings()
 
-  // ③ 格式错：拦下 + 跳转设置 + 说明原因（这条消息根本没发出去）
+  // ③ 格式错：拦下 + 通知里说清原因 + 设置页那一行的红字（用户点进来才看到）
   apiConfig.setApiKey('sk-live 0123456789abcd') // 中间混进一个空格：粘贴时就坏了，本地能判
   dialogState.closeSettings()
   assert.equal(dialogState.ensureApiKey(), false, '格式不对必须在发送前拦下，不浪费一次 401')
   const blocked = dialogState.useSettingsDialog.getState()
-  assert.equal(blocked.open, true, '要跳转到设置让人就地改正')
-  assert.equal(blocked.section, 'account', '同样落在 Key 真正所在的那个 tab（#727）')
-  assert.equal(blocked.apiKeyFormatBlocked, true, '设置页要知道这次是「被拦下来的」')
+  assert.equal(blocked.open, false, '同样不自动弹设置')
+  assert.equal(blocked.apiKeyFormatBlocked, true, '设置页要知道这次是「被拦下来的」（用户点进来时显示）')
+  const formatToast = useToast.getState()
+  assert.deepEqual(formatToast.message, { key: 'settingsApiKeyFormatBlocked' }, '提示说明是格式问题')
+  assert.equal(formatToast.action?.key, 'openSettingsEntry', '提示上有「打开设置」按钮')
+  formatToast.action.run()
+  assert.equal(dialogState.useSettingsDialog.getState().open, true, '点了按钮才进设置')
+  assert.equal(dialogState.useSettingsDialog.getState().section, 'account', '落在 Key 所在的那个 tab')
+  dialogState.closeSettings()
 
   // 修好 Key（保存成功路径）→ 提示撤掉；直接关掉弹窗也会撤
   dialogState.clearApiKeyFormatBlocked()

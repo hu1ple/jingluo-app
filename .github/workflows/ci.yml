@@ -27,13 +27,25 @@ defaults:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # PR 上取消「同一个 PR 的旧 run」：省机器，PR 页面只留最新结论。
+  # **main 上不取消**（以前是 `cancel-in-progress: true`，一视同仁）：
+  #   被取消的 run 既不是绿也不是红 —— 它从 `statusCheckRollup` 里消失成「没有结论」，
+  #   于是「main 的每个提交到底验过没有」变成一件没人知道的事（实测：连续 push 两次，
+  #   前一个 run 变成 Cancelled，它的提交从此没有任何一次完整 CI 记录）。
+  #   红必须可归因的前提是「有没有跑」先得是真的（准绳 #1 / #3）。
+  # 代价：main 上连续 push 会排队/并行多跑几次 —— 这是「main 全绿」这个前提的必要开销。
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   checks:
     name: type / lint / unit / 产物兼容门禁
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 20 → 25 分钟不是「放水」：真正的超时判定落在**每一步**的 `timeout-minutes` 上
+    # （贵步骤逐个钉住，见对应步骤；超时的红会点名是哪一步，而不是一句
+    # 「The job ... has exceeded the maximum execution time」那种无法归因的红）。
+    # job 级只做兜底，抬高是为了：末尾「失败归因」那一步（≤8 分钟）别被兜底提前砍掉，
+    # 否则红了以后又回到「看不见其它红」的状态。
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -53,7 +65,21 @@ jobs:
 
       - name: Install
         run: pnpm install --frozen-lockfile
-
+      # ═══════════════ 区段 1：纯文本扫描（无构建依赖 · 无网络 · 只读）═══════════════
+      # **准入条件（往这一区段里加门禁必须满足）**：不读 dist/、不改仓库（负向对照自建自删）、
+      # 单条实测 <10s。只有长度在这一区段里的门禁才会被末尾的「失败归因」步骤复跑，
+      # 所以「为什么这道门禁能放进来」= 「它便宜到可以再跑一遍」。
+      #
+      # 为什么它们必须在**最前面**（而不是像以前那样排在 Build 和 gradle 之后）：
+      # 这一整个区段合计 ~20s，而它原来的位置在 Build(~30s)+JDK+两次 `./gradlew help`(~分钟级，
+      # 冷缓存还要下 200MB) 之后。于是「src 里写死了一个 IP」这种 5 秒能判的错，要等到 4~6 分钟后
+      # 才红 —— 而且 GitHub 在第一个失败步就停，作者根本看不到后面还有几条红。
+      # 现在：便宜的排最前（准绳 #5「站在最便宜的失败点」），红的反馈时间从分钟级降到 10 秒级。
+      # gate 与其负向对照**保持相邻**：一道门禁和「它能不能咬住」的证据必须一起读。
+      #
+      # >>> gate-triage:begin —— 末尾「失败归因」步骤从这两行标记之间抽取要复跑的门禁清单。
+      #     不要把标记本身挪走/改名：抽不到清单时归因步骤会打 `::warning::` 并跳过（不会假红，
+      #     但「红在哪几道」就又要靠人翻日志了）。
       # 两条纯文本扫描门禁：不依赖构建产物、合计 < 1s，放在最前面先把最便宜的红暴露出来。
       - name: 仓库卫生（check:hygiene）
         run: pnpm run check:hygiene
@@ -159,45 +185,6 @@ jobs:
           node scripts/check-db-version.mjs
           echo "负向对照通过：写死版本号 → exit 1 且指到 $probe，还原 → exit 0"
 
-      # 测试布局与重复检测（#362 阶段二 / #366 → #408 转 block）：同样是纯文本扫描
-      # （各 < 2s、不依赖构建产物）。#408 起了 block，条件都已在仓库里落地：
-      #   布局（--strict）：命名违规 0（域 3/4 六个批次文件已按 domainNN- 改名）+ fixture 散放 0
-      #         （5 个散放桩已归位到 tests/fixtures/<域>/）+ 孤儿 0 + 基线条目 0
-      #         （tests/test-layout-baseline.json 已清空，--strict 让「基线失真」也算红）。
-      #   重复：逐字 ≥20 行 32 → 21 组，剩下的全部逐条登记在
-      #         tests/test-duplication-baseline.json（**只减不增**，带 --update-baseline 也不许新增）；
-      #         新复制一段 ≥20 行当场红。R2/R3（关键词 / 标题跨层）仍是 warning。
-      # 两条都带负向对照（tests/unit/gate-negative-controls.test.mjs N4/N5）：注入必红、还原必绿。
-      - name: 测试布局门禁（check:test-layout）
-        run: pnpm run check:test-layout -- --strict
-
-      - name: 测试重复检测（check:test-duplication）
-        run: pnpm run check:test-duplication
-
-      # ─────────── 门禁优化第 7 条：**任何豁免都必须会过期**（check:exemptions） ───────────
-      #
-      # 六份「允许它先这样」的表（集成基线 known-red / flaky 隔离区 / 对抗基线 known-defect /
-      # 重复基线 / 重复白名单 / 快速子集排除）此前都只有注释纪律：reason 可以空、followUp 没人核对、
-      # 没有到期日。这一道把它们收成一份契约，并且**让它自己烂**：
-      #   · 缺 reason/证据/承接单/到期日 → red；
-      #   · 今天 > reviewAfter，或到期日远到等于没有 → red；
-      #   · 已经跑绿 / 对象文件没了 / 承接单已关闭 / 声称还红但 60 天没人实跑 → red；
-      #   · 把「缺产物、端口被占、机器慢」写成已知红 → red（环境问题是「没测」，不是「已知」）。
-      # 只读，无浏览器、无构建（~1s + 每个承接待办一次 gh issue view）。
-      # 抓不到 issue 状态时 `--strict` 判**环境失败 exit 2**（fail-closed）：不是条目有问题，
-      # 是「这条判据今天没在工作」—— 两件事必须分开，否则谁也不知道该改条目还是该修凭据。
-      - name: 豁免登记契约（check:exemptions）
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: pnpm run check:exemptions -- --strict
-
-      # 负向对照（脚本自带 `--selftest`，不碰仓库文件）：造 11 类坏条目 —— 缺 reason、占位句 reason、
-      # 已过期、到期日远到等于没有、已跑绿（两种形态）、承接单已关闭、拿环境问题顶包、对象文件没了、
-      # 声称还红但没人实跑、缺承接单 —— 每一个都必须被判非法；再放一条合法条目证明「必红」不是「恒红」。
-      # 最后一条反例是「分片权重不是豁免」：机制不许把到期日无差别套在不是豁免的东西上。
-      - name: 负向对照：缺 reason / 已过期 / 已跑绿 / 指向已关闭的 issue 的豁免条目必须被判非法
-        run: node scripts/check-test-exemptions.mjs --selftest
-
       # 文档引用门禁（#290 落地脚本，这次才接线）：验「文档里那些 `文件:行号` 还指得着吗」——
       # 文件存在、行号在文件内、起行不落在空行/孤立 `}` 上。同样是纯文本扫描（< 1s）。
       # 接线前它只在人记得的时候才跑，于是 main 上躺了 23 条 FAIL 没人发现；其中 15 条还是
@@ -280,143 +267,63 @@ jobs:
           gate
           echo "⑤ 改对 / 删掉后：exit 0（负向对照四拍全过）"
 
-      # #661：`docs/ui/**` 的截图曾只进不出 —— 553 张里 155 张（17.4 MiB）在仓库任何 tracked
-      # 文本里零命中，既不是关单证据也不在任何 README 的结论表里。check:doc-refs 看不见这件事
-      # （REF_EXT 里没有 png/jpg），所以单开一道：截图必须有出处，出处指到的截图必须还在。
-      # 负向对照两条：删一张被引用的图（悬空）、塞一张没人引用的图（孤儿），都必须 exit 1。
-      - name: 截图引用门禁（check:ui-shots）
-        run: pnpm run check:ui-shots
+      # check:redact：#387 的脱敏规则集门禁（P0 账号 / 资损字段）。
+      # 这类漏洞的症状是「删掉一条规则没有任何别的用例变红」—— 门禁把 5 类必填规则
+      # （device_id / 卡密 / 卡号 / order_token / 手机号）与「误伤负例」一起钉住，
+      # 规则被删或被改宽都 exit 1。紧跟一条负向对照，证明门禁本身不是空跑。
+      - name: 脱敏规则集（check:redact）
+        run: pnpm run check:redact
 
-      - name: 负向对照：孤儿截图 / 悬空引用都必须被 check:ui-shots 拦下
+      - name: 负向对照：把脱敏器换成恒等函数必须被 check:redact 拦下
+        run: node scripts/check-redact.mjs --selftest
+
+      # ─────────────── Issue #413：把已经存在但没人按的那几道门禁接进流水线 ───────────────
+      # 和 check:manifest 同一条教训：脚本能判红 ≠ 有人在跑。#314 的 i18n 门禁建好后，
+      # 因为没接线，main 上 17 个 compatBoot* 孤立 key 一路绿着漂到 #421 验收才被发现。
+      #
+      # check:i18n（#314）—— R1 key 集合双向相等 / R2 占位符对齐 / R3 t('key') 引用存在 /
+      #   R4 无新增孤立 key / R5 无空值。纯文本扫描（不 import .ts、不依赖 dist，< 1s）。
+      #   R4 基线 ORPHAN_BASELINE 只减不增：新增「定义未引用」的 key 当场红。
+      #   紧跟一条负向对照（删掉一个 zh key 必须 exit 1、还原后 exit 0），证明门禁不是空跑。
+      - name: i18n 门禁（check:i18n）
+        run: pnpm run check:i18n
+
+      - name: 负向对照：删掉一个 zh key 必须被 check:i18n 拦下（证明门禁不是空跑）
         run: |
           set -euo pipefail
-          SHOT=docs/ui/thinking-collapse/before-390-default.png
-          test -f "$SHOT" || { echo "::error::负向对照的基准文件不见了：$SHOT"; exit 1; }
-          # ① 悬空：删掉一张被 README 引用的截图 → 引用指向不存在的文件 → 必须红
-          mv "$SHOT" /tmp/zz-nc-shot.png
-          if node scripts/check-ui-shots.mjs; then
-            mv /tmp/zz-nc-shot.png "$SHOT"
-            echo "::error::负向对照失败：删掉被引用的截图后 check:ui-shots 仍然通过，说明悬空引用没被判"
+          cp src/i18n/zh.ts /tmp/zh.ts.bak
+          # 删掉一条真实存在的文案行（用 key 定位，不写死中文，避免 locale 影响）
+          sed -i '/^  compatBootTitle: /d' src/i18n/zh.ts
+          if node scripts/check-i18n.mjs; then
+            cp /tmp/zh.ts.bak src/i18n/zh.ts
+            echo "::error::负向对照失败：删掉 zh 的 compatBootTitle 后 check:i18n 仍然通过，说明门禁没有真正生效"
             exit 1
           fi
-          mv /tmp/zz-nc-shot.png "$SHOT"
-          # ② 孤儿：塞一张没有任何引用的截图 → 必须红
-          #    两个坑：(a) 文件名要在运行时拼 —— 门禁把「任何 tracked 文本里出现的文件名」算引用，
-          #    YAML 里写死名字等于自己把自己登记成出处（踩过）；(b) `git add -N`：门禁按 `git ls-files`
-          #    判「提交里有什么」，untracked 的临时文件不算数。
-          NC="docs/ui/zz-nc-orphan-$(date +%s%N).png"
-          cp "$SHOT" "$NC"
-          git add -N "$NC"
-          if node scripts/check-ui-shots.mjs; then
-            git reset -q -- "$NC"
-            rm -f "$NC"
-            echo "::error::负向对照失败：塞进无人引用的截图后 check:ui-shots 仍然通过，说明孤儿没被判"
-            exit 1
-          fi
-          git reset -q -- "$NC"
-          rm -f "$NC"
-          node scripts/check-ui-shots.mjs
-          echo "负向对照通过：删被引用的图 → exit 1，塞无人引用的图 → exit 1，还原后 → exit 0"
+          cp /tmp/zh.ts.bak src/i18n/zh.ts
+          node scripts/check-i18n.mjs
+          echo "负向对照通过：删 key → exit 1，还原 → exit 0"
 
-      # ──────── v1.4.5 事故：已发布的 tag 必须在 main 历史里（check:release-traceability）────────
-      # 事故（2026-11-21）：`v1.4.5` 的 tag 指向 `d5391944` —— 版本号 PR 分支上的提交，而 main 上同题提交是
-      # squash 之后的 `b43d5559`：
-      #
-      #     $ git merge-base --is-ancestor v1.4.5 origin/main ; echo $?
-      #     1
-      #
-      # 后果不是「包里差几行」，是**溯源链断了**：想「从 tag 复现问题」会 checkout 到一棵不在主线上的树，
-      # 发布物与 main 上哪个提交对应只能靠人记。当时 30 多道门禁全绿 —— 它们检查的都是「产物」与「工作区」。
-      #
-      # 判据只有一条：**tag 指向的提交必须是 origin/main 的祖先**。
-      # 不是 `git diff <tag> main`：那次差异里 `auth.ts` 那 7 行全是注释、另两个文件根本不进包，
-      # 拿文本差异当判据会得出错误结论（详见 scripts/check-release-traceability.mjs 头部那段）。
-      #
-      # 前提（实测，不是猜）：`actions/checkout` 默认 `fetch-depth: 1` = **浅克隆且不带 tag**：
-      #   · 浅克隆下 merge-base 只剩两头各 1 个提交，缺失的历史会被读成「不是祖先」→ 假红；
-      #   · 不带 tag 时 `refs/tags/*` 根本不存在。
-      # 所以下面先把 main 的完整历史与 tags 补齐（两次 fetch，实测 ≈1~2s）。脚本对「浅克隆 / 缺 origin/main /
-      # 缺 tag」三种前提缺失一律 exit 2 并点明修法（fail-closed，不伪装成「tag 不在 main 上」那种红）。
-      #
-      # **无** continue-on-error：这道门禁存在的理由就是「发布物是否出自 main」必须每次被真判一遍。
-      # ⚠ 现状（合入时，见 #651）：main 上有两个 tag 过不了 —— `v1.4.5`（d5391944）与 `v1.4.1`（c504ee51），
-      #   同根因（版本号 PR 分支上打 tag、再 squash 合并）。修法是把 tag 重指到 main 上对应提交后重发；
-      #   tag 修好之前这一步是红的 —— 红的是真问题，不是门禁误判。不要用 continue-on-error 掩盖它。
-      # 前提单独一步（两件事分开：fetch 是「把判据的输入准备好」，门禁是「判定」）。
-      # 拆成两步不只是好看：`tests/unit/gate-negative-controls.test.mjs` 的 N6 与
-      # `tests/unit/contract-c8-gate-negative.test.mjs` 的 G1 都从 ci.yml 里抽
-      # `run: pnpm run <gate>`（**单行**形态）来认定「这道门禁接线了」—— 写成多行块里的
-      # `pnpm run ...` 会从两套登记机制里一起消失（登记表当场变 stale，接线也没人看得见）。
-      - name: release 溯源：补齐 main 历史与 tags（check:release-traceability 的前提）
+      # check:endpoints：端点配置单一真相（地址零副本 / 无废弃占位）。#413 时已存在且绿。
+      - name: 端点配置检查（check:endpoints）
+        run: pnpm run check:endpoints
+
+      - name: 负向对照：往 src 塞一份端点地址字面量必须被 check:endpoints 拦下
         run: |
           set -euo pipefail
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
-            git fetch --no-tags --unshallow origin
-          fi
-          git fetch --force --tags origin
-          echo "origin/main=$(git rev-parse --short origin/main)｜tags=$(git tag --list | wc -l)｜shallow=$(git rev-parse --is-shallow-repository)"
-
-      - name: release 溯源（check:release-traceability）
-        env:
-          # gh 读 releases（哪些 tag 算「已发布」）；workflow 级 permissions: contents: read 足够
-          GH_TOKEN: ${{ github.token }}
-        run: pnpm run check:release-traceability
-
-      # 负向对照（四拍，**无** continue-on-error）：同一个临时 tag，先指 origin/main（必须绿）→ 再指一个
-      # **不在** main 历史里的提交（必须 exit 1 且点名 tag 与 sha）→ 还原（指回 main）→ 必须绿。
-      # 为什么用 `git commit-tree` 造那个提交：它只写一个对象（父提交是 origin/main），不动工作区、不动分支、
-      # 不推远端 —— 「不在 main 历史里」这个形状因此完全可控，且不依赖 PR 分支上有什么。
-      # 这一步同时证明上面那两次 fetch 真把足够的历史拿到了：否则「必须红」会退化成「永远红」。
-      - name: 负向对照：不在 main 历史里的 tag 必须被 check:release-traceability 拦下
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          PROBE=zz-gate-neg-release-trace
-          OUT=$(mktemp)
-          trap 'rm -f "$OUT"; git tag -d "$PROBE" >/dev/null 2>&1 || true' EXIT
-          MAIN=$(git rev-parse origin/main)
-
-          # ① 正例：临时 tag 指向 origin/main 本身 → 必须 exit 0（同一个 tag 名，下面只换指向）
-          git tag -f "$PROBE" "$MAIN"
-          node scripts/check-release-traceability.mjs --tag "$PROBE" > "$OUT" 2>&1 || {
-            echo "::error::负向对照的正例失败：tag 指向 origin/main 本身却判红了（前提 fetch 不够？）"
-            cat "$OUT"
-            exit 1
-          }
-          echo "① 指向 origin/main：exit 0"
-
-          # ② 注入：同一个 tag 改指到一个**不在** main 历史里的提交（父提交是 origin/main）
-          OFF=$(git -c user.name=ci -c user.email=ci@example.invalid commit-tree "$MAIN^{tree}" -p "$MAIN" -m "ci 负向对照：不在 origin/main 历史里的提交")
-          git tag -f "$PROBE" "$OFF"
-
-          # ③ 必须红，且报错点出「这个 tag + 这个 sha + 不在 origin/main 历史里」
-          if node scripts/check-release-traceability.mjs --tag "$PROBE" > "$OUT" 2>&1; then
-            echo "::error::负向对照失败：tag 指向非 main 提交后门禁仍然通过（判据没生效 / 被改软）"
-            cat "$OUT"
+          # 地址从唯一事实来源读，不在 YAML 里再写一份（否则这段自己就成了一处副本）
+          node --input-type=module -e '
+            import { writeFileSync } from "node:fs"
+            import { loadEndpoints } from "./scripts/lib/endpoints.mjs"
+            writeFileSync("src/__gate_neg_endpoints.ts", `export const NEG_ENDPOINT = "${loadEndpoints().chatBaseUrl}"\n`)
+          '
+          if node scripts/check-endpoints.mjs; then
+            rm -f src/__gate_neg_endpoints.ts
+            echo "::error::负向对照失败：src 里写死端点地址后 check:endpoints 仍然通过，说明门禁没有真正生效"
             exit 1
           fi
-          grep -F -q 'tag `'"$PROBE"'` 指向 `'"$(printf %s "$OFF" | cut -c1-8)"'`' "$OUT" || {
-            echo "::error::负向对照失败：红了，但报错没点出「$PROBE → ${OFF}」"
-            cat "$OUT"
-            exit 1
-          }
-          grep -F -q '不在 origin/main 历史里' "$OUT" || {
-            echo "::error::负向对照失败：红了，但没点明「不在 origin/main 历史里」"
-            cat "$OUT"
-            exit 1
-          }
-          echo "② 指向非 main 提交：exit 1，且点到了 $PROBE → ${OFF}"
-
-          # ④ 还原 → 必须回到 exit 0（证明「红」是注入引起的，不是恒红）
-          git tag -f "$PROBE" "$MAIN"
-          node scripts/check-release-traceability.mjs --tag "$PROBE" > "$OUT" 2>&1 || {
-            echo "::error::负向对照的还原拍失败：指回 origin/main 之后仍然红 —— 门禁可能恒红"
-            cat "$OUT"
-            exit 1
-          }
-          echo "③ 还原（指回 origin/main）：exit 0 —— 四拍全过"
+          rm -f src/__gate_neg_endpoints.ts
+          node scripts/check-endpoints.mjs
+          echo "负向对照通过：写死地址 → exit 1，删掉 → exit 0"
 
       # ─────────── Issue #697（P0 发布链）：签名凭据门禁接进流水线 ───────────
       # 脚本是 #272 建的，但指纹判据一直是半死的：`expectedCertSha256()` 去 build.gradle 找
@@ -425,11 +332,12 @@ jobs:
       # 是死代码。于是「这把 key 是不是已发布证书」——换签名唯一能被自动发现的地方——等于不存在。
       # #697 修好判据（不符 → exit 1 且点名期望/实际，来源 config/appIdentity.json）并在这里接线。
       #
-      # CI 上**没有** release keystore（secret 只在 release.yml 的「注入签名材料」那一步落盘），
+      # CI 上**没有** release keystore（secret 只在 `.github/workflows/build-apk.yml` 的「注入签名材料」
+      # 那一步落盘；原来的 release.yml 已被 ce7968e3 删除，仓库里再没有自动发布路径 —— 注释别再指它），
       # 所以这一步跑显式降级档 `--config-only`：只校验「期望值的来源与一致性」
       # （config/appIdentity.json 里有合法指纹，且 build.gradle 若还留着副本必须相等），
       # **不校验真签名**，并把这句事实打进日志 —— 不是静默跳过（静默跳过 = 这道门禁回到空转）。
-      # 真签名在发布机跑全量：release.yml 注入签到材料后 `pnpm run check:keystore`；
+      # 真签名在签名构建机上跑全量：`build-apk.yml` 注入签名材料后 `pnpm run check:keystore`；
       # 本 job 后面（setup-java 之后）另有一条「临时 key 必须判红」的全量档负向对照。
       - name: 签名凭据配置门禁（check:keystore，CI 降级档：只校验配置与来源一致性）
         run: pnpm run check:keystore -- --config-only
@@ -495,326 +403,6 @@ jobs:
           gate
           git diff --exit-code -- "$identity" "$gradle"
           echo "负向对照通过：格式坏掉 → 红且点名配置；冒出第二份来源 → 红且点名两份；还原 → exit 0"
-
-      - name: Type check
-        run: pnpm run type
-
-      - name: Lint
-        run: pnpm run lint
-
-      - name: Unit tests
-        # 单元层对 locale 敏感（#179 已修，这里仍显式钉住 zh-CN 保持一致）
-        env:
-          LANG: zh_CN.UTF-8
-          LC_ALL: zh_CN.UTF-8
-        run: pnpm test
-
-      # #368 把 tests/regression 接进了 LAYERS，但「接进 LAYERS」不等于「有人跑」—— 整层 11 个
-      # 纯 Node 回归文件（无浏览器、无网络）4s 跑完，此前零触发点（issue-135 import 已删的
-      # startCheckout 就是这么烂掉的）。
-      # #405 把它从「L1 分片 1」挪到这里：checks 只有 ~2 分钟、离 4 分钟预算很远，
-      # 而 L1 分片 1 是要压进 4 分钟的 job —— 纯 Node 的 4s 不该占 L1 的预算。
-      - name: 回归层（tests/regression，纯 Node，~4s）
-        run: node tests/run-layer.mjs regression
-
-      - name: Build (internal)
-        run: pnpm run build:internal
-
-      # ─────────────── Issue #563：gradle 配置可解析（拦住「JS 全绿但打不出包」）───────────────
-      # #557 的教训：main 上 22 道门禁全绿，`./gradlew` 却直接 FAILURE（`build.gradle:148` 把闭包箭头
-      # 写在了花括号外）。tsc / lint / 单测 / 产物扫描**都看不见 gradle 脚本**——「JS 侧全绿」本来
-      # 就不等于「出得了包」。这一步只做一件事：让 gradle 把脚本求值一遍。
-      #
-      # 为什么不跑 assembleRelease：太贵（真要下 AGP 依赖 + 打 dex，分钟级），而 `help` 在
-      # configuration 阶段就会执行 build.gradle / app/build.gradle / capacitor.build.gradle /
-      # settings.gradle —— 语法错、apply 到不存在的文件、未知属性，全在这一步红。
-      #
-      # 为什么前面要先 `cap sync`：`android/capacitor-cordova-android-plugins/` 与
-      # `android/app/src/main/assets/*` 是 **cap 生成物、不入库**（android/.gitignore），
-      # 干净 checkout 上直接 `./gradlew help` 会红在
-      # `Could not read script …/cordova.variables.gradle`——那是「生成物缺失」，不是「脚本坏了」，
-      # 一条恒红的门禁等于没有门禁（实测确认过：不加这一步，本步骤在干净副本上必然 FAILED）。
-      # 用 `cap sync`（与 build-apk.sh 同一条命令）而不是手搓桩文件：桩文件和真生成物一旦漂移，
-      # 这一步验的就不是「我们的 gradle 能不能被求值」了。实测 `cap sync` 约 1.7s。
-      # 顺序要求：必须排在 Build (internal) 之后 —— `cap sync` 要把 dist/ 拷进 assets。
-      - name: Setup JDK 21（gradle 配置校验用，与 build-apk.sh 的 REQUIRED_JAVA_MAJOR 对齐）
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      # 负向对照（真 keystore，**无** continue-on-error）：上面那条降级档只验「配置一致性」，
-      # 这一步验**真签名判据本身** —— 全量档要求「keytool 读出来的证书指纹 == 已发布证书」。
-      # 做法：现造一把只在本 job 存在的 keystore（$RUNNER_TEMP）→ 它的证书必然不是已发布证书
-      # → `pnpm run check:keystore` 必须 exit 1，且必须同时点名期望值与实际值（来源 config/appIdentity.json）。
-      # 只证明 exit≠0 不够：脚本恒红、或比较分支根本没进（#697 之前的死代码形态）都会 exit≠0 或 exit 0，
-      # 所以两个值都要命中。「相符 → exit 0」那一拍 CI 上做不到（那等于手里有已发布私钥）——
-      # 由单元层 N8 在临时树里跑（tests/unit/gate-negative-controls.test.mjs），本步骤末尾会打印这句话。
-      # 顺序要求：必须排在 Setup JDK 之后（keytool）。
-      - name: 负向对照（真 keystore）：临时 key 的指纹 ≠ 已发布证书 → check:keystore 必须 exit 1 并点名两个值
-        run: |
-          set -euo pipefail
-          ks="$RUNNER_TEMP/gate-neg-not-published.p12"
-          props="$RUNNER_TEMP/gate-neg-keystore.properties"
-          rm -f "$ks" "$props"
-          keytool -genkeypair -keystore "$ks" -storetype PKCS12 -alias gate-neg-not-published \
-            -keyalg RSA -keysize 2048 -validity 30 -dname "CN=gate neg, O=dsh" \
-            -storepass gateNegPass -keypass gateNegPass > /dev/null 2>&1
-          # 口令只走属性文件（不入日志）：这是本 job 现造的一次性 key，不是发布凭据
-          {
-            printf 'storeFileRelease=%s\n' "$ks"
-            printf 'storePasswordRelease=%s\n' 'gateNegPass'
-            printf 'keyAliasRelease=%s\n' 'gate-neg-not-published'
-            printf 'keyPasswordRelease=%s\n' 'gateNegPass'
-          } > "$props"
-          chmod 600 "$props"
-          if out="$(node scripts/check-keystore-config.mjs --file "$props" 2>&1)"; then
-            echo "$out"
-            echo "::error::负向对照失败：换了一把 key 后 check:keystore 仍然通过 —— 指纹判据在空转（#697 之前它就是这样）"
-            exit 1
-          fi
-          echo "$out"
-          expected="$(node -e 'process.stdout.write(require("./config/appIdentity.json").expectedCertSha256)')"
-          test -n "$expected"
-          # 红必须同时点出「期望值」「实际值」「来源」三件事，否则可能红在别的分支上
-          echo "$out" | grep -q "期望 ${expected} 实际 [0-9a-f]\{64\}" || {
-            echo "::error::门禁红了但没同时点名期望值（${expected}）与实际值"; exit 1; }
-          echo "$out" | grep -q '来源 config/appIdentity.json' || {
-            echo "::error::门禁红了但没点出期望值的来源（config/appIdentity.json）"; exit 1; }
-          echo "$out" | grep -q '证书指纹不符' || { echo "::error::门禁红了但不是因为指纹不符"; exit 1; }
-          echo "负向对照通过：非已发布 key → exit 1 且点名「期望 X 实际 Y（来源 config/appIdentity.json）」；"
-          echo "「相符 → exit 0」那一拍由单元层 N8 在临时树里跑（tests/unit/gate-negative-controls.test.mjs）"
-
-      - name: Gradle 缓存（wrapper 发行版 + 依赖；命中后这一步只剩配置时间）
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          # key 里带上 wrapper / gradle 脚本的 hash：升 gradle 或改 build.gradle 时自然换一份缓存
-          key: gradle-${{ runner.os }}-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties', 'android/build.gradle', 'android/app/build.gradle', 'android/variables.gradle', 'android/settings.gradle') }}
-          restore-keys: gradle-${{ runner.os }}-
-
-      - name: 生成 capacitor 原生配置（cap 生成物不入库，gradle 求值需要它们）
-        run: pnpm exec cap sync android
-
-      - name: gradle 配置可解析（拦住 build.gradle 语法错）
-        # 5 分钟硬上限：冷缓存首次要下 gradle-8.14.3-all（~200MB）。超时就是红，不会静默拖慢 PR。
-        #
-        # -PallowLoopbackConsume=true（Issue #601）：仓库里当前提交的 config/endpoints.json 的
-        # consume.baseUrl 还是本地联调回环地址（生产 host 待 #482 提供），而闸 1 要求
-        # 「回环地址的包必须显式声明」才能出包。这一步只求值 gradle 脚本、不产出任何可分发产物，
-        # 所以显式声明「这是本地联调构建」是准确的；闸 1 本身的正/负向对照见下一步。
-        timeout-minutes: 5
-        run: cd android && ./gradlew help --no-daemon --console=plain -PallowLoopbackConsume=true
-
-      - name: 闸 1 负向对照：回环 consume.baseUrl 未声明 allowLoopbackConsume 时必须 FAILED（#601）
-        # 顺序有意的：上一步已经证明「带逃生舱时 gradle 求值得通」，这一步只验闸 1 会不会咬。
-        # 只有当 endpoints 里确实是回环地址时这一条才成立；一旦 #482 填了 https 生产 host，
-        # 这里自动跳过并打印原因（不制造一条「改了配置就变红」的假门禁）。
-        timeout-minutes: 5
-        run: |
-          # 退出码约定：0 = 确认是回环（继续做负向对照）/ 3 = 不是回环（跳过）/ 其他 = 探针自己坏了
-          set +e
-          node -e "
-            const raw = require('./config/endpoints.json');
-            const lb = ['127.0.0.1','localhost','::1','[::1]'];
-            const host = (v) => { const r = String(v).replace(/^https?:\\/\\//,''); if (r.startsWith('[')) return r.slice(0, r.indexOf(']')+1); const i = r.indexOf(':'); return i >= 0 ? r.slice(0,i) : r; };
-            const hits = [];
-            for (const k of ['consume','pay']) { const v = raw?.[k]?.baseUrl; if (typeof v === 'string' && v.trim()) { if (lb.includes(host(v.trim()).toLowerCase())) hits.push(k + '.baseUrl=' + v.trim()); } }
-            const m = raw?.migration; if (m?.enabled === true && typeof m.baseUrl === 'string' && m.baseUrl.trim() && lb.includes(host(m.baseUrl.trim()).toLowerCase())) hits.push('migration.baseUrl=' + m.baseUrl.trim());
-            if (hits.length === 0) { console.log('SKIP: config/endpoints.json 里没有回环 base，闸 1 负向对照不适用'); process.exit(3); }
-            console.log('回环 base: ' + hits.join(' '));
-          "
-          probe=$?
-          set -e
-          if [ "$probe" = "3" ]; then exit 0; fi
-          if [ "$probe" != "0" ]; then echo "探针自身失败（exit=$probe），先修探针再谈闸 1"; exit 1; fi
-          cd android
-          set +e
-          out=$(./gradlew help --no-daemon --console=plain 2>&1)
-          code=$?
-          set -e
-          printf '%s\n' "$out" | tail -40
-          if [ "$code" = "0" ]; then
-            echo "闸 1 没咬住：回环 consume.baseUrl 在没传 -PallowLoopbackConsume 的情况下通过了配置阶段（#601）"
-            exit 1
-          fi
-          printf '%s\n' "$out" | grep -q "回环地址只能用于本地联调，不可分发" || {
-            echo "闸 1 咬住了，但不是那条文案（先看上面 tail 出来的真实报错）"; exit 1; }
-          echo "闸 1 负向对照通过：回环 base → 构建 FAILED，且打印了「回环地址只能用于本地联调，不可分发」"
-
-      # 登录接缝守卫（#510）：`AuthGate` 的 `__TEST_AUTH_STATE__` 必须是**构建期常量**，
-      # 正常构建由 DefinePlugin 内联成 undefined → 守卫被死代码消除。这个 job 构建的是**不带**
-      # `TEST_AUTH_SEAM=1` 的生产/内测产物，所以 dist/ 里一旦扫到那个标识符或假 token
-      # `test-token-not-real`，就说明接缝漏进了产物（线上多一条不用登录的路）→ exit 1。
-      # 紧跟一条负向对照（同 check:consume-api 的写法）：往产物里塞一个假 token，门禁必须判红。
-      - name: 登录接缝不进产物（check:test-seam）
-        run: pnpm run check:test-seam
-
-      # 负向对照（同 check:consume-api / check:doc-refs 的四拍写法）：往产物里塞一个假 token，
-      # 门禁必须判红、且必须让流水线红 —— 只跑正例的步骤算「绿灯空跑」（#369）。
-      # 直接调脚本而不是 `pnpm run check:test-seam`：contract-c8 的「门禁 → script → 真判定步骤」
-      # 是现场派生的，它认 `if node scripts/<script>.mjs …; then … exit 1` 这个形状。
-      - name: 负向对照：产物里塞假 token 后 check:test-seam 必须判红
-        run: |
-          set -euo pipefail
-          # 假 token 不在 YAML 里抄一份：从唯一来源（scripts/lib/testAuthSeam.mjs）读
-          marker="$(node --input-type=module -e 'import { SEAM_ACCESS_TOKEN } from "./scripts/lib/testAuthSeam.mjs"; process.stdout.write(SEAM_ACCESS_TOKEN)')"
-          test -n "$marker"
-          printf 'var leak="%s";\n' "$marker" > dist/__seam_neg_probe.js
-          if node scripts/check-test-seam.mjs; then
-            rm -f dist/__seam_neg_probe.js
-            echo "::error::负向对照失败：产物里塞了假 token 后 check:test-seam 仍然通过，说明扫描没有真正生效"
-            exit 1
-          fi
-          rm -f dist/__seam_neg_probe.js
-          node scripts/check-test-seam.mjs
-          echo "负向对照通过：产物里塞假 token → exit 1，删掉 → exit 0"
-
-      # 依赖 dist：没有产物时脚本直接 exit 1（不是跳过），因此必须排在 Build (internal) 之后。
-      - name: 产物目标门禁（check:bundle-target）
-        run: pnpm run check:bundle-target
-
-      - name: 产物语法/API 下限（check:legacy）
-        run: pnpm run check:legacy
-
-      # issue #104：把「声明的最低内核」与「入口产物真实的最低内核」放在一起比。
-      # 为什么单开一条：check:legacy 的判据是「Chromium 83 能力集」，而 `?.` / `??` 是 Chrome 80，
-      # 本来就在 83 的能力集里 —— 所以产物真实下限被抬到 80（甚至更高）时它**永远是绿的**。
-      # 「OPPO 上白屏 + 抱怨 Unexpected token '?'，而门禁全绿」就是这么来的。
-      - name: 语法下限对账（check:syntax-floor）
-        run: pnpm run check:syntax-floor
-
-      - name: 静态兼容矩阵（check:matrix）
-        run: pnpm run check:matrix
-
-      - name: 硬编码 IP 检查（check:ip）
-        run: pnpm run check:ip
-
-      # 以下两条与 check:ip 同属静态扫描（不依赖 dist、合计 < 2s），放在产物检查之后收尾。
-      # check:manifest：#330 的 releases.json 事故（11 条 buildType:"release" 发到线上）
-      #   证明「校验器判 FAIL」和「真的有人跑」是两件事 —— 这里让校验器本身每次都被跑一遍。
-      - name: 清单 fixture 校验（check:manifest）
-        run: pnpm run check:manifest
-
-      # ─────────────── Issue #609（裁决 #614 决定 3，P0 发布安全）：webroot 卫生门禁 ───────────────
-      # #601 事故的处置经验：光「把那条 internal 条目从 releases.json 里删掉」**不够** ——
-      # 文件还躺在 /var/www/dl/apk/ 下，而静态目录不看清单，猜到 URL 就能下载。
-      # 这条门禁扫的是**文件系统**（不是清单内容，那是 check:manifest 的活）：
-      #   R1 备份/取证残留 —— *.bak* / *LEAKED* / _withdrawn* / releases.json.*（白名单外）/ *.tmp-*
-      #   R2 webroot 内出现非 apk/ 的目录 —— private/ 尤其必须在 webroot 之外（/opt/dl-private/）
-      #   R3 apk/ 下出现 internal|dev 字样的文件 —— 内部包绝不进公网静态目录
-      #   R4 releases.json 里出现非 standard 条目（internal 条目数必须为 0，#620）—— 清单读不出来也红
-      # runner 上没有 /var/www/dl（不是分发机），脚本会改为**内置演练**：在本地临时目录里逐个注入
-      # 10 类脏东西 → 必红 → 还原 → 必绿。所以这一步永远不是「什么都没检查还全绿」。
-      # 真 webroot 的扫描在分发机上做（部署验收第 6 步，见 docs/RELEASE-MANUAL.md §14.7）。
-      - name: webroot 卫生门禁（check:webroot-hygiene）
-        run: pnpm run check:webroot-hygiene
-
-      # 负向对照（同 check:db-version / check:case-collision 的写法，**无** continue-on-error）：
-      # 在 $RUNNER_TEMP 里造一个干净 webroot → 必 exit 0；R1/R2/R3 各注入一类脏东西 →
-      # 必须 exit 1，且报错要**点到注入的那条规则与那个文件**（只证明 exit≠0 不够：
-      # 扫描目录被改窄、脚本恒红，都会让 exit≠0 成立）→ 还原 → 必须 exit 0。
-      # 全程只碰 $RUNNER_TEMP —— #609 的硬要求：不许拿生产机当试验田。
-      - name: 负向对照：webroot 里的脏东西必须被 check:webroot-hygiene 拦下（R1/R2/R3/R4 各一类）
-        run: |
-          set -euo pipefail
-          root="$RUNNER_TEMP/dl-webroot-neg"
-          rm -rf "$root"
-          mkdir -p "$root/apk"
-          printf '{"latest":"1.4.1","releases":[]}\n' > "$root/releases.json"
-          printf 'apk\n' > "$root/apk/deepseek-chat-1.4.1.apk"
-          # ① 正例：干净 webroot 必须 exit 0（否则门禁是恒红，没人敢开）
-          DL_WEBROOT="$root" node scripts/check-webroot-hygiene.mjs
-
-          # ② R1：事故取证残留（#601 现场那个文件名）
-          printf '{}\n' > "$root/releases.json.LEAKED-1795185887"
-          if out="$(DL_WEBROOT="$root" node scripts/check-webroot-hygiene.mjs 2>&1)"; then
-            echo "$out"
-            echo "::error::负向对照失败：webroot 里放 releases.json.LEAKED-1795185887 后门禁仍然通过"
-            exit 1
-          fi
-          echo "$out"
-          echo "$out" | grep -q '\[R1' || { echo "::error::门禁红了但没报 R1（判据没咬住）"; exit 1; }
-          echo "$out" | grep -q 'releases.json.LEAKED-1795185887' || { echo "::error::门禁红了但没点到注入的文件"; exit 1; }
-          rm -f "$root/releases.json.LEAKED-1795185887"
-          DL_WEBROOT="$root" node scripts/check-webroot-hygiene.mjs
-
-          # ③ R2：private/ 出现在 webroot 内
-          mkdir -p "$root/private"
-          printf '{}\n' > "$root/private/releases.internal.json"
-          if out="$(DL_WEBROOT="$root" node scripts/check-webroot-hygiene.mjs 2>&1)"; then
-            echo "$out"
-            echo "::error::负向对照失败：webroot 里建 private/ 后门禁仍然通过"
-            exit 1
-          fi
-          echo "$out"
-          echo "$out" | grep -q '\[R2' || { echo "::error::门禁红了但没报 R2（判据没咬住）"; exit 1; }
-          echo "$out" | grep -q 'private' || { echo "::error::门禁红了但没点到 private/"; exit 1; }
-          rm -rf "$root/private"
-          DL_WEBROOT="$root" node scripts/check-webroot-hygiene.mjs
-
-          # ④ R3：apk/ 下出现 internal 包（#601 泄漏的那个包名）
-          printf 'x\n' > "$root/apk/deepseek-chat-1.4.2-internal-HJ5NWRHQ.apk"
-          if out="$(DL_WEBROOT="$root" node scripts/check-webroot-hygiene.mjs 2>&1)"; then
-            echo "$out"
-            echo "::error::负向对照失败：apk/ 下放 internal 包后门禁仍然通过"
-            exit 1
-          fi
-          echo "$out"
-          echo "$out" | grep -q '\[R3' || { echo "::error::门禁红了但没报 R3（判据没咬住）"; exit 1; }
-          echo "$out" | grep -q 'deepseek-chat-1.4.2-internal-HJ5NWRHQ.apk' || { echo "::error::门禁红了但没点到注入的包"; exit 1; }
-          rm -f "$root/apk/deepseek-chat-1.4.2-internal-HJ5NWRHQ.apk"
-
-          # ④b R4（#620）：公网清单里塞一条 internal 条目 → 必须 exit 1 且点到那条记录。
-          #     这条断言要常驻：公网页面上「看起来没这条」不算数，清单里 internal 条目数必须为 0。
-          cp "$root/releases.json" "$root/releases.clean.json"
-          node -e '
-            const fs = require("fs");
-            const p = process.argv[1];
-            const d = JSON.parse(fs.readFileSync(p, "utf8"));
-            d.releases.push({
-              version: "0.9.9", versionCode: 1, releasedAt: "2026-11-01T10:00:00+08:00",
-              file: "apk/deepseek-chat-0.9.9.apk", size: 1, md5: "0".repeat(32), sha256: "a".repeat(64),
-              changes: ["注入物"], buildType: "stable", breaking: false,
-              artifactVariant: "internal", artifactVariantSource: "apk-manifest",
-            });
-            d.latest = d.latest || "0.9.9";
-            fs.writeFileSync(p, JSON.stringify(d, null, 2) + "\n");
-          ' "$root/releases.json"
-          if out="$(DL_WEBROOT="$root" node scripts/check-webroot-hygiene.mjs 2>&1)"; then
-            echo "$out"
-            echo "::error::负向对照失败：公网清单里塞了一条 internal 条目后门禁仍然通过"
-            exit 1
-          fi
-          echo "$out"
-          echo "$out" | grep -q '\[R4' || { echo "::error::门禁红了但没报 R4（判据没咬住）"; exit 1; }
-          echo "$out" | grep -q '0\.9\.9' || { echo "::error::门禁红了但没点到注入的那条记录"; exit 1; }
-          cp "$root/releases.clean.json" "$root/releases.json"
-          rm -f "$root/releases.clean.json"
-          if ! DL_WEBROOT="$root" node scripts/check-webroot-hygiene.mjs > /dev/null 2>&1; then
-            echo "::error::负向对照失败：还原后门禁仍红（R4 成了恒红）"
-            exit 1
-          fi
-
-          # ④c R4 fail-closed：清单读不出来时**不许**当作「没有 internal 条目」
-          cp "$root/releases.json" "$root/releases.clean.json"
-          printf '{"latest": "1.4.1", "releases": [' > "$root/releases.json"
-          if out="$(DL_WEBROOT="$root" node scripts/check-webroot-hygiene.mjs 2>&1)"; then
-            echo "$out"
-            echo "::error::负向对照失败：清单解析不了时门禁仍然通过（fail-open）"
-            exit 1
-          fi
-          echo "$out" | grep -q '\[R4' || { echo "::error::清单坏掉时门禁红了但没报 R4"; exit 1; }
-          cp "$root/releases.clean.json" "$root/releases.json"
-          rm -f "$root/releases.clean.json"
-
-          # ⑤ 还原 → 必绿，并且临时目录里没留注入物
-          DL_WEBROOT="$root" node scripts/check-webroot-hygiene.mjs
-          test -z "$(ls -A "$root/apk" | grep -v '^deepseek-chat-1.4.1.apk$')" || { echo "::error::临时 webroot 里还有注入物"; exit 1; }
-          rm -rf "$root"
-          echo "负向对照通过：R1/R2/R3/R4 各自 → exit 1 且点到注入物，还原 → exit 0"
 
       # 产物文件名前缀门禁（#836 scope ①）：安装包产物名从 `deepseek-chat-<ver>.apk` 改成
       # `jingluo-chat-<ver>.apk`，前缀的唯一来源是 config/appIdentity.json 的 artifactPrefix。
@@ -958,6 +546,133 @@ jobs:
           node scripts/check-consume-api.mjs
           echo "负向对照通过：白名单外路径 → exit 1，删掉 → exit 0"
 
+      - name: 硬编码 IP 检查（check:ip）
+        run: pnpm run check:ip
+
+      # ─────────────── Issue #609（裁决 #614 决定 3，P0 发布安全）：webroot 卫生门禁 ───────────────
+      # #601 事故的处置经验：光「把那条 internal 条目从 releases.json 里删掉」**不够** ——
+      # 文件还躺在 /var/www/dl/apk/ 下，而静态目录不看清单，猜到 URL 就能下载。
+      # 这条门禁扫的是**文件系统**（不是清单内容，那是 check:manifest 的活）：
+      #   R1 备份/取证残留 —— *.bak* / *LEAKED* / _withdrawn* / releases.json.*（白名单外）/ *.tmp-*
+      #   R2 webroot 内出现非 apk/ 的目录 —— private/ 尤其必须在 webroot 之外（/opt/dl-private/）
+      #   R3 apk/ 下出现 internal|dev 字样的文件 —— 内部包绝不进公网静态目录
+      #   R4 releases.json 里出现非 standard 条目（internal 条目数必须为 0，#620）—— 清单读不出来也红
+      # runner 上没有 /var/www/dl（不是分发机），脚本会改为**内置演练**：在本地临时目录里逐个注入
+      # 10 类脏东西 → 必红 → 还原 → 必绿。所以这一步永远不是「什么都没检查还全绿」。
+      # 真 webroot 的扫描在分发机上做（部署验收第 6 步，见 docs/RELEASE-MANUAL.md §14.7）。
+      - name: webroot 卫生门禁（check:webroot-hygiene）
+        run: pnpm run check:webroot-hygiene
+
+      # 负向对照（同 check:db-version / check:case-collision 的写法，**无** continue-on-error）：
+      # 在 $RUNNER_TEMP 里造一个干净 webroot → 必 exit 0；R1/R2/R3 各注入一类脏东西 →
+      # 必须 exit 1，且报错要**点到注入的那条规则与那个文件**（只证明 exit≠0 不够：
+      # 扫描目录被改窄、脚本恒红，都会让 exit≠0 成立）→ 还原 → 必须 exit 0。
+      # 全程只碰 $RUNNER_TEMP —— #609 的硬要求：不许拿生产机当试验田。
+      - name: 负向对照：webroot 里的脏东西必须被 check:webroot-hygiene 拦下（R1/R2/R3/R4 各一类）
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/dl-webroot-neg"
+          rm -rf "$root"
+          mkdir -p "$root/apk"
+          printf '{"latest":"1.4.1","releases":[]}\n' > "$root/releases.json"
+          printf 'apk\n' > "$root/apk/deepseek-chat-1.4.1.apk"
+          # ① 正例：干净 webroot 必须 exit 0（否则门禁是恒红，没人敢开）
+          DL_WEBROOT="$root" node scripts/check-webroot-hygiene.mjs
+
+          # ② R1：事故取证残留（#601 现场那个文件名）
+          printf '{}\n' > "$root/releases.json.LEAKED-1795185887"
+          if out="$(DL_WEBROOT="$root" node scripts/check-webroot-hygiene.mjs 2>&1)"; then
+            echo "$out"
+            echo "::error::负向对照失败：webroot 里放 releases.json.LEAKED-1795185887 后门禁仍然通过"
+            exit 1
+          fi
+          echo "$out"
+          echo "$out" | grep -q '\[R1' || { echo "::error::门禁红了但没报 R1（判据没咬住）"; exit 1; }
+          echo "$out" | grep -q 'releases.json.LEAKED-1795185887' || { echo "::error::门禁红了但没点到注入的文件"; exit 1; }
+          rm -f "$root/releases.json.LEAKED-1795185887"
+          DL_WEBROOT="$root" node scripts/check-webroot-hygiene.mjs
+
+          # ③ R2：private/ 出现在 webroot 内
+          mkdir -p "$root/private"
+          printf '{}\n' > "$root/private/releases.internal.json"
+          if out="$(DL_WEBROOT="$root" node scripts/check-webroot-hygiene.mjs 2>&1)"; then
+            echo "$out"
+            echo "::error::负向对照失败：webroot 里建 private/ 后门禁仍然通过"
+            exit 1
+          fi
+          echo "$out"
+          echo "$out" | grep -q '\[R2' || { echo "::error::门禁红了但没报 R2（判据没咬住）"; exit 1; }
+          echo "$out" | grep -q 'private' || { echo "::error::门禁红了但没点到 private/"; exit 1; }
+          rm -rf "$root/private"
+          DL_WEBROOT="$root" node scripts/check-webroot-hygiene.mjs
+
+          # ④ R3：apk/ 下出现 internal 包（#601 泄漏的那个包名）
+          printf 'x\n' > "$root/apk/deepseek-chat-1.4.2-internal-HJ5NWRHQ.apk"
+          if out="$(DL_WEBROOT="$root" node scripts/check-webroot-hygiene.mjs 2>&1)"; then
+            echo "$out"
+            echo "::error::负向对照失败：apk/ 下放 internal 包后门禁仍然通过"
+            exit 1
+          fi
+          echo "$out"
+          echo "$out" | grep -q '\[R3' || { echo "::error::门禁红了但没报 R3（判据没咬住）"; exit 1; }
+          echo "$out" | grep -q 'deepseek-chat-1.4.2-internal-HJ5NWRHQ.apk' || { echo "::error::门禁红了但没点到注入的包"; exit 1; }
+          rm -f "$root/apk/deepseek-chat-1.4.2-internal-HJ5NWRHQ.apk"
+
+          # ④b R4（#620）：公网清单里塞一条 internal 条目 → 必须 exit 1 且点到那条记录。
+          #     这条断言要常驻：公网页面上「看起来没这条」不算数，清单里 internal 条目数必须为 0。
+          cp "$root/releases.json" "$root/releases.clean.json"
+          node -e '
+            const fs = require("fs");
+            const p = process.argv[1];
+            const d = JSON.parse(fs.readFileSync(p, "utf8"));
+            d.releases.push({
+              version: "0.9.9", versionCode: 1, releasedAt: "2026-11-01T10:00:00+08:00",
+              file: "apk/deepseek-chat-0.9.9.apk", size: 1, md5: "0".repeat(32), sha256: "a".repeat(64),
+              changes: ["注入物"], buildType: "stable", breaking: false,
+              artifactVariant: "internal", artifactVariantSource: "apk-manifest",
+            });
+            d.latest = d.latest || "0.9.9";
+            fs.writeFileSync(p, JSON.stringify(d, null, 2) + "\n");
+          ' "$root/releases.json"
+          if out="$(DL_WEBROOT="$root" node scripts/check-webroot-hygiene.mjs 2>&1)"; then
+            echo "$out"
+            echo "::error::负向对照失败：公网清单里塞了一条 internal 条目后门禁仍然通过"
+            exit 1
+          fi
+          echo "$out"
+          echo "$out" | grep -q '\[R4' || { echo "::error::门禁红了但没报 R4（判据没咬住）"; exit 1; }
+          echo "$out" | grep -q '0\.9\.9' || { echo "::error::门禁红了但没点到注入的那条记录"; exit 1; }
+          cp "$root/releases.clean.json" "$root/releases.json"
+          rm -f "$root/releases.clean.json"
+          if ! DL_WEBROOT="$root" node scripts/check-webroot-hygiene.mjs > /dev/null 2>&1; then
+            echo "::error::负向对照失败：还原后门禁仍红（R4 成了恒红）"
+            exit 1
+          fi
+
+          # ④c R4 fail-closed：清单读不出来时**不许**当作「没有 internal 条目」
+          cp "$root/releases.json" "$root/releases.clean.json"
+          printf '{"latest": "1.4.1", "releases": [' > "$root/releases.json"
+          if out="$(DL_WEBROOT="$root" node scripts/check-webroot-hygiene.mjs 2>&1)"; then
+            echo "$out"
+            echo "::error::负向对照失败：清单解析不了时门禁仍然通过（fail-open）"
+            exit 1
+          fi
+          echo "$out" | grep -q '\[R4' || { echo "::error::清单坏掉时门禁红了但没报 R4"; exit 1; }
+          cp "$root/releases.clean.json" "$root/releases.json"
+          rm -f "$root/releases.clean.json"
+
+          # ⑤ 还原 → 必绿，并且临时目录里没留注入物
+          DL_WEBROOT="$root" node scripts/check-webroot-hygiene.mjs
+          test -z "$(ls -A "$root/apk" | grep -v '^deepseek-chat-1.4.1.apk$')" || { echo "::error::临时 webroot 里还有注入物"; exit 1; }
+          rm -rf "$root"
+          echo "负向对照通过：R1/R2/R3/R4 各自 → exit 1 且点到注入物，还原 → exit 0"
+
+      # check:log-coverage：埋点覆盖面门禁（母单 #301 维度 9）。
+      # 不加 --strict：#312 / #314 两条关键链路埋点缺口仍登记在 scripts/log-coverage-baseline.json，
+      # strict 会把它们变 FAIL。子单做完、从 knownGaps 删掉后，这条自然会收紧。
+      - name: 埋点覆盖面（check:log-coverage）
+        run: pnpm run check:log-coverage
+
       # #484 §九 的 A1–A7 方向验收（脚本 #487 阶段②建的，一直"设计性红"，所以此前没接线）。
       # #590 把 A1/A4/A6 降到 0 命中之后才接：**先全绿再接线** —— 接一道恒红的门禁等于没有门禁。
       # 它回答的问题和别的门禁不同：别的是「这一处有没有违规」，它问「重构的方向还在不在」
@@ -1002,6 +717,236 @@ jobs:
           node scripts/check-refactor-direction.mjs > "$log" 2>&1 || { cat "$log"; echo "::error::对照失败：还原后 check:refactor-direction 仍然红"; exit 1; }
           echo "负向对照通过：生成目录不计入 → exit 0；src/ 里同一地址 → exit 1；删掉 → exit 0"
 
+      - name: 测试重复检测（check:test-duplication）
+        run: pnpm run check:test-duplication
+
+      # 以下两条与 check:ip 同属静态扫描（不依赖 dist、合计 < 2s），放在产物检查之后收尾。
+      # check:manifest：#330 的 releases.json 事故（11 条 buildType:"release" 发到线上）
+      #   证明「校验器判 FAIL」和「真的有人跑」是两件事 —— 这里让校验器本身每次都被跑一遍。
+      - name: 清单 fixture 校验（check:manifest）
+        run: pnpm run check:manifest
+
+      # 测试布局与重复检测（#362 阶段二 / #366 → #408 转 block）：同样是纯文本扫描
+      # （各 < 2s、不依赖构建产物）。#408 起了 block，条件都已在仓库里落地：
+      #   布局（--strict）：命名违规 0（域 3/4 六个批次文件已按 domainNN- 改名）+ fixture 散放 0
+      #         （5 个散放桩已归位到 tests/fixtures/<域>/）+ 孤儿 0 + 基线条目 0
+      #         （tests/test-layout-baseline.json 已清空，--strict 让「基线失真」也算红）。
+      #   重复：逐字 ≥20 行 32 → 21 组，剩下的全部逐条登记在
+      #         tests/test-duplication-baseline.json（**只减不增**，带 --update-baseline 也不许新增）；
+      #         新复制一段 ≥20 行当场红。R2/R3（关键词 / 标题跨层）仍是 warning。
+      # 两条都带负向对照（tests/unit/gate-negative-controls.test.mjs N4/N5）：注入必红、还原必绿。
+      - name: 测试布局门禁（check:test-layout）
+        run: pnpm run check:test-layout -- --strict
+
+      # ─────────── 门禁优化第 7 条：**任何豁免都必须会过期**（check:exemptions） ───────────
+      #
+      # 六份「允许它先这样」的表（集成基线 known-red / flaky 隔离区 / 对抗基线 known-defect /
+      # 重复基线 / 重复白名单 / 快速子集排除）此前都只有注释纪律：reason 可以空、followUp 没人核对、
+      # 没有到期日。这一道把它们收成一份契约，并且**让它自己烂**：
+      #   · 缺 reason/证据/承接单/到期日 → red；
+      #   · 今天 > reviewAfter，或到期日远到等于没有 → red；
+      #   · 已经跑绿 / 对象文件没了 / 承接单已关闭 / 声称还红但 60 天没人实跑 → red；
+      #   · 把「缺产物、端口被占、机器慢」写成已知红 → red（环境问题是「没测」，不是「已知」）。
+      # 只读，无浏览器、无构建（~1s + 每个承接待办一次 gh issue view）。
+      # 抓不到 issue 状态时 `--strict` 判**环境失败 exit 2**（fail-closed）：不是条目有问题，
+      # 是「这条判据今天没在工作」—— 两件事必须分开，否则谁也不知道该改条目还是该修凭据。
+      - name: 豁免登记契约（check:exemptions）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pnpm run check:exemptions -- --strict
+
+      # 负向对照（脚本自带 `--selftest`，不碰仓库文件）：造 11 类坏条目 —— 缺 reason、占位句 reason、
+      # 已过期、到期日远到等于没有、已跑绿（两种形态）、承接单已关闭、拿环境问题顶包、对象文件没了、
+      # 声称还红但没人实跑、缺承接单 —— 每一个都必须被判非法；再放一条合法条目证明「必红」不是「恒红」。
+      # 最后一条反例是「分片权重不是豁免」：机制不许把到期日无差别套在不是豁免的东西上。
+      - name: 负向对照：缺 reason / 已过期 / 已跑绿 / 指向已关闭的 issue 的豁免条目必须被判非法
+        run: node scripts/check-test-exemptions.mjs --selftest
+
+      # check:capabilities（#209）：能力假设盘点（JS API / CSS / 宿主能力 / 行为假设）。
+      # 只接默认档（warn 级，永远 exit 0）：仍有 10 处能力假设缺陷登记在案，6 条修复 lane 在飞，
+      # 现在开 --strict 会互相卡死。这条先保证「扫描器本身每次都被跑、口径不被悄悄改宽」，
+      # 缺陷清零后再加 --strict（届时它会 exit 1，不需要改 YAML）。
+      - name: 能力假设盘点（check:capabilities，warn 档）
+        timeout-minutes: 3
+        run: pnpm run check:capabilities
+
+      # #661：`docs/ui/**` 的截图曾只进不出 —— 553 张里 155 张（17.4 MiB）在仓库任何 tracked
+      # 文本里零命中，既不是关单证据也不在任何 README 的结论表里。check:doc-refs 看不见这件事
+      # （REF_EXT 里没有 png/jpg），所以单开一道：截图必须有出处，出处指到的截图必须还在。
+      # 负向对照两条：删一张被引用的图（悬空）、塞一张没人引用的图（孤儿），都必须 exit 1。
+      - name: 截图引用门禁（check:ui-shots）
+        timeout-minutes: 4
+        run: pnpm run check:ui-shots
+
+      - name: 负向对照：孤儿截图 / 悬空引用都必须被 check:ui-shots 拦下
+        run: |
+          set -euo pipefail
+          SHOT=docs/ui/thinking-collapse/before-390-default.png
+          test -f "$SHOT" || { echo "::error::负向对照的基准文件不见了：$SHOT"; exit 1; }
+          # ① 悬空：删掉一张被 README 引用的截图 → 引用指向不存在的文件 → 必须红
+          mv "$SHOT" /tmp/zz-nc-shot.png
+          if node scripts/check-ui-shots.mjs; then
+            mv /tmp/zz-nc-shot.png "$SHOT"
+            echo "::error::负向对照失败：删掉被引用的截图后 check:ui-shots 仍然通过，说明悬空引用没被判"
+            exit 1
+          fi
+          mv /tmp/zz-nc-shot.png "$SHOT"
+          # ② 孤儿：塞一张没有任何引用的截图 → 必须红
+          #    两个坑：(a) 文件名要在运行时拼 —— 门禁把「任何 tracked 文本里出现的文件名」算引用，
+          #    YAML 里写死名字等于自己把自己登记成出处（踩过）；(b) `git add -N`：门禁按 `git ls-files`
+          #    判「提交里有什么」，untracked 的临时文件不算数。
+          NC="docs/ui/zz-nc-orphan-$(date +%s%N).png"
+          cp "$SHOT" "$NC"
+          git add -N "$NC"
+          if node scripts/check-ui-shots.mjs; then
+            git reset -q -- "$NC"
+            rm -f "$NC"
+            echo "::error::负向对照失败：塞进无人引用的截图后 check:ui-shots 仍然通过，说明孤儿没被判"
+            exit 1
+          fi
+          git reset -q -- "$NC"
+          rm -f "$NC"
+          node scripts/check-ui-shots.mjs
+          echo "负向对照通过：删被引用的图 → exit 1，塞无人引用的图 → exit 1，还原后 → exit 0"
+      # <<< gate-triage:end —— 区段 1 到此结束（上面这一行之后不许再放「triage 要复跑」的门禁）。
+      # ═══════════════ 区段 2：发布溯源（要网络 / 要完整历史）═══════════════
+      # 单独成段的原因：它的输入是 `git fetch` + `gh release list`，失败可能是「你的 tag 打错了」，
+      # 也可能是「网络/API 抖了」。把网络依赖的步骤集中成一段，红在哪一类上一眼可分（准绳 #3）。
+
+
+      # ──────── v1.4.5 事故：已发布的 tag 必须在 main 历史里（check:release-traceability）────────
+      # 事故（2026-11-21）：`v1.4.5` 的 tag 指向 `d5391944` —— 版本号 PR 分支上的提交，而 main 上同题提交是
+      # squash 之后的 `b43d5559`：
+      #
+      #     $ git merge-base --is-ancestor v1.4.5 origin/main ; echo $?
+      #     1
+      #
+      # 后果不是「包里差几行」，是**溯源链断了**：想「从 tag 复现问题」会 checkout 到一棵不在主线上的树，
+      # 发布物与 main 上哪个提交对应只能靠人记。当时 30 多道门禁全绿 —— 它们检查的都是「产物」与「工作区」。
+      #
+      # 判据只有一条：**tag 指向的提交必须是 origin/main 的祖先**。
+      # 不是 `git diff <tag> main`：那次差异里 `auth.ts` 那 7 行全是注释、另两个文件根本不进包，
+      # 拿文本差异当判据会得出错误结论（详见 scripts/check-release-traceability.mjs 头部那段）。
+      #
+      # 前提（实测，不是猜）：`actions/checkout` 默认 `fetch-depth: 1` = **浅克隆且不带 tag**：
+      #   · 浅克隆下 merge-base 只剩两头各 1 个提交，缺失的历史会被读成「不是祖先」→ 假红；
+      #   · 不带 tag 时 `refs/tags/*` 根本不存在。
+      # 所以下面先把 main 的完整历史与 tags 补齐（两次 fetch，实测 ≈1~2s）。脚本对「浅克隆 / 缺 origin/main /
+      # 缺 tag」三种前提缺失一律 exit 2 并点明修法（fail-closed，不伪装成「tag 不在 main 上」那种红）。
+      #
+      # **无** continue-on-error：这道门禁存在的理由就是「发布物是否出自 main」必须每次被真判一遍。
+      # 现状（2026-11-25 实测，别把这段当永久结论）：这道门禁**是绿的**。原文写着「main 上有两个 tag
+      #   过不了（v1.4.5 / v1.4.1），tag 修好之前这一步是红的」—— 那句话已经过期，而一句过期的
+      #   「这一步应该是红的」比不写更坏：它让人以为红是预期内的，于是真红也被当成背景。
+      #   现在的口径：判据只看**最近 5 个正式版**（窗口，不是全部 tag），v1.4.1 登记在
+      #   `scripts/release-traceability-allowlist.json`（带 reviewAfter 过期字段，脚本在 CI 环境
+      #   自动等价 --strict），v1.4.5 已落到窗口之外。要复核就是把这一步的日志看一遍，
+      #   不是回来读这段注释。
+      # 前提单独一步（两件事分开：fetch 是「把判据的输入准备好」，门禁是「判定」）。
+      # 拆成两步不只是好看：`tests/unit/gate-negative-controls.test.mjs` 的 N6 与
+      # `tests/unit/contract-c8-gate-negative.test.mjs` 的 G1 都从 ci.yml 里抽
+      # `run: pnpm run <gate>`（**单行**形态）来认定「这道门禁接线了」—— 写成多行块里的
+      # `pnpm run ...` 会从两套登记机制里一起消失（登记表当场变 stale，接线也没人看得见）。
+      - name: release 溯源：补齐 main 历史与 tags（check:release-traceability 的前提）
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git fetch --no-tags --unshallow origin
+          fi
+          git fetch --force --tags origin
+          echo "origin/main=$(git rev-parse --short origin/main)｜tags=$(git tag --list | wc -l)｜shallow=$(git rev-parse --is-shallow-repository)"
+
+      - name: release 溯源（check:release-traceability）
+        env:
+          # gh 读 releases（哪些 tag 算「已发布」）；workflow 级 permissions: contents: read 足够
+          GH_TOKEN: ${{ github.token }}
+        run: pnpm run check:release-traceability
+
+      # 负向对照（四拍，**无** continue-on-error）：同一个临时 tag，先指 origin/main（必须绿）→ 再指一个
+      # **不在** main 历史里的提交（必须 exit 1 且点名 tag 与 sha）→ 还原（指回 main）→ 必须绿。
+      # 为什么用 `git commit-tree` 造那个提交：它只写一个对象（父提交是 origin/main），不动工作区、不动分支、
+      # 不推远端 —— 「不在 main 历史里」这个形状因此完全可控，且不依赖 PR 分支上有什么。
+      # 这一步同时证明上面那两次 fetch 真把足够的历史拿到了：否则「必须红」会退化成「永远红」。
+      - name: 负向对照：不在 main 历史里的 tag 必须被 check:release-traceability 拦下
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PROBE=zz-gate-neg-release-trace
+          OUT=$(mktemp)
+          trap 'rm -f "$OUT"; git tag -d "$PROBE" >/dev/null 2>&1 || true' EXIT
+          MAIN=$(git rev-parse origin/main)
+
+          # ① 正例：临时 tag 指向 origin/main 本身 → 必须 exit 0（同一个 tag 名，下面只换指向）
+          git tag -f "$PROBE" "$MAIN"
+          node scripts/check-release-traceability.mjs --tag "$PROBE" > "$OUT" 2>&1 || {
+            echo "::error::负向对照的正例失败：tag 指向 origin/main 本身却判红了（前提 fetch 不够？）"
+            cat "$OUT"
+            exit 1
+          }
+          echo "① 指向 origin/main：exit 0"
+
+          # ② 注入：同一个 tag 改指到一个**不在** main 历史里的提交（父提交是 origin/main）
+          OFF=$(git -c user.name=ci -c user.email=ci@example.invalid commit-tree "$MAIN^{tree}" -p "$MAIN" -m "ci 负向对照：不在 origin/main 历史里的提交")
+          git tag -f "$PROBE" "$OFF"
+
+          # ③ 必须红，且报错点出「这个 tag + 这个 sha + 不在 origin/main 历史里」
+          if node scripts/check-release-traceability.mjs --tag "$PROBE" > "$OUT" 2>&1; then
+            echo "::error::负向对照失败：tag 指向非 main 提交后门禁仍然通过（判据没生效 / 被改软）"
+            cat "$OUT"
+            exit 1
+          fi
+          grep -F -q 'tag `'"$PROBE"'` 指向 `'"$(printf %s "$OFF" | cut -c1-8)"'`' "$OUT" || {
+            echo "::error::负向对照失败：红了，但报错没点出「$PROBE → ${OFF}」"
+            cat "$OUT"
+            exit 1
+          }
+          grep -F -q '不在 origin/main 历史里' "$OUT" || {
+            echo "::error::负向对照失败：红了，但没点明「不在 origin/main 历史里」"
+            cat "$OUT"
+            exit 1
+          }
+          echo "② 指向非 main 提交：exit 1，且点到了 $PROBE → ${OFF}"
+
+          # ④ 还原 → 必须回到 exit 0（证明「红」是注入引起的，不是恒红）
+          git tag -f "$PROBE" "$MAIN"
+          node scripts/check-release-traceability.mjs --tag "$PROBE" > "$OUT" 2>&1 || {
+            echo "::error::负向对照的还原拍失败：指回 origin/main 之后仍然红 —— 门禁可能恒红"
+            cat "$OUT"
+            exit 1
+          }
+          echo "③ 还原（指回 origin/main）：exit 0 —— 四拍全过"
+      # ═══════════════ 区段 3：类型 / 行为（你的改动）═══════════════
+      # 这一区段红 = **你的改动**破坏了编译、lint 或行为，与发布链、打包链无关。
+      # Lint(0.7s) 在 Type(3.7s) 之前：同一个「代码坏了」的结论，先用便宜的那个判。
+
+
+      - name: Lint
+        timeout-minutes: 3
+        run: pnpm run lint
+
+      - name: Type check
+        timeout-minutes: 5
+        run: pnpm run type
+
+      - name: Unit tests
+        timeout-minutes: 12
+        # 单元层对 locale 敏感（#179 已修，这里仍显式钉住 zh-CN 保持一致）
+        env:
+          LANG: zh_CN.UTF-8
+          LC_ALL: zh_CN.UTF-8
+        run: pnpm test
+
+      # #368 把 tests/regression 接进了 LAYERS，但「接进 LAYERS」不等于「有人跑」—— 整层 11 个
+      # 纯 Node 回归文件（无浏览器、无网络）4s 跑完，此前零触发点（issue-135 import 已删的
+      # startCheckout 就是这么烂掉的）。
+      # #405 把它从「L1 分片 1」挪到这里：checks 只有 ~2 分钟、离 4 分钟预算很远，
+      # 而 L1 分片 1 是要压进 4 分钟的 job —— 纯 Node 的 4s 不该占 L1 的预算。
+      - name: 回归层（tests/regression，纯 Node，~4s）
+        timeout-minutes: 5
+        run: node tests/run-layer.mjs regression
+
       # ─────────────── Issue #415：把 deploy/dl-release/test 的用例接进流水线（#441 起 37 条）───────────────
       # 同一类教训的第四处（前有 #368 的 regression 层、#365 的 integration 层、#413 的门禁）：
       # `deploy/dl-release/test` 的用例（variant 9 / apk-manifest 9 / server-buildtype 6 /
@@ -1016,78 +961,64 @@ jobs:
       #   · 这一步按 `pnpm run test:dl-release`（= `node --test deploy/dl-release/test/*.test.mjs`）跑，
       #     纯 Node、无浏览器、不依赖 dist，实测 ~3-7s。不加 continue-on-error：真红必须红。
       - name: dl-release 用例（deploy/dl-release/test，83 条，纯 Node）
+        timeout-minutes: 8
         run: pnpm run test:dl-release
+      # ═══════════════ 区段 4：构建 + 产物门禁 ═══════════════
+      # 这一区段红 = **能编译但产物不合格**（polyfill / 内核下限 / 接缝泄漏 / 目标变体）。
+      # 顺序由依赖决定，不是偏好：全部步骤都读 dist/，所以必须整段排在 Build 之后。
+      # 段内按实测耗时升序（test-seam 0.6s → syntax-floor 7.5s → bundle-target 10.7s →
+      # legacy 12.1s → matrix 22.2s），最贵的 `check:matrix` 收尾。
 
-      # ─────────────── Issue #413：把已经存在但没人按的那几道门禁接进流水线 ───────────────
-      # 和 check:manifest 同一条教训：脚本能判红 ≠ 有人在跑。#314 的 i18n 门禁建好后，
-      # 因为没接线，main 上 17 个 compatBoot* 孤立 key 一路绿着漂到 #421 验收才被发现。
-      #
-      # check:i18n（#314）—— R1 key 集合双向相等 / R2 占位符对齐 / R3 t('key') 引用存在 /
-      #   R4 无新增孤立 key / R5 无空值。纯文本扫描（不 import .ts、不依赖 dist，< 1s）。
-      #   R4 基线 ORPHAN_BASELINE 只减不增：新增「定义未引用」的 key 当场红。
-      #   紧跟一条负向对照（删掉一个 zh key 必须 exit 1、还原后 exit 0），证明门禁不是空跑。
-      - name: i18n 门禁（check:i18n）
-        run: pnpm run check:i18n
 
-      - name: 负向对照：删掉一个 zh key 必须被 check:i18n 拦下（证明门禁不是空跑）
+      - name: Build (internal)
+        timeout-minutes: 8
+        run: pnpm run build:internal
+
+      # 登录接缝守卫（#510）：`AuthGate` 的 `__TEST_AUTH_STATE__` 必须是**构建期常量**，
+      # 正常构建由 DefinePlugin 内联成 undefined → 守卫被死代码消除。这个 job 构建的是**不带**
+      # `TEST_AUTH_SEAM=1` 的生产/内测产物，所以 dist/ 里一旦扫到那个标识符或假 token
+      # `test-token-not-real`，就说明接缝漏进了产物（线上多一条不用登录的路）→ exit 1。
+      # 紧跟一条负向对照（同 check:consume-api 的写法）：往产物里塞一个假 token，门禁必须判红。
+      - name: 登录接缝不进产物（check:test-seam）
+        timeout-minutes: 3
+        run: pnpm run check:test-seam
+
+      # 负向对照（同 check:consume-api / check:doc-refs 的四拍写法）：往产物里塞一个假 token，
+      # 门禁必须判红、且必须让流水线红 —— 只跑正例的步骤算「绿灯空跑」（#369）。
+      # 直接调脚本而不是 `pnpm run check:test-seam`：contract-c8 的「门禁 → script → 真判定步骤」
+      # 是现场派生的，它认 `if node scripts/<script>.mjs …; then … exit 1` 这个形状。
+      - name: 负向对照：产物里塞假 token 后 check:test-seam 必须判红
         run: |
           set -euo pipefail
-          cp src/i18n/zh.ts /tmp/zh.ts.bak
-          # 删掉一条真实存在的文案行（用 key 定位，不写死中文，避免 locale 影响）
-          sed -i '/^  compatBootTitle: /d' src/i18n/zh.ts
-          if node scripts/check-i18n.mjs; then
-            cp /tmp/zh.ts.bak src/i18n/zh.ts
-            echo "::error::负向对照失败：删掉 zh 的 compatBootTitle 后 check:i18n 仍然通过，说明门禁没有真正生效"
+          # 假 token 不在 YAML 里抄一份：从唯一来源（scripts/lib/testAuthSeam.mjs）读
+          marker="$(node --input-type=module -e 'import { SEAM_ACCESS_TOKEN } from "./scripts/lib/testAuthSeam.mjs"; process.stdout.write(SEAM_ACCESS_TOKEN)')"
+          test -n "$marker"
+          printf 'var leak="%s";\n' "$marker" > dist/__seam_neg_probe.js
+          if node scripts/check-test-seam.mjs; then
+            rm -f dist/__seam_neg_probe.js
+            echo "::error::负向对照失败：产物里塞了假 token 后 check:test-seam 仍然通过，说明扫描没有真正生效"
             exit 1
           fi
-          cp /tmp/zh.ts.bak src/i18n/zh.ts
-          node scripts/check-i18n.mjs
-          echo "负向对照通过：删 key → exit 1，还原 → exit 0"
+          rm -f dist/__seam_neg_probe.js
+          node scripts/check-test-seam.mjs
+          echo "负向对照通过：产物里塞假 token → exit 1，删掉 → exit 0"
 
-      # check:endpoints：端点配置单一真相（地址零副本 / 无废弃占位）。#413 时已存在且绿。
-      - name: 端点配置检查（check:endpoints）
-        run: pnpm run check:endpoints
+      # issue #104：把「声明的最低内核」与「入口产物真实的最低内核」放在一起比。
+      # 为什么单开一条：check:legacy 的判据是「Chromium 83 能力集」，而 `?.` / `??` 是 Chrome 80，
+      # 本来就在 83 的能力集里 —— 所以产物真实下限被抬到 80（甚至更高）时它**永远是绿的**。
+      # 「OPPO 上白屏 + 抱怨 Unexpected token '?'，而门禁全绿」就是这么来的。
+      - name: 语法下限对账（check:syntax-floor）
+        timeout-minutes: 3
+        run: pnpm run check:syntax-floor
 
-      - name: 负向对照：往 src 塞一份端点地址字面量必须被 check:endpoints 拦下
-        run: |
-          set -euo pipefail
-          # 地址从唯一事实来源读，不在 YAML 里再写一份（否则这段自己就成了一处副本）
-          node --input-type=module -e '
-            import { writeFileSync } from "node:fs"
-            import { loadEndpoints } from "./scripts/lib/endpoints.mjs"
-            writeFileSync("src/__gate_neg_endpoints.ts", `export const NEG_ENDPOINT = "${loadEndpoints().chatBaseUrl}"\n`)
-          '
-          if node scripts/check-endpoints.mjs; then
-            rm -f src/__gate_neg_endpoints.ts
-            echo "::error::负向对照失败：src 里写死端点地址后 check:endpoints 仍然通过，说明门禁没有真正生效"
-            exit 1
-          fi
-          rm -f src/__gate_neg_endpoints.ts
-          node scripts/check-endpoints.mjs
-          echo "负向对照通过：写死地址 → exit 1，删掉 → exit 0"
+      # 依赖 dist：没有产物时脚本直接 exit 1（不是跳过），因此必须排在 Build (internal) 之后。
+      - name: 产物目标门禁（check:bundle-target）
+        timeout-minutes: 4
+        run: pnpm run check:bundle-target
 
-      # check:capabilities（#209）：能力假设盘点（JS API / CSS / 宿主能力 / 行为假设）。
-      # 只接默认档（warn 级，永远 exit 0）：仍有 10 处能力假设缺陷登记在案，6 条修复 lane 在飞，
-      # 现在开 --strict 会互相卡死。这条先保证「扫描器本身每次都被跑、口径不被悄悄改宽」，
-      # 缺陷清零后再加 --strict（届时它会 exit 1，不需要改 YAML）。
-      - name: 能力假设盘点（check:capabilities，warn 档）
-        run: pnpm run check:capabilities
-
-      # check:log-coverage：埋点覆盖面门禁（母单 #301 维度 9）。
-      # 不加 --strict：#312 / #314 两条关键链路埋点缺口仍登记在 scripts/log-coverage-baseline.json，
-      # strict 会把它们变 FAIL。子单做完、从 knownGaps 删掉后，这条自然会收紧。
-      - name: 埋点覆盖面（check:log-coverage）
-        run: pnpm run check:log-coverage
-
-      # check:redact：#387 的脱敏规则集门禁（P0 账号 / 资损字段）。
-      # 这类漏洞的症状是「删掉一条规则没有任何别的用例变红」—— 门禁把 5 类必填规则
-      # （device_id / 卡密 / 卡号 / order_token / 手机号）与「误伤负例」一起钉住，
-      # 规则被删或被改宽都 exit 1。紧跟一条负向对照，证明门禁本身不是空跑。
-      - name: 脱敏规则集（check:redact）
-        run: pnpm run check:redact
-
-      - name: 负向对照：把脱敏器换成恒等函数必须被 check:redact 拦下
-        run: node scripts/check-redact.mjs --selftest
+      - name: 产物语法/API 下限（check:legacy）
+        timeout-minutes: 4
+        run: pnpm run check:legacy
 
       - name: 负向对照：含 ?. 的产物必须被拦下（证明门禁不是空跑）
         run: |
@@ -1101,6 +1032,219 @@ jobs:
             exit 1
           fi
           echo "负向对照通过：含 ?. / ??= 的产物被拦下"
+
+      - name: 静态兼容矩阵（check:matrix）
+        timeout-minutes: 4
+        run: pnpm run check:matrix
+      # ═══════════════ 区段 5：gradle / 打包配置（JS 全绿 ≠ 打得出包）═══════════════
+      # 这一区段红 = 前端全绿但 native 侧配置坏了（#557 的教训：`build.gradle` 把闭包箭头写在
+      # 花括号外，22 道门禁全绿而 `./gradlew` 直接 FAILURE）。它必须最后跑：JAVA/AGP/200MB 的
+      # gradle 发行版是整条流水线里最贵的前置条件，前面任何一道便宜门禁红了都不该为它付钱。
+
+
+      # ─────────────── Issue #563：gradle 配置可解析（拦住「JS 全绿但打不出包」）───────────────
+      # #557 的教训：main 上 22 道门禁全绿，`./gradlew` 却直接 FAILURE（`build.gradle:148` 把闭包箭头
+      # 写在了花括号外）。tsc / lint / 单测 / 产物扫描**都看不见 gradle 脚本**——「JS 侧全绿」本来
+      # 就不等于「出得了包」。这一步只做一件事：让 gradle 把脚本求值一遍。
+      #
+      # 为什么不跑 assembleRelease：太贵（真要下 AGP 依赖 + 打 dex，分钟级），而 `help` 在
+      # configuration 阶段就会执行 build.gradle / app/build.gradle / capacitor.build.gradle /
+      # settings.gradle —— 语法错、apply 到不存在的文件、未知属性，全在这一步红。
+      #
+      # 为什么前面要先 `cap sync`：`android/capacitor-cordova-android-plugins/` 与
+      # `android/app/src/main/assets/*` 是 **cap 生成物、不入库**（android/.gitignore），
+      # 干净 checkout 上直接 `./gradlew help` 会红在
+      # `Could not read script …/cordova.variables.gradle`——那是「生成物缺失」，不是「脚本坏了」，
+      # 一条恒红的门禁等于没有门禁（实测确认过：不加这一步，本步骤在干净副本上必然 FAILED）。
+      # 用 `cap sync`（与 build-apk.sh 同一条命令）而不是手搓桩文件：桩文件和真生成物一旦漂移，
+      # 这一步验的就不是「我们的 gradle 能不能被求值」了。实测 `cap sync` 约 1.7s。
+      # 顺序要求：必须排在 Build (internal) 之后 —— `cap sync` 要把 dist/ 拷进 assets。
+      - name: Setup JDK 21（gradle 配置校验用，与 build-apk.sh 的 REQUIRED_JAVA_MAJOR 对齐）
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # 负向对照（真 keystore，**无** continue-on-error）：上面那条降级档只验「配置一致性」，
+      # 这一步验**真签名判据本身** —— 全量档要求「keytool 读出来的证书指纹 == 已发布证书」。
+      # 做法：现造一把只在本 job 存在的 keystore（$RUNNER_TEMP）→ 它的证书必然不是已发布证书
+      # → `pnpm run check:keystore` 必须 exit 1，且必须同时点名期望值与实际值（来源 config/appIdentity.json）。
+      # 只证明 exit≠0 不够：脚本恒红、或比较分支根本没进（#697 之前的死代码形态）都会 exit≠0 或 exit 0，
+      # 所以两个值都要命中。「相符 → exit 0」那一拍 CI 上做不到（那等于手里有已发布私钥）——
+      # 由单元层 N8 在临时树里跑（tests/unit/gate-negative-controls.test.mjs），本步骤末尾会打印这句话。
+      # 顺序要求：必须排在 Setup JDK 之后（keytool）。
+      - name: 负向对照（真 keystore）：临时 key 的指纹 ≠ 已发布证书 → check:keystore 必须 exit 1 并点名两个值
+        run: |
+          set -euo pipefail
+          ks="$RUNNER_TEMP/gate-neg-not-published.p12"
+          props="$RUNNER_TEMP/gate-neg-keystore.properties"
+          rm -f "$ks" "$props"
+          keytool -genkeypair -keystore "$ks" -storetype PKCS12 -alias gate-neg-not-published \
+            -keyalg RSA -keysize 2048 -validity 30 -dname "CN=gate neg, O=dsh" \
+            -storepass gateNegPass -keypass gateNegPass > /dev/null 2>&1
+          # 口令只走属性文件（不入日志）：这是本 job 现造的一次性 key，不是发布凭据
+          {
+            printf 'storeFileRelease=%s\n' "$ks"
+            printf 'storePasswordRelease=%s\n' 'gateNegPass'
+            printf 'keyAliasRelease=%s\n' 'gate-neg-not-published'
+            printf 'keyPasswordRelease=%s\n' 'gateNegPass'
+          } > "$props"
+          chmod 600 "$props"
+          if out="$(node scripts/check-keystore-config.mjs --file "$props" 2>&1)"; then
+            echo "$out"
+            echo "::error::负向对照失败：换了一把 key 后 check:keystore 仍然通过 —— 指纹判据在空转（#697 之前它就是这样）"
+            exit 1
+          fi
+          echo "$out"
+          expected="$(node -e 'process.stdout.write(require("./config/appIdentity.json").expectedCertSha256)')"
+          test -n "$expected"
+          # 红必须同时点出「期望值」「实际值」「来源」三件事，否则可能红在别的分支上
+          echo "$out" | grep -q "期望 ${expected} 实际 [0-9a-f]\{64\}" || {
+            echo "::error::门禁红了但没同时点名期望值（${expected}）与实际值"; exit 1; }
+          echo "$out" | grep -q '来源 config/appIdentity.json' || {
+            echo "::error::门禁红了但没点出期望值的来源（config/appIdentity.json）"; exit 1; }
+          echo "$out" | grep -q '证书指纹不符' || { echo "::error::门禁红了但不是因为指纹不符"; exit 1; }
+          echo "负向对照通过：非已发布 key → exit 1 且点名「期望 X 实际 Y（来源 config/appIdentity.json）」；"
+          echo "「相符 → exit 0」那一拍由单元层 N8 在临时树里跑（tests/unit/gate-negative-controls.test.mjs）"
+
+      - name: Gradle 缓存（wrapper 发行版 + 依赖；命中后这一步只剩配置时间）
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          # key 里带上 wrapper / gradle 脚本的 hash：升 gradle 或改 build.gradle 时自然换一份缓存
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties', 'android/build.gradle', 'android/app/build.gradle', 'android/variables.gradle', 'android/settings.gradle') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: 生成 capacitor 原生配置（cap 生成物不入库，gradle 求值需要它们）
+        timeout-minutes: 3
+        run: pnpm exec cap sync android
+
+      - name: gradle 配置可解析（拦住 build.gradle 语法错）
+        # 5 分钟硬上限：冷缓存首次要下 gradle-8.14.3-all（~200MB）。超时就是红，不会静默拖慢 PR。
+        #
+        # -PallowLoopbackConsume=true（Issue #601）：仓库里当前提交的 config/endpoints.json 的
+        # consume.baseUrl 还是本地联调回环地址（生产 host 待 #482 提供），而闸 1 要求
+        # 「回环地址的包必须显式声明」才能出包。这一步只求值 gradle 脚本、不产出任何可分发产物，
+        # 所以显式声明「这是本地联调构建」是准确的；闸 1 本身的正/负向对照见下一步。
+        timeout-minutes: 5
+        run: cd android && ./gradlew help --no-daemon --console=plain -PallowLoopbackConsume=true
+
+      - name: 闸 1 负向对照：回环 consume.baseUrl 未声明 allowLoopbackConsume 时必须 FAILED（#601）
+        # 顺序有意的：上一步已经证明「带逃生舱时 gradle 求值得通」，这一步只验闸 1 会不会咬。
+        # 只有当 endpoints 里确实是回环地址时这一条才成立；一旦 #482 填了 https 生产 host，
+        # 这里自动跳过并打印原因（不制造一条「改了配置就变红」的假门禁）。
+        timeout-minutes: 5
+        run: |
+          # 退出码约定：0 = 确认是回环（继续做负向对照）/ 3 = 不是回环（跳过）/ 其他 = 探针自己坏了
+          set +e
+          node -e "
+            const raw = require('./config/endpoints.json');
+            const lb = ['127.0.0.1','localhost','::1','[::1]'];
+            const host = (v) => { const r = String(v).replace(/^https?:\\/\\//,''); if (r.startsWith('[')) return r.slice(0, r.indexOf(']')+1); const i = r.indexOf(':'); return i >= 0 ? r.slice(0,i) : r; };
+            const hits = [];
+            for (const k of ['consume','pay']) { const v = raw?.[k]?.baseUrl; if (typeof v === 'string' && v.trim()) { if (lb.includes(host(v.trim()).toLowerCase())) hits.push(k + '.baseUrl=' + v.trim()); } }
+            const m = raw?.migration; if (m?.enabled === true && typeof m.baseUrl === 'string' && m.baseUrl.trim() && lb.includes(host(m.baseUrl.trim()).toLowerCase())) hits.push('migration.baseUrl=' + m.baseUrl.trim());
+            if (hits.length === 0) { console.log('SKIP: config/endpoints.json 里没有回环 base，闸 1 负向对照不适用'); process.exit(3); }
+            console.log('回环 base: ' + hits.join(' '));
+          "
+          probe=$?
+          set -e
+          if [ "$probe" = "3" ]; then exit 0; fi
+          if [ "$probe" != "0" ]; then echo "探针自身失败（exit=$probe），先修探针再谈闸 1"; exit 1; fi
+          cd android
+          set +e
+          out=$(./gradlew help --no-daemon --console=plain 2>&1)
+          code=$?
+          set -e
+          printf '%s\n' "$out" | tail -40
+          if [ "$code" = "0" ]; then
+            echo "闸 1 没咬住：回环 consume.baseUrl 在没传 -PallowLoopbackConsume 的情况下通过了配置阶段（#601）"
+            exit 1
+          fi
+          printf '%s\n' "$out" | grep -q "回环地址只能用于本地联调，不可分发" || {
+            echo "闸 1 咬住了，但不是那条文案（先看上面 tail 出来的真实报错）"; exit 1; }
+          echo "闸 1 负向对照通过：回环 base → 构建 FAILED，且打印了「回环地址只能用于本地联调，不可分发」"
+
+      # ═══════════════ 失败归因：把「这个 job 里到底哪几道红」一次性说清楚 ═══════════════
+      # 为什么需要它（准绳 #3「红必须可归因」）：
+      #   GitHub 默认**在第一个失败步就停**。这个 job 有 60+ 步，于是「checks 红了」只告诉你
+      #   **有 1 处**红；第 2 处要等你修完、重跑、再红才出现（一个人要跑七轮才知道有七处）。
+      #   而 main 上同时躺着多道**既有红**（实测不是绿的：`check:ip` / `check:doc-refs` /
+      #   `check:ui-shots` / `check:consume-api` / `check:log-coverage` / `check:refactor-direction` /
+      #   `check:test-duplication`），所以光看「checks ✗」根本分不清「是我的改动还是既有债」。
+      # 这一段只做一件事：**已经红了之后**，把区段 1 的门禁再跑一遍，一次性列出
+      #   「哪几道红 / 各自的第一条判据 / 原地可复跑的命令」，给每道红打一条 `::error::` 注解
+      #   （PR 页面直接可见），并写进 job summary。
+      #
+      # 三条自我约束（别把它扩张成第二个门禁）：
+      #   1. `if: failure()` —— 只在已经红了之后跑；全绿时这一步一步都不多跑。
+      #   2. 它**不改任何判定**：不写 continue-on-error、不吞退出码、不把红变绿，末尾 `exit 0`。
+      #      job 的红色由前面那个真失败的步骤负责，与这里无关。
+      #   3. 复跑清单**从本文件自己抽**（`gate-triage:begin/end` 之间的单行 `run:`），
+      #      不维护第二份清单：往区段 1 加一道门禁，它就自动被纳入复跑。区段 1 的准入条件
+      #      （不读 dist、只读仓库、单条 <10s）因此同时也是「谁配得上被复跑」的判据。
+      #
+      # 怎么用它判断「这红是不是我的」：在干净的 origin/main 副本上跑表里那条命令 ——
+      #   **也红 = 既有债**（别在功能 PR 里顺手改，去修 main）；只有你的分支红 = 你的改动。
+      - name: 失败归因：复跑区段 1 的门禁，列出「哪几道红 / 各自第一条判据」
+        if: failure()
+        timeout-minutes: 8
+        run: |
+          set -uo pipefail
+          # 抽「区段 1 里单行 run 的门禁命令」；`run: |` 的多行块是负向对照，不在复跑范围
+          mapfile -t cmds < <(sed -n '/gate-triage:begin/,/gate-triage:end/p' .github/workflows/ci.yml \
+            | grep -E '^[[:space:]]*run: ' | sed 's/^[[:space:]]*run: //' | grep -E '^pnpm run ')
+          if [ "${#cmds[@]}" -eq 0 ]; then
+            echo "::warning::归因步骤没抽到任何门禁（gate-triage 标记被删/改名了？）—— 跳过归因，红在哪请翻日志"
+            exit 0
+          fi
+
+          summary="$GITHUB_STEP_SUMMARY"
+          {
+            echo "## checks 失败归因（区段 1 复跑）"
+            echo ""
+            echo "本 job 在**第一个**失败步就停了，所以上面看不到其它红。下表是区段 1 全部 ${#cmds[@]} 道门禁的复跑结果："
+            echo ""
+            echo "| 门禁命令 | 结果 | 第一条判据 |"
+            echo "| --- | --- | --- |"
+          } >> "$summary"
+
+          red=0
+          for cmd in "${cmds[@]}"; do
+            # 故意不加引号：命令里带 `-- --strict` 这类参数，要按词拆分再执行
+            out="$(mktemp)"
+            if $cmd > "$out" 2>&1; then
+              printf '| `%s` | ✅ 绿 | |\n' "$cmd" >> "$summary"
+              rm -f "$out"
+              continue
+            fi
+            red=$((red + 1))
+            # 挑「认罪那一行」：先滤掉 pnpm 的安装噪音（本仓 `verifyDepsBeforeRun` 会打一堆），
+            # 再找判决式短语；都找不到就退化成首行非空 —— 绝不因为挑不到就写空。
+            noise='installing dependencies|verifyDepsBeforeRun|out of sync|Lockfile|Already up to date|workspace hoist|Failed to create directory|╰─▶'
+            verdict='✗|FAIL|发现 [0-9]+ 处|不通过|不合格|越界|空行|不在白名单|结论：|合计：'
+            first="$(grep -vE "$noise" "$out" | grep -m1 -E "$verdict" || true)"
+            [ -n "$first" ] || first="$(grep -vE "$noise" "$out" | grep -m1 -E '[^[:space:]]' || true)"
+            first="$(printf '%s' "$first" | sed -e 's/|/\\|/g' -e 's/`/ /g' | cut -c1-200)"
+            printf '| `%s` | ❌ 红 | `%s` |\n' "$cmd" "$first" >> "$summary"
+            echo "::error title=门禁红 ${cmd}::${first}"
+            rm -f "$out"
+          done
+
+          {
+            echo ""
+            if [ "$red" -eq 0 ]; then
+              echo "区段 1 现在全绿 —— 失败在区段 2~5（网络 / 类型 / 行为 / 产物 / gradle）。看上面第一个红步骤的名字。"
+            else
+              echo "区段 1 共 **$red** 道红（这里只说区段 1）。"
+              echo ""
+              echo "判断「是不是我的改动」：在干净的 origin/main 副本上跑同一条命令。"
+              echo "**也红 = 既有债**（不要在功能 PR 里顺手改，去修 main）；只有你的分支红 = 你的改动。"
+            fi
+          } >> "$summary"
+          exit 0
 
   # ───────────────────────── Issue #404：黄金回归套件（每域 1 条主路径，≤5 分钟）─────────────────────────
   # 为什么单开一个 job：它是「功能开发有没有打断用户路径」的第一道闸，必须在**别的 job 失败时也照跑**
@@ -1150,22 +1294,10 @@ jobs:
       # playwright 版本一旦错位（1.64.1 要 chromium-1248），用例只会变成整批崩溃或假红。
       # 这里把「镜像里真有这个 revision 的浏览器」变成显式断言（不联网、< 1s）。
       - name: 浏览器自检（镜像内置 Chromium 与本仓 playwright 版本对齐）
-        run: |
-          set -euo pipefail
-          echo "playwright: $(pnpm exec playwright --version)"
-          plan="$(pnpm exec playwright install --dry-run chromium)"
-          echo "$plan"
-          missing=0
-          while read -r dir; do
-            [ -n "$dir" ] || continue
-            if [ -d "$dir" ]; then
-              echo "✓ $dir"
-            else
-              echo "::error::镜像里缺少 $dir —— ci.yml 的 playwright 镜像 tag 与 package.json 的 playwright 版本不一致，请同步改 tag"
-              missing=1
-            fi
-          done < <(printf '%s\n' "$plan" | awk '/Install location:/ {print $3}')
-          [ "$missing" -eq 0 ]
+        # 这段 bash 以前在 golden 与 integration 里各抄了一份（一字不差）—— 抽成复合 action，
+        # 免得哪天只改了其中一份，变成「一个 job 红、另一个 job 照样绿」。
+        # 动作本体：`.github/actions/playwright-image-selfcheck/action.yml`
+        uses: ./.github/actions/playwright-image-selfcheck
 
       # #510：黄金回归里的「启动即进主界面」用例（G1~G11）要的是**已登录**产物 ——
       # `src/main.tsx` 把整个 App 包在 `<AuthGate>` 里之后，未登录冷启动只画登录页，
@@ -1332,22 +1464,10 @@ jobs:
       # 但「镜像里有」不能靠信念：镜像 tag 与 package.json 的 playwright 版本错位时（1.64.1 要
       # chromium-1248），45 条用例会变成整批崩溃/假红。这里把 revision 对齐变成显式断言（不联网、< 1s）。
       - name: 浏览器自检（镜像内置 Chromium 与本仓 playwright 版本对齐）
-        run: |
-          set -euo pipefail
-          echo "playwright: $(pnpm exec playwright --version)"
-          plan="$(pnpm exec playwright install --dry-run chromium)"
-          echo "$plan"
-          missing=0
-          while read -r dir; do
-            [ -n "$dir" ] || continue
-            if [ -d "$dir" ]; then
-              echo "✓ $dir"
-            else
-              echo "::error::镜像里缺少 $dir —— ci.yml 的 playwright 镜像 tag 与 package.json 的 playwright 版本不一致，请同步改 tag"
-              missing=1
-            fi
-          done < <(printf '%s\n' "$plan" | awk '/Install location:/ {print $3}')
-          [ "$missing" -eq 0 ]
+        # 这段 bash 以前在 golden 与 integration 里各抄了一份（一字不差）—— 抽成复合 action，
+        # 免得哪天只改了其中一份，变成「一个 job 红、另一个 job 照样绿」。
+        # 动作本体：`.github/actions/playwright-image-selfcheck/action.yml`
+        uses: ./.github/actions/playwright-image-selfcheck
 
       # 集成层只读预构建产物，不隐式构建；缺产物时用例会 SKIP(env)（不算失败）而不是真跑。
       # 这里把三份变体都备齐：dist=internal / dist-standard / dist-scroll。
@@ -1544,6 +1664,12 @@ jobs:
         with:
           node-version: '22'
 
+      # 这里用 continue-on-error **不是**豁免：这一步只负责「把本 run 各分片的记录搬过来」，
+      # 搬空（integration 被取消 / 分片在写记录前就挂了）这件事由下一步「输入份数断言」显式判红。
+      # 换句话说：红没有消失，只是从「download-artifact 报 Unable to find any artifacts」
+      # （一句看不出含义的 action 报错）换成「0 份记录 → 结论不可用」（一句能归因的话）。
+      # 以前这里只有 continue-on-error：下载失败 → 0 份记录 → 下面 `--cross-runner-scan` 读到空目录
+      # → 打印「结论：没有分叉」→ **整个 job 绿**。那是把「什么都没检查」说成了「查过、没问题」。
       - name: 下载本 run 各分片的运行记录
         if: always()
         uses: actions/download-artifact@v4
@@ -1556,6 +1682,8 @@ jobs:
       # 同一 head SHA 的其它 run（re-run / 多 attempt）落在别的 VM 上，是跨 runner 判据的主要来源之一。
       # 拿不到不是错误（分叉权限、artifact 过期、API 抖动），只打印一句，绝不让它变成红：
       # 判据的输入少一份，后果是「少看见一条」，而不是「结论错误」。
+      # 这条 `continue-on-error` 之所以不是「把红变黄」：它收集的是**额外**证据，本 run 各分片的
+      # 记录由上面那一步搬，而「到底有几份输入」由下面那条硬断言判红 —— 没有输入绝不会绿。
       - name: 收集同一 commit 其它 run 的运行记录（best-effort）
         if: always()
         continue-on-error: true
@@ -1620,6 +1748,32 @@ jobs:
           # 剩下的交给 run-layer：它只认 `object: flaky-run-record` 的 json，读不进去的直接跳过
           echo "合并后记录数：$(find flaky-runs -name '*.json' | wc -l)"
           ls -1 flaky-runs | head -20
+
+      # 输入份数断言（**fail-closed**）：0 份记录 = 这一轮「三态判定」没有任何输入。
+      # 为什么必须判红，而不是让 `--cross-runner-scan` 读到空目录然后打印一句
+      # 「结论：没有分叉」—— 那正是「什么都没检查」被说成「查过、没问题」。
+      # 这一步的注释里两处 `continue-on-error` 都不是豁免：它们允许「输入缺失」发生在收集环节，
+      # 但**不允许它无声通过**，判红点被挪到这里，好让人一眼看出红的是「没有输入」而不是「有 flake」。
+      # 归属：本步红 ≠ 用例红（用例真红在 integration 分片里已经红了）。本步红的含义是
+      #   「integration 没把运行记录交上来」—— 分片被取消 / 在写记录前就挂了 / artifact 过期。
+      # 没有到期日、也不该有：这是「判据有没有输入」的硬断言，不是可以慢慢修的技术债。
+      - name: 输入份数断言：0 份运行记录 → 结论不可用（这一条红不是用例红）
+        if: always()
+        run: |
+          set -euo pipefail
+          n=$(find flaky-runs -name '*.json' 2>/dev/null | wc -l)
+          runners=$(grep -ho '"id": *"[^"]*"' flaky-runs/*.json 2>/dev/null | sort -u | wc -l)
+          echo "跨 runner 判据的输入：${n} 份运行记录 / ${runners} 个 runner 身份"
+          if [ "$n" -eq 0 ]; then
+            echo "::error title=跨 runner 判据无输入::flaky-runs/ 里 0 份记录：integration 没有把运行记录交上来（分片被取消 / 在写记录前就挂了 / artifact 被清理）。这一轮「三态判定」结论不可用，不是「没有 flake」。"
+            exit 1
+          fi
+          {
+            echo "## 跨 runner 判据的输入"
+            echo ""
+            echo "- 运行记录：**${n}** 份"
+            echo "- runner 身份：**${runners}** 个（<2 时判不出「换机器才红」这一类，本轮结论只有单机视角）"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 跨 runner 判定 + 登记（三态写进 job summary）
         if: always()

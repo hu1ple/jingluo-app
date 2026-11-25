@@ -1,0 +1,38 @@
+# 复合 action：容器镜像里真有本仓 playwright 版本要的那个 Chromium 吗？
+#
+# 为什么抽出来：这段 bash 原本在 `ci.yml` 里存在**两份**（`golden` job 与 `integration` 分片），
+# 一字不差。两份的坏处不是「多 20 行」，而是「改一份忘另一份」—— 镜像 tag 与 package.json 的
+# playwright 版本错位时，一份会红、另一份照样绿，而那种「一半绿」正是这道自检要防的假绿形态
+# （#405 的教训：`playwright install --with-deps` 删掉之后，「镜像里有浏览器」就成了一个假设）。
+#
+# 前提（调用方负责）：已 checkout、已装 pnpm / node、已 `pnpm install`（playwright CLI 在 node_modules）。
+# 输入：无 —— 版本从 `pnpm exec playwright --version` 读，revision 从 `--dry-run` 的计划里读，
+# 不在 YAML 里抄第二份版本号。
+# 成本：不联网、<1s。
+#
+# 注意：workflow 级的 `defaults.run.shell` **不会**传进 composite action 的步骤里，
+# 所以下面必须显式写 `shell: bash`（否则会退化成 `sh`，`set -euo pipefail` 直接挂）。
+name: playwright 镜像自检
+description: 断言镜像里真有本仓 playwright 版本对应的 Chromium revision（不联网、<1s）
+
+runs:
+  using: composite
+  steps:
+    - name: 断言 Chromium revision 与镜像内容对齐
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "playwright: $(pnpm exec playwright --version)"
+        plan="$(pnpm exec playwright install --dry-run chromium)"
+        echo "$plan"
+        missing=0
+        while read -r dir; do
+          [ -n "$dir" ] || continue
+          if [ -d "$dir" ]; then
+            echo "✓ $dir"
+          else
+            echo "::error::镜像里缺少 $dir —— ci.yml 的 playwright 镜像 tag 与 package.json 的 playwright 版本不一致，请同步改 tag"
+            missing=1
+          fi
+        done < <(printf '%s\n' "$plan" | awk '/Install location:/ {print $3}')
+        [ "$missing" -eq 0 ]

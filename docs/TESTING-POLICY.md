@@ -34,7 +34,7 @@
 ```bash
 pnpm hooks:install                  # 一次性：接上 .githooks（见 2.4）
 pnpm dev-check                      # 改完那一刻：32 道内容门禁 + tsc + lint，实测 12~18s
-pnpm dev-check -- --content         # 只跑纯内容门禁（pre-commit 跑的就是这条），实测 ~4s
+pnpm dev-check -- --content         # 只跑纯内容门禁（pre-commit 跑的就是这条），实测 ~7s
 pnpm dev-check -- --strict          # HEAD 上本来就红的也算红（修 main / 发版前自查）
 ```
 
@@ -44,7 +44,7 @@ pnpm dev-check -- --strict          # HEAD 上本来就红的也算红（修 mai
 
 | 档 | 命令 | 判什么 | 实测（4 核本机） |
 | --- | --- | --- | --- |
-| 提交档 | `pnpm dev-check -- --content` | 27 道纯内容门禁：行尾 / 仓库卫生 / 大小写撞车 / DB 版本 / 重复实现 / 写死 IP·端口 / 端点与超时来源 / 消费侧白名单 / 日志字段 / i18n / 应用身份 / 产物前缀 / 脱敏规则 / 守卫语法 / 兼容基线 / 四个 CSS 兜底 / 上限收敛 / 图标留白 / fixture 清单 / webroot / 私有根 / 文档引用 / 方向验收 | ~4s |
+| 提交档 | `pnpm dev-check -- --content` | 28 道纯内容门禁：行尾 / 仓库卫生 / 大小写撞车 / DB 版本 / 重复实现 / 写死 IP·端口 / 端点与超时来源 / 消费侧白名单 / 日志字段 / i18n / 应用身份 / 产物前缀 / 脱敏规则 / 守卫语法 / 兼容基线 / 四个 CSS 兜底 / 上限收敛 / 图标留白 / fixture 清单 / webroot / 私有根 / 文档引用 / 方向验收 / 静态审计自检（`check:audit-selftest`，~4s） | 实测 ~7s |
 | 默认档 | `pnpm dev-check` | 上面 27 道 + 5 道慢一点的内容门禁（截图引用 / 能力文档同步 / 能力盘点 / 测试布局 / 测试重复）+ **类型门 + lint** = 最多 34 条判据 | 12~18s |
 | 厚档 | `pnpm test:fast` | 类型 + L0 快速子集（`tests/fast-subset.json` 减去最慢的 20 个文件）+ 黄金套件；**≤60s 是契约，超了 exit 1**（见第 10 节） | ~40-60s |
 
@@ -94,7 +94,7 @@ pnpm hooks:uninstall      # 永久关掉；`git commit --no-verify` 只跳过一
 
 | 钩子 | 跑什么 | 实测 |
 | --- | --- | --- |
-| `.githooks/pre-commit` | `dev-check --content --brief`（提交档） | ~4s |
+| `.githooks/pre-commit` | `dev-check --content --brief`（提交档） | ~7s |
 | `.githooks/pre-push` | `dev-check --brief`（默认档：内容 + 类型 + lint） | ~14s |
 
 三条必须知道的口径：
@@ -872,14 +872,26 @@ CI 位置：`.github/workflows/ci.yml` 的 `checks` job，紧跟 `check:manifest
 ### 14.1 一条硬规矩：`check:*` 必须在门禁表里归类
 
 `scripts/dev-check.mjs` 里有一张 `GATES` 表，`package.json` 里**每一个** `check:*` 都必须出现一次，
-`where` 四选一：
+`where` 五选一：
 
 | `where` | 含义 | 本地跑吗 |
 | --- | --- | --- |
 | `content` | 纯文本 / 仓库扫描：不依赖产物、网络、本机密钥 | 提交档 + 默认档 |
 | `deep` | 同上，但单条 ≥1s（截图引用 7.8s / 能力文档 2.5s…） | 只在默认档 |
+| `network` | 判据要**网络 + 凭据**（`gh` + token，如 `check:exemptions`） | 只在 `--deep`；跑不动报「判不了（环境）」，不报红 |
 | `dist` | 判据的输入是 `dist/` 里的产物 | 不跑，`--list` 里带 `reason` |
 | `release` | 要签名材料 / APK / 分发机 / tags 与 origin 历史 | 不跑，`--list` 里带 `reason` |
+
+**为什么需要第五档 `network`（不是把要网络的检查塞进 `content`）**：`content` 档的准入条件是
+「本机**断网也判得动**」，因为它是提交档（pre-commit，~4s）的主体。把 `check:exemptions --strict`
+这种要 `gh` + token 的检查塞进去，唯一的结果是**一断网提交档就红**，而人对一条「总会叫」的命令的
+反应不是修，是 `--no-verify` —— 于是整个本地入口从「它有话说」降级成「它又来了」，
+**红不再等于坏，这个入口的可信度一次性清零**（准绳 1）。
+但把它彻底不跑也不行：`check:exemptions` 守的正是「豁免会不会过期」，被藏起来的豁免就是最会烂的
+那一批（准绳 7）。所以单独一档：默认档 / 提交档都不跑（不占那 4 秒的预算），`--deep`（「审计仓库
+现状」那一刻）跑，跑不动时它 exit 2 = 它自己声明「环境不具备」→ 报**「判不了（环境）」而不是红**。
+「豁免条目真有问题」（exit 1）与「这条判据今天没在工作」（exit 2）必须分开说，混在一起以后谁也
+说不清该改条目还是该修凭据。
 
 没归类 → `dev-check` 当场 **exit 2** 并点名是哪一道、该加哪一行。为什么这条要机械化：
 新加一道门禁却没进本地入口，它就只活在 CI 里 —— **写了、没人跑、不会红**（#368 那个坑的原形状）。

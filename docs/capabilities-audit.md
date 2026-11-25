@@ -33,23 +33,34 @@ tests/unit/*.test.mjs              钉住判定：每条规则至少一个正例
 ## 二、怎么跑
 
 ```bash
-pnpm run check:capabilities              # 默认 warn 级：只登记，有缺陷也 exit 0
-pnpm run check:capabilities -- --strict   # 有缺陷就 exit 1（本次不接 CI）
+pnpm run check:capabilities              # 默认档 = 拦截档：未记账的缺陷 exit 1，账上的只提示，账到期 exit 1
+pnpm run check:capabilities -- --strict   # 绝对档：任何缺陷都 exit 1（不看账本；账清之后用它）
 node scripts/check-capabilities.mjs --json   # 机器可读报告（PR 里的数字全从这儿抄）
 node scripts/check-capabilities.mjs --help
 ```
 
 | 退出码 | 含义 |
 | --- | --- |
-| `0` | 跑完了（warn 级，有缺陷也是 0） |
-| `1` | 只有 `--strict` 且确实有缺陷 |
+| `0` | 没有**未记账**的缺陷、没有到期债（可以有「已记账且在账期内」的缺陷） |
+| `1` | 有未记账缺陷 / 有到期债 / 账本形状不合规；`--strict` 下任何缺陷都算 |
 | `2` | 用法 / 环境错误：未知参数、`src/` 下一个文件都没扫到 |
 
 `--root` / `--behavior-dir` 只为测试注入 fixture（默认分别指向仓库根和 `docs/ui/209-behavior`）。
 
-**为什么是 warn 级**：#209 拆出去的修复 lane（#210 #211 #214 #215 …）在并行改 `src/**`，此刻做硬拦截会让每条
-lane 的 PR 都替别人还没修完的缺陷变红、互相卡死；而缺陷清单本身就是它们的工作输入，「红」不传递新信息。
-所有 lane 落地后再把 `--strict` 接进 CI（届时只改 `.github/workflows/**` 一行，判定逻辑不动）。
+**为什么默认档就是拦截档**（2026-11-25 关掉 warn 档）：warn 档当年的理由是「#209 拆出去的修复 lane 在并行改
+`src/**`，硬拦截会让每条 lane 都替别人变红」，但那一档**没有到期日** —— 实测它常年挂着 10 处真实缺陷
+（5 处 `scrollbar-gutter` 无兜底、5 处「依赖 fetch 是本尊」）只打印不拦，唯一产出是让人以为有人在看。
+现在改成记账制（`scripts/audit-debt/check-capabilities.json`）：
+
+| 情形 | 默认档 | `--strict`（绝对档） |
+| --- | --- | --- |
+| 缺陷**没记账**（新增的、没人认领的） | **exit 1** 并点名 `文件:行` | exit 1 |
+| 记了账且**在账期内** | 只提示（不拦） | exit 1 |
+| 记了账但**已到期** | **exit 1**（豁免会过期） | exit 1 |
+| 缺陷数比账面**少**（别人修好了） | 只提示（正确改动不许红） | exit 1 |
+
+`--strict` 仍然保留，但它**不再是唯一会红的情形**，也不是「将来才接」的空头承诺 —— 默认档今天就会咬。
+`--strict` 只在账清之后有意义（账上还有缺陷时它必然恒红，红的就不再是「这次改动」而是「账没清」）。
 
 ### 本期原文输出（2026-11-19，`4870b33`）
 

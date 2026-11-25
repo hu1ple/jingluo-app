@@ -21,12 +21,34 @@
  *
  * | 档 | 命令 | 判什么 | 实测 |
  * | --- | --- | --- | --- |
- * | 提交档 | `node scripts/dev-check.mjs --content` | 27 道纯内容门禁（行尾/卫生/撞车/IP/DB 版本/i18n/端点/消费白名单/日志字段…） | ~4s |
+ * | 提交档 | `node scripts/dev-check.mjs --content` | 28 道纯内容门禁（行尾/卫生/撞车/IP/DB 版本/i18n/端点/消费白名单/日志字段/静态审计自检…） | 实测 ~7s（其中 `check:audit-selftest` ~4s，见下方注） |
  * | 默认档 | `pnpm dev-check` | 提交档 + 5 道慢一点的内容门禁（截图引用/能力文档/能力盘点/测试布局/测试重复，按 `scope` 条件跑）+ **类型门 + lint** | 12~18s |
  * | 厚档 | `pnpm test:fast` | 类型 + L0 快速子集 + 黄金套件（另一条命令，别在这里重复实现） | ~40-60s |
  *
+ * （`check:audit-selftest` 归 content 是**裁决**：它只读仓库、不依赖产物/网络/密钥，所以进提交档；
+ * 代价是提交档实测从 ~4s 抬到 ~7s —— 按本文件自己的分档尺度（`deep` = 单条 ≥1s 不进 pre-commit）它也可以
+ * 落 `deep`，这里记下这笔摩擦账，改归属是**一次裁决**的事，不在这里自行挪。）
+ *
  * 钩子用的是前两档：`.githooks/pre-commit` → `--content`，`.githooks/pre-push` → 默认档。
  * 装钩子：`pnpm hooks:install`（一次性；本文件末尾会提醒你「现在还没装」）。
+ *
+ * ## 为什么需要第五档 `network`（要网络的检查不进 `content` 档）
+ *
+ * `check:exemptions --strict` 要 `gh` + token 去查「豁免引用的承接单还在不在」。它**不能**进 `content` 档：
+ * 那一档是「本机断网也照样判得动」的那批，把一个要网络的检查塞进去，结果只有一种 ——
+ * **一断网，提交档就红**。而人对一条「总会叫」的命令的反应不是修，是关掉它（`--no-verify`），
+ * 于是整个本地入口从「它有话说」降级成「它又来了」，**可信度一次性清零**（红不再等于坏，准绳 #1）。
+ *
+ * 但把它彻底不跑也不对：那等于把它藏起来 —— `check:exemptions` 守的正是「豁免会不会过期」，
+ * 被藏起来的豁免就是最会烂的那一批（准绳 #7）。
+ *
+ * 所以给它单独一档，三条规矩：
+ *   1. **默认档与 `--content` 档都不跑它**（提交档那几秒的预算不许被网络占用）；
+ *   2. **只在 `--deep` 里跑**（`--deep` 的语义就是「审计仓库现状」，那一刻要的就是这个结论）；
+ *   3. 跑不动（无凭据 / 无 `gh`）时它 exit 2 = 它自己声明「环境不具备」→ 这里报
+ *      **「判不了（环境）」而不是红**。这不是放水：门禁的红只留给「豁免条目真有问题」，
+ *      而「今天这条判据没在工作」是另一件事，混在一起以后谁也说不清该改条目还是该修凭据
+ *      （脚本自己的退出码就是这么分的：0 通过 / 1 有非法条目 / 2 环境不具备）。
  *
  * **深档里那 5 道带 `scope`**：只有改动落在它的输入范围内才跑（截图引用只看 `docs/ui/`，测试布局/重复只看
  * `tests/`，能力盘点/能力文档看 `src/`+`android/`）。这样「只改了一个 src 文件」时，默认档不会被
@@ -56,11 +78,13 @@
  *
  * 「判不了」一律**不算通过**：CI 上的同类门禁也是这个口径（`check:bundle-target` 头注释：
  * 「没有产物 = 没有检查，所以一律判失败，不存在『跳过』」）。
+ * 但「判不了」有两种，文案分开印：前置缺失（`dist` 档，要产物）与环境不具备（`network` 档，
+ * 要凭据 / `gh`）。后者绝不是「豁免条目有问题」—— 它的红只留给条目本身坏了那一种情形。
  *
  * ## 用法
  *
  *   pnpm dev-check                      # 默认档：内容门禁 + tsc + lint
- *   pnpm dev-check -- --content         # 提交档：只跑纯内容门禁（pre-commit 用，~4s）
+ *   pnpm dev-check -- --content         # 提交档：只跑纯内容门禁（pre-commit 用，~7s）
  *   pnpm dev-check -- --strict          # HEAD 上既有的红也算红（修 main / 发版前自查）
  *   pnpm dev-check -- --list            # 只列会跑哪些门禁（不执行）
  *   pnpm dev-check -- --only eol,ip     # 只跑点名的那几道（调试单条门禁最快的路）
@@ -88,6 +112,9 @@ const PER_GATE_TIMEOUT_MS = 180000
  *   'dist'     —— 判据的输入是构建产物（`dist/`）。本地没产物时它 exit 2 = 判不了，
  *                 **本地不做**，理由写在 reason 里（不是「跳过」）。
  *   'release'  —— 需要发布环境（签名材料 / APK / 分发机 / tag 与 origin 历史）。
+ *   'network'  —— 判据要**网络 + 凭据**（`gh` + token）。默认档与 `--content` 档都**不跑**，
+ *                 只在 `--deep` 里跑；跑不动时它 exit 2 = 「判不了（环境）」，**不报红**。
+ *                 为什么要单独一档（而不是塞进 content）：见文件头「为什么需要第五档」。
  *
  * attribution：
  *   'offender' —— 默认。按「被点名的文件在不在你的改动集里」归因（见文件头第 2 节）。
@@ -201,6 +228,14 @@ const GATES = [
     where: 'content',
     why: '旧体系回流 / 额度搬回本地 / base 写死（#590 A1–A7）',
   },
+  {
+    id: 'check:audit-selftest',
+    where: 'content',
+    // 反方向的那条证据：静态审计族（能力盘点 / 文档引用 / 截图引用 / 上限常量 / 仓库卫生 / 重复实现）
+    // 平时「全绿」既可能是「真没问题」，也可能是「它根本没扫到」。--selftest 是各自脚本自带的反例：
+    // 故意造一份违规 → 必须被拦。它只读仓库、写临时目录，不依赖产物、网络、本机密钥 —— 归 content。
+    why: '静态审计的**反向证据**：故意违规必须被判红（否则「绿」可能只是「它没扫到」）',
+  },
 
   // ── 深档：同样不依赖产物，但单条 ≥1s，进默认档不进 pre-commit ──────────────
   {
@@ -237,6 +272,16 @@ const GATES = [
     scope: ['docs/ui/'],
     fix: '要么在 README/结论表里引用它，要么删掉这张图',
     why: '截图只进不出（#661：553 张里 155 张零引用 / 17.4 MiB）',
+  },
+
+  // ── 网络档：判据要 `gh` + token。默认档 / 提交档**不跑**，只在 --deep 里跑 ──────────────
+  // 跑不动（无凭据 / 无 gh）时脚本自己 exit 2，这里按「判不了（环境）」处理，**不报红** ——
+  // 「豁免条目有问题」和「这条判据今天没在工作」是两件事，混在一起就再也分不清该改哪头。
+  {
+    id: 'check:exemptions',
+    where: 'network',
+    args: ['--strict'],
+    why: '任何豁免都必须会过期：缺理由/证据/承接单/到期日、已过期、已跑绿、拿环境问题顶包 → 红',
   },
 
   // ── 判据的输入是构建产物：本地不做，理由要写清 ──────────────────────────────
@@ -294,9 +339,9 @@ const usage = (message) => {
       '用法：node scripts/dev-check.mjs [--content] [--strict] [--list] [--brief] [--only a,b] [--json r.json] [--concurrency N]',
       '',
       '  （默认）     内容门禁 + 类型门 + lint',
-      '  --content    只跑纯内容门禁（pre-commit 用，~4s）',
+      '  --content    只跑纯内容门禁（pre-commit 用，实测 ~7s）',
       '  --strict     HEAD 上本来就红的门禁也算红（修 main / 发版前自查）',
-      '  --deep       深档那 5 道不看 scope，一律跑（审计仓库现状时用，常配 --strict）',
+      '  --deep       深档那 5 道不看 scope，一律跑；**网络档（check:exemptions）只在这里跑**（审计仓库现状时用，常配 --strict）',
       '  --list       只列会跑什么，不执行',
       '  --brief      精简输出（钩子用）',
       '  --only x,y   只跑这几道（id 见 --list）',
@@ -470,7 +515,8 @@ function preflight(pkg) {
   if (unclassified.length > 0) {
     problems.push(
       `这些门禁没有在 scripts/dev-check.mjs 的门禁表里归类，本地永远不会跑到：${unclassified.join(', ')}\n` +
-        "    修法：在 GATES 里加一行（`where: 'content' | 'deep' | 'dist' | 'release'`，dist/release 要写 reason）。\n" +
+        "    修法：在 GATES 里加一行（`where: 'content' | 'deep' | 'network' | 'dist' | 'release'`，dist/release 要写 reason；\n" +
+        "    要网络/凭据的必须归 network —— 塞进 content 会让断网的本地入口变红，那等于让整个入口失去可信度）。\n" +
         '    为什么这算错：新门禁只活在 CI 里，就是「拦截点在最贵的那一端」（本文件头第 1 节）。'
     )
   }
@@ -584,6 +630,9 @@ async function main() {
   const selected = GATES.filter((gate) => {
     if (wanted) return wanted.has(gate.id)
     if (gate.where === 'dist' || gate.where === 'release') return false
+    // 网络档：默认档与 --content 档都不跑（断网就红 = 整个本地入口失去可信度，见文件头）；
+    // 只在 --deep（「审计仓库现状」那一刻）里跑。--only 显式点名时照跑（调试单条门禁要用）。
+    if (gate.where === 'network') return opts.deep
     if (opts.contentOnly) return gate.where === 'content'
     return inScope(gate)
   })
@@ -600,6 +649,16 @@ async function main() {
     if (skipped.length > 0 && !opts.contentOnly) {
       console.log('\n本地不跑（判据要产物 / 要发布环境）：')
       for (const gate of skipped) console.log(`  ${gate.id.padEnd(26)} ${gate.reason}`)
+    }
+    // 网络档单独列：它**不是**「本地不跑」，是「只在 --deep 里跑」—— 不能混进上面那两档，
+    // 否则读的人会以为这道门禁永远没人跑（那正是「写了没人跑」的另一种说法）。
+    const network = GATES.filter((gate) => gate.where === 'network')
+    if (network.length > 0 && !opts.deep) {
+      console.log('\n只在 --deep 里跑（判据要网络 + 凭据；跑不动时报「判不了（环境）」，不报红）：')
+      for (const gate of network)
+        console.log(
+          `  ${gate.id.padEnd(26)} ${pkg.scripts[gate.id]}${gate.args ? ` ${gate.args.join(' ')}` : ''}`
+        )
     }
     return 0
   }
@@ -725,11 +784,25 @@ async function main() {
     console.log('')
   }
 
+  /**
+   * 「判不了」有两种，文案必须分开（否则人会被引去改错的地方）：
+   *   · `dist` 等 —— 前置缺失（本地没有产物）；
+   *   · `network` —— **环境不具备**（无凭据 / 无 `gh`）。这一条尤其要说清：它跑不动不等于
+   *     「豁免条目有问题」，跑去改条目只会把真问题改成假豁免。
+   */
+  const unjudgedLabel = (item) => (item.gate.where === 'network' ? '判不了（环境）' : '判不了')
+  const unjudgedHint = (item) =>
+    item.gate.where === 'network'
+      ? 'exit 2 = 环境不具备（无凭据 / 无 `gh`）—— 不是条目有问题，也不算通过；带上 GH_TOKEN 或 `gh auth login` 再跑'
+      : 'exit 2 = 该门禁自己声明「前置缺失，无法判定」（不算通过）'
+
   if (opts.brief && unjudged.length > 0) {
     console.log(
       paint(
         YELLOW,
-        `△ 判不了 ${unjudged.length} 道：${unjudged.map((item) => item.gate.id.replace('check:', '')).join('、')}（exit 2 = 它自己说前置缺失；不算通过）`,
+        `△ 判不了 ${unjudged.length} 道：${unjudged
+          .map((item) => `${item.gate.id.replace('check:', '')}${item.gate.where === 'network' ? '（环境）' : ''}`)
+          .join('、')}（exit 2 = 它自己说前置缺失 / 环境不具备；不算通过）`,
         color
       )
     )
@@ -737,7 +810,7 @@ async function main() {
   for (const item of unjudged) {
     if (opts.brief) break
     console.log(
-      `${paint(YELLOW, '△ 判不了', color)} ${item.gate.id.padEnd(16)} ${String(item.ms).padStart(5)}ms  exit 2 = 该门禁自己声明「前置缺失，无法判定」（不算通过）`
+      `${paint(YELLOW, `△ ${unjudgedLabel(item)}`, color)} ${item.gate.id.padEnd(16)} ${String(item.ms).padStart(5)}ms  ${unjudgedHint(item)}`
     )
     for (const line of tail(item.output, 3))
       console.log(`         ${paint(DIM, '│', color)} ${line}`)
@@ -801,11 +874,23 @@ async function main() {
     )
     if (opts.strict && preexisting.length > 0)
       console.log('（--strict：HEAD 上本来就红的那几条也算进来了）')
-  } else if (preexisting.length > 0) {
-    console.log(
-      `\n${paint(GREEN, '结论：你的改动没有新增红。')} 上面 ${preexisting.length} 条是 HEAD 上就有的，不阻塞你；`
-    )
-    console.log(`      它们修好之后这里会自动变绿（没有基线登记表，所以不存在「豁免过期」）。`)
+  } else if (preexisting.length > 0 || unjudged.length > 0) {
+    // 一句结论说清两件事（红 0，但「没给出结论的门禁」也要点名）：
+    //   · HEAD 上既有红 —— 不阻塞你，修好后自动变绿（没有基线登记表，不存在「豁免过期」）；
+    //   · 判不了 —— **不算通过**（见文件头）。所以只要 unjudged > 0，就不能印「全绿」那一句：
+    //     那是本条命令最容易骗自己的地方（跑不动被读成通过）。退出码仍是 0（它确实没红）。
+    const parts = []
+    if (preexisting.length > 0)
+      parts.push(`${preexisting.length} 条是 HEAD 上就有的（不阻塞你，修好即自动变绿）`)
+    if (unjudged.length > 0)
+      parts.push(
+        paint(
+          YELLOW,
+          `${unjudged.length} 道判不了（不算通过）：${unjudged.map((item) => item.gate.id).join('、')}`,
+          color
+        )
+      )
+    console.log(`\n${paint(GREEN, '结论：你的改动没有新增红。')} 其中 ${parts.join('；')}。`)
   } else {
     console.log(`\n${paint(GREEN, '结论：全绿。')}`)
   }
@@ -833,7 +918,7 @@ async function main() {
         `\n⚠ 本地钩子没装（core.hooksPath=${hooksPath || '未设置'}）—— 现在这套门禁只在你记得手动跑时才存在。`,
         color
       ) +
-        '\n  一次性装好：pnpm hooks:install（之后 commit 跑提交档 ~4s、push 跑默认档 ~13s；`--no-verify` 仍然可以跳过，但那是你自己的选择，不是「没人拦」）'
+        '\n  一次性装好：pnpm hooks:install（之后 commit 跑提交档 ~7s、push 跑默认档 ~13s；`--no-verify` 仍然可以跳过，但那是你自己的选择，不是「没人拦」）'
     )
   } else if (!opts.brief) {
     console.log(

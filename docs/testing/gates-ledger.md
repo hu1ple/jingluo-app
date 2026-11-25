@@ -111,7 +111,7 @@
 
 | 门禁 | 一句话事故 | 拦 / 不拦 | 红了第一件事 | 归属 |
 | --- | --- | --- | --- | --- |
-| `test`（L0，`tests/run-layer.mjs unit`） | #362 域 10：一批用例写了却**不在任何执行入口**（`deploy/dl-release/test` 24 条、`tests/regression` 12 个文件），而 CI 只跑 `pnpm test` 这一层，导致不在 `LAYERS` 里的目录写多少用例都等于零 | 拦：单元层全量（纯 Node，零浏览器，每次提交都跑）。不拦：真浏览器行为 | `node tests/which.mjs --git`（别名 `test:which`）定位受影响用例 | 任何 `src/` 改动 |
+| `test`（L0，`tests/run-layer.mjs unit`） | #362 域 10：一批用例写了却**不在任何执行入口**（`deploy/dl-release/test` 24 条、`tests/regression` 12 个文件），而 CI 只跑 `pnpm test` 这一层，导致不在 `LAYERS` 里的目录写多少用例都等于零 | 拦：单元层全量（纯 Node，零浏览器，每次提交都跑）。不拦：真浏览器行为 | `node tests/which.mjs --git` 定位受影响用例 | 任何 `src/` 改动 |
 | `test:regression`（`tests/run-layer.mjs regression`；ci.yml 的 checks job 直接调，不经 npm 别名） | #368/#362：`tests/regression` 12 个文件写了但**没有 runner**，导致不报错、不变红、也没人发现 | 拦：回归层（纯 Node，秒级）。不拦：需要真 dist 的 | 按 `check:test-layout` 的定位把文件放进某层 | 改回归用例 |
 | `test:integration`（L1；本地 `node tests/run-layer.mjs integration`，ci.yml 用 6 个分片 `--shard i/6` 跑） | #365：接线前 `tests/integration/` 49 个文件 / 1.68 万行**零触发点**，只有人记得手跑，导致「写好的集成用例」和「真的会被执行的用例」是两件事 | 拦：真实 DOM + 真实产物。不拦：既有红 —— 那些走 `tests/integration-baseline.json`，`--baseline` 只判「相对基线没有新增失败」，**不许改用 `continue-on-error`** | 先看三态（`docs/TESTING-POLICY.md` §11.5）：真红修、flaky 登记、runner-dependent 改成等终态 | 改 UI / 改集成用例 |
 | `test:golden`（`tests/run-golden.mjs`） | #404：功能开发把用户主路径打断，却要等到有人手动点才发现，导致「这道闸」根本不存在 | 拦：每域 1 条主路径 + 预算（单条 ≤60s / 整层 ≤5min 由脚本自己判）；**缺产物直接红、不 SKIP**。不拦：细节分支 | 看 job summary 的「首个失败断言」；预算超了先看是不是构建开销 | 改用户可见路径 |

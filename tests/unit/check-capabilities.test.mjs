@@ -9,8 +9,9 @@
 //   1. 三个静态 audit 真的都被调用了（少调一个，整套盘点就有一条腿是瞎的）；
 //   2. 扫描范围包含**普通 .css**（不是只有 `*.module.css`）—— #217 把 `check:gap` 扩到全部
 //      `.css` 之后，两个门禁的口径必须一致，否则同一份源码会被两套范围判成两个结论；
-//   3. 退出码语义：warn 级有缺陷 **exit 0**（6 条修复 lane 在飞，拦截会互相卡死），
-//      `--strict` 才 exit 1（留给将来接 CI，本次不接）；
+//   3. 退出码语义：**默认就是拦截档** —— 未记账的缺陷 exit 1 并点名 `文件:行`；已记账且在账期内的
+//      只提示不拦；账到期 exit 1。`--strict` 是绝对档（任何缺陷都 exit 1，不看账本）。
+//      （2026-11-25 关掉 warn 档：那一档挂过 10 处真实缺陷常年只打印不拦，唯一产出是「让人以为有人在看」。）
 //   4. 类别 4 的测量 JSON 缺失时报「未采集」而**不是**失败 —— 采集需要模拟器，缺文件是环境
 //      状态，不是代码问题。
 //
@@ -80,6 +81,32 @@ const DIRTY = {
   'src/styles/plain.css': '.row {\n  display: flex;\n  gap: 8px;\n}\n',
 }
 
+/** DIRTY 里那三处缺陷的账目 id（`类别|文件|能力名`，不含行号 —— 行号会随正确改动漂移）。
+ * 改成常量而不是从 CLI 输出里抠：这里要钉的正是「账本按这三个 id 记账就放行」，
+ * 抠出来的 key 会让断言变成「CLI 说是什么就是什么」（同义反复）。 */
+const DIRTY_KEYS = [
+  'api|src/services/groupBy.ts|Object.groupBy',
+  'css|src/styles/plain.css|flex-gap',
+  'host|src/services/share.ts|Web Share',
+]
+
+/** 造一本「已记账、未到期」的账本：到期日取今天 + 30 天（账本上限是 90 天，超了会按非法判红）。 */
+const ledgerFor = (keys) =>
+  JSON.stringify({
+    gate: 'check-capabilities',
+    entries: Object.fromEntries(
+      keys.map((key) => [
+        key,
+        {
+          count: 1,
+          why: '测试临时账本：只为证明「记账后放行」这一拍，与真账本 scripts/audit-debt/check-capabilities.json 无关',
+          issue: '#209',
+          expires: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10),
+        },
+      ])
+    ),
+  })
+
 /** 干净 fixture：三个静态判定都不该报缺陷，行为测量缺失也只算「未采集」 */
 const CLEAN = {
   'src/services/sum.ts': 'export const sum = (a, b) => a + b\n',
@@ -95,16 +122,20 @@ const readJson = (result) => {
   }
 }
 
-test('check-capabilities.mjs 存在且能跑（warn 级跑真实仓库 exit 0）', () => {
+test('check-capabilities.mjs 存在且能跑（真仓库：10 处缺陷都记了账且在账期内 → exit 0）', () => {
   assert.ok(fs.existsSync(CLI), `缺 scripts/check-capabilities.mjs`)
   const result = run()
-  assert.equal(result.status, 0, `默认（warn 级）应 exit 0\n--- stdout ---\n${result.stdout}\n--- stderr ---\n${result.stderr}`)
+  // 注意这条**不是**「默认档恒 0」：真仓库 exit 0 的唯一理由是那 10 处都登记在
+  // `scripts/audit-debt/check-capabilities.json` 且未到期。新引入一处没登记的缺陷 → 下面那条 --
+  assert.equal(result.status, 0, `真仓库的缺陷都记了账，默认档应 exit 0（若这条红了，先看是不是新增了未记账缺陷）\n--- stdout ---\n${result.stdout}\n--- stderr ---\n${result.stderr}`)
   assert.match(result.stdout, /#209/, '输出要标明这是 #209 的盘点闸门')
 })
 
 test('三个静态 audit 各被调用一次：api / css / host 都报出命中', () => {
   const result = run(['--root', fixture(DIRTY), '--json'])
-  assert.equal(result.status, 0, `stderr: ${result.stderr}`)
+  // 未记账缺陷默认就红（2026-11-25 关掉 warn 档）：这个 fixture 三处缺陷一条都没登记 → exit 1。
+  // 断言 1 而不是 0，正是「红必须等于坏」：以前这里钉的是「有缺陷也 exit 0」，等于钉住了一道假门禁。
+  assert.equal(result.status, 1, `未记账缺陷必须 exit 1（stderr: ${result.stderr}）`)
   const report = readJson(result)
   assert.equal(report.categories.api.hits, 1, '类别 1 判定没跑到（Object.groupBy 应命中 1 处）')
   assert.equal(report.categories.css.hits, 1, '类别 2 判定没跑到（flex gap 应命中 1 处）')
@@ -121,11 +152,23 @@ test('普通 .css（非 CSS Module）也在扫描范围内（与 #217 的 check:
   assert.deepEqual(report.categories.css.hitFiles, ['src/styles/plain.css'])
 })
 
-test('warn 级：有缺陷也 exit 0，只在输出里标 ⚠', () => {
+test('默认档：未记账缺陷 exit 1 并点名 文件:行；同一 fixture 补上临时账本后 → exit 0', () => {
   const result = run(['--root', fixture(DIRTY)])
-  assert.equal(result.status, 0, 'warn 级不许拦截（6 条修复 lane 在飞）')
-  assert.match(result.stdout, /⚠/)
-  assert.match(result.stdout, /warn 级/)
+  assert.equal(result.status, 1, '未记账缺陷默认就红（2026-11-25 关掉 warn 档）')
+  assert.match(result.stdout, /未记账的缺陷/)
+  // 点名「哪一个文件哪一行」：只说「有缺陷」的判词看不出拦的是不是**这一处**，
+  // 而「红可归因」正是这条门禁值钱的地方（修的人要直接点到行）。
+  assert.match(result.stdout, /\[api\] src\/services\/groupBy\.ts:1/)
+  assert.match(result.stdout, /\[css\] src\/styles\/plain\.css:3/)
+  assert.match(result.stdout, /\[host\] src\/services\/share\.ts:1/)
+
+  // 补一拍（缺了它，「exit 1」可能只是「见谁都红」而不是「它认得账」）：把这三处记进**临时账本**，
+  // 日期在 90 天上限之内 → 必须回到 exit 0。账本路径固定是 `<root>/scripts/audit-debt/<gate>.json`，
+  // 所以「同一个 fixture + 一本账」就是同一个 --root 下多一个文件。
+  const booked = fixture({ ...DIRTY, 'scripts/audit-debt/check-capabilities.json': ledgerFor(DIRTY_KEYS) })
+  const after = run(['--root', booked])
+  assert.equal(after.status, 0, `记了账（未到期）就必须放行 —— 否则这道门禁是「恒红」而不是「拦截」\n${after.stdout}`)
+  assert.match(after.stdout, /已记账、在账期内/, '放行的理由要打出来：让人看得见「这是记账制，不是白名单」')
 })
 
 test('--strict：有缺陷时 exit 1', () => {
@@ -134,7 +177,7 @@ test('--strict：有缺陷时 exit 1', () => {
   assert.match(`${result.stdout}${result.stderr}`, /⚠|缺陷/)
 })
 
-test('无缺陷时 exit 0（warn 与 strict 都是 0）', () => {
+test('无缺陷时 exit 0（默认档与 --strict 都是 0）', () => {
   const dir = fixture(CLEAN)
   for (const args of [[], ['--strict']]) {
     const result = run(['--root', dir, ...args])

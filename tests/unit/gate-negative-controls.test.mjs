@@ -18,7 +18,7 @@
 //
 //   N8  `check:keystore`           —— 键名错 / 路径错 / 口令错 / 别名错 / 指纹不符 → exit 1 且点名；缺文件 exit 2
 //   N9  `check:limits`             —— 注入裸阈值 → exit 1 且点名 文件:行:值；镜像常量漂移 → 点名两个不同值
-//   N10 `check:capabilities`       —— `--strict` 注入低内核用法 → exit 1 且点名 文件:行（warn 档同一份注入仍 exit 0）
+//   N10 `check:capabilities`       —— 注入低内核用法 → exit 1 且点名 文件:行（默认档 = 拦截档；账记上后必须放行）
 //
 // #702 又补了一道（与 #697 同根因：同一判据的第二份实现）：
 //
@@ -50,8 +50,8 @@
 //     例外（#413 接线批次）：`check:i18n` / `check:endpoints` 的对照是「现场往仓库里塞一份坏输入
 //     再跑脚本」，塞的正是脚本自己扫的那份源码，放在 ci.yml 里成本 ≈1s 且与被测命令同环境，
 //     所以这两条登记成 `kind: 'ci'`（和 `check:legacy` / `check:redact` 同款）；
-//     `check:capabilities` 的 warn 档没有红可打（#453 之后它有了 `--strict` 档的对照，见 N10；
-//     剩下的缺口只是 ci.yml 还没改 --strict），那部分写在 KNOWN_GAPS。
+//     `check:capabilities` 的默认档现在**自己就会红**（2026-11-25 关掉 warn 档：未记账缺陷 exit 1），
+//     对照见 N10；剩下的缺口只是「没有 --strict 绝对档」，那部分写在 KNOWN_GAPS。
 //     同一形状后来还有 `check:doc-refs`（#463）与本轮的 `check:consume-api`（#487 接线）：
 //     都是「往 src/ 或 docs/ 塞一条脚本自己会扫的坏输入 → 必红 → 还原」，一律 `kind: 'ci'`。
 //   · 不验 `check:log-coverage` 的 `--selftest`：脚本自带反例，但 CI 调用没带这个 flag
@@ -672,13 +672,18 @@ const KNOWN_GAPS = {
     stillOpen: (ci) => !/负向对照[^\n]*golden|golden[^\n]*负向对照/i.test(ci),
   },
   'check:capabilities': {
+    // 2026-11-25 改口径：默认档**不再是 warn 级**，它自己就会红（未记账缺陷 / 到期债 → exit 1），
+    // 所以「没有红可打」这个缺口已经没了 —— 剩下的只有「没有 `--strict` 绝对档」。
+    // 为什么绝对档今天接不上：账上还有 10 处缺陷（带到期日），`--strict` 不看账本 ⇒ 接上去必然天天红，
+    // 红的就不再是「这次改动」而是「账没清」。所以这条缺口留在这儿（有 issue、有 fix、有 stillOpen 判据，
+    // 不会腐烂成永久豁免），但**不许**再拿它当「这道门禁咬不住」的借口：默认档咬得住，N10 有对照。
     reason:
-      '默认档是 warn 级：无论有几处缺陷都 exit 0（当前 10 处能力假设缺陷在案、6 条修复 lane 在飞，' +
-      '硬拦截会互相卡死）。所以 CI 现在这一步只证明「扫描器每次都被跑、口径不被悄悄改宽」，没有红可打。' +
-      '#453 之后**检测能力本身已有对照**（本文件 N10：注入低内核用法 → `--strict` exit 1 且点名 文件:行；' +
-      '同一份注入下 warn 档仍 exit 0），剩下的缺口**只剩接线**：ci.yml 还没把这条命令换成 --strict',
+      '缺口只剩「绝对档没接线」：ci.yml 跑的是默认档（未记账缺陷 / 到期债 → exit 1，已经咬人），' +
+      '但 `--strict`（任何缺陷都 exit 1、不看账本）还没接；账上 10 处缺陷未清时接上去必然恒红，' +
+      '所以它是**有期限的**待办，不是「没有红可打」。检测能力本身有对照：本文件 N10（注入低内核用法 → ' +
+      '默认档与 --strict 都 exit 1 且点名 文件:行；账记上后必须放行）',
     issue: '#413',
-    fix: '缺陷清零后把 ci.yml 的调用改成 `node scripts/check-capabilities.mjs --strict`（届时缺陷即 exit 1，本身就是对照）',
+    fix: '账清（scripts/audit-debt/check-capabilities.json 归零）后把 ci.yml 的调用改成 `node scripts/check-capabilities.mjs --strict`',
     // 缺口还开着 = ci.yml 里仍然没有带 --strict 的那一步
     stillOpen: (ci) => !/check-capabilities\.mjs\s+--strict/.test(ci),
   },
@@ -793,7 +798,7 @@ test('N6 已确认的缺口仍然如实登记（缺口消失时要回来删条�
 //
 //   N8  `check:keystore`（P0 发布链：签名凭据形状错 → 新机器出不了包 / 悄悄换证书）
 //   N9  `check:limits`（阈值单一来源：改一处不改另一处 = 第二份真相源回来了）
-//   N10 `check:capabilities --strict`（低内核白屏的历史事故；warn 档结构上永不 exit 1）
+//   N10 `check:capabilities`（低内核白屏的历史事故；2026-11-25 起默认档就是拦截档）
 //
 // 硬约束：**没有一道门禁被删、没有一条判据被放宽**。注入物全部落在 `mkdtemp` 的临时目录 /
 // 临时副本里，跑完仓库原样（下面的「收尾体检」再兜一遍）。
@@ -1336,10 +1341,11 @@ test('N9 check:limits：注入裸阈值 → exit 1 且点名 文件:行:值；�
 
 // ---------------------------------------------------------------- N10 check:capabilities --strict（#453 第 2 优先）
 
-test('N10 check:capabilities：--strict 咬得住（注入低内核用法 → exit 1 且点名 文件:行），warn 档同一份注入仍 exit 0', (t) => {
+test('N10 check:capabilities：注入低内核用法 → exit 1 且点名 文件:行（默认档与 --strict 都咬），记账后必须放行', (t) => {
   const gate = commandOf('check:capabilities')
-  // CI 现在跑的就是这条**不带参数的** warn 档 —— 它必须恒 exit 0（这正是 #413 记的缺口），
-  // 一旦有人把它改成 `--strict`，这条断言会红，提示回来删掉 KNOWN_GAPS 里那条。
+  // CI 现在跑的就是这条**不带参数的**默认档 —— 从 2026-11-25 起它是**拦截档**（未记账缺陷 exit 1），
+  // 所以下面 ③b 那一拍要证明它在同一份注入下也红。一旦有人把它改成 `--strict`，这条断言会红，
+  // 提示回来删掉 KNOWN_GAPS 里那条（缺口只剩「绝对档没接」）。
   assert.match(
     gate.raw,
     /^node scripts\/check-capabilities\.mjs$/,
@@ -1388,15 +1394,16 @@ test('N10 check:capabilities：--strict 咬得住（注入低内核用法 → ex
     )
     assert.match(strict.out, /各类缺陷数：api 1 /, `缺陷数必须正好 1（.at 被 polyfill 覆盖了，不该算缺陷）\n${strict.out}`)
 
-    // ③b 同一份注入下的 warn 档（= CI 现在跑的那条命令）：**exit 0，但缺陷清单照旧列出来**
-    //     —— 这就是 KNOWN_GAPS #413 说的「结构上恒绿」：扫描器在工作，CI 那道门却咬不住。
-    const warn = runGate([])
-    assert.equal(warn.status, 0, `warn 档必须恒 exit 0（这就是 #413 的缺口；它一旦变红，请回来更新 KNOWN_GAPS）\n${warn.out}`)
-    assert.match(warn.out, /⚠ 1 处能力假设缺陷/, `warn 档必须把缺陷列出来（只是不拦截）\n${warn.out}`)
+    // ③b 同一份注入下的**默认档**（= CI 现在跑的那条命令）：必须 exit 1，并报「未记账的缺陷」。
+    //     以前这里钉的是「默认档 exit 0」—— 那钉住的是一道假门禁（CI 那一步结构上永不红）。
+    //     2026-11-25 关掉 warn 档后，钉的方向反过来：**真门禁必须红**，而且红了要能点名。
+    const dflt = runGate([])
+    assert.equal(dflt.status, 1, `默认档（= CI 跑的那条）遇到未记账缺陷必须 exit 1\n${dflt.out}`)
+    assert.match(dflt.out, /未记账的缺陷/, `红要落在「未记账」这一档（记账制，不是白名单）\n${dflt.out}`)
     assert.match(
-      warn.out,
+      dflt.out,
       /\[api\] src\/__gate-neg-capabilities-probe\.ts:2/,
-      `warn 档必须点名同一处缺陷 —— 否则「恒绿」的原因是「它根本没扫到」，性质完全不同\n${warn.out}`
+      `默认档必须点名注入的 文件:行 —— 否则「红」也可能只是「它红在别处」\n${dflt.out}`
     )
   } finally {
     // ④ 还原（探针在临时目录里，仍然显式删除，后面的 ⑤ 拍就是「还原后必须绿」的证明）
@@ -1407,11 +1414,12 @@ test('N10 check:capabilities：--strict 咬得住（注入低内核用法 → ex
   const again = runGate(['--strict'])
   assert.equal(again.status, 0, `还原后 --strict 必须回到 exit 0\n${again.out}`)
 
-  // ⑥ 真仓库口径：两档互不矛盾 —— warn 恒 0；--strict 在「有缺陷」时必须 1、在「没缺陷」时必须 0。
+  // ⑥ 真仓库口径：两档互不矛盾 —— 默认档在「缺陷都记了账且未到期」时 0（真仓库现状 10 处）、
+  //    有未记账缺陷时 1；--strict 在「有缺陷」时必须 1、在「没缺陷」时必须 0。
   //    这一拍不写死「现在有 10 处缺陷」（那是 #413 各 lane 的进度），而是从输出里**读出**缺陷数再判，
   //    所以 lane 全部落地后它照样绿；反过来若 --strict 判据被改软（缺陷 >0 却不红），它立刻红。
   const realWarn = run(commandOf('check:capabilities'))
-  assert.equal(realWarn.status, 0, `真仓库 warn 档必须 exit 0（CI 跑的就是这一档）\n${realWarn.out}`)
+  assert.equal(realWarn.status, 0, `真仓库默认档必须 exit 0（10 处都记了账且未到期；红了先看是不是新增未记账缺陷）\n${realWarn.out}`)
   const scanned = /扫描范围：src\/\*\* 共 (\d+) 个文件/.exec(realWarn.out)
   assert.ok(Number(scanned?.[1] ?? 0) >= 100, `真仓库应扫到 ≥100 个 src 文件（实测 ${scanned?.[1]}）—— 扫不动就是口径坏了\n${realWarn.out}`)
   const defects = Number(/合计 (\d+)/.exec(realWarn.out)?.[1] ?? 0)
@@ -1419,12 +1427,12 @@ test('N10 check:capabilities：--strict 咬得住（注入低内核用法 → ex
   assert.equal(
     realStrict.status,
     defects > 0 ? 1 : 0,
-    `真仓库有 ${defects} 处缺陷，--strict 却 exit ${realStrict.status} —— 两档口径不一致（warn 恒 0 是设计，strict 恒 0 是坏了）\n${realStrict.out}`
+    `真仓库有 ${defects} 处缺陷，--strict 却 exit ${realStrict.status} —— 两档口径不一致（strict 恒 0 是坏了）\n${realStrict.out}`
   )
   if (defects > 0) {
     assert.match(realStrict.out, /\[(?:api|css|host|behavior)\] src\/[^\s:]+:\d+/, `--strict 必须逐条点名 文件:行\n${realStrict.out}`)
   }
-  t.diagnostic(`N10：真仓库 warn 档 exit 0 / --strict exit ${realStrict.status}（存量缺陷 ${defects} 处，不写死）`)
+  t.diagnostic(`N10：真仓库默认档 exit 0 / --strict exit ${realStrict.status}（存量缺陷 ${defects} 处，不写死）`)
 })
 
 // ---------------------------------------------------------------- 收尾体检

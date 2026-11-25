@@ -16,7 +16,9 @@ export function ShareImport() {
   const [error, setError] = useState<TranslationKey | null>(null)
   const [busy, setBusy] = useState(false)
   const submit = async () => {
-    if (busy) return
+    if (busy) {
+      return
+    }
     setBusy(true)
     setError(null)
     try {
@@ -53,7 +55,7 @@ export function ShareImport() {
         <Modal
           title={t('shareImport')}
           onClose={() => {
-            if (!busy) setOpen(false)
+            if (!busy) {setOpen(false)}
           }}
           footer={
             <>
@@ -79,7 +81,7 @@ export function ShareImport() {
                 setError(null)
               }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') void submit()
+                if (e.key === 'Enter') {void submit()}
               }}
             />
           </label>

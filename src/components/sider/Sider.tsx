@@ -120,21 +120,23 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
   }
 
   const confirmDelete = async () => {
-    if (!deleting || deletePending) return
+    if (!deleting || deletePending) {
+      return
+    }
     setDeletePending(true)
     try {
       const failed: string[] = []
       for (const id of deleting) {
-        if (!(await removeSession(id))) failed.push(id)
+        if (!(await removeSession(id))) {failed.push(id)}
       }
-      if (failed.length < deleting.length) void sweepOrphanAttachmentsAfterDelete()
+      if (failed.length < deleting.length) {void sweepOrphanAttachmentsAfterDelete()}
       if (failed.length > 0) {
         setDeleting(failed)
-        if (selecting) setSelected(failed)
+        if (selecting) {setSelected(failed)}
         showToast({ key: 'sessionDeleteFailed', type: 'error' })
       } else {
         setDeleting(null)
-        if (selecting) exitSelection()
+        if (selecting) {exitSelection()}
       }
     } finally {
       setDeletePending(false)
@@ -260,7 +262,7 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
               data-testid="sider-delete-selected"
               onClick={() => {
                 const ids = sessions.filter((session) => selectedSet.has(session.id)).map((session) => session.id)
-                if (ids.length > 0) setDeleting(ids)
+                if (ids.length > 0) {setDeleting(ids)}
               }}
             >
               {t('historyDeleteSelected')}

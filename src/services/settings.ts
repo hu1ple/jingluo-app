@@ -177,7 +177,9 @@ const initialThinkingDisplay = (): ThinkingDisplay => {
 /** 阅读设置默认档 = 改造前的现状（16px / 常规 / 标准行距）；脏值回落默认档 */
 const initialReadingFontSize = (): ReadingFontSize => {
   const saved = read(KEYS.readingFontSize)
-  if (saved === 'xxxlarge') return 'xxlarge'
+  if (saved === 'xxxlarge') {
+    return 'xxlarge'
+  }
   return readingFontSizes.find((size) => size === saved) ?? 'standard'
 }
 

@@ -1754,6 +1754,9 @@ const ReadingSettings = () => {
           </div>
           <strong aria-hidden="true">{t('settingDialogReadingSizeLarge')}</strong>
         </div>
+        {/* 作用范围说明（原文案在改滑块时被丢掉，R4 会判成孤立 key）：
+            用户最常问「为什么设置面板的字没变」，这句必须留在界面上 */}
+        <div className={styles.sizeHint}>{t('settingDialogReadingGroupLabel')}</div>
       </div>
       <SettingCell
         label={t('settingDialogReadingFontWeight')}

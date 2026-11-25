@@ -3,7 +3,8 @@
  * release-verify.mjs —— 复核「线上 releases.json 真的生效了」（Issue #107 的「校验」这一步）。
  *
  * `https://dl.rose7.cn/releases.json` 是**dl 分发侧**的事实来源：存量客户端的自动更新看它。
- * 注意（裁决 #614 决定 2）：正式发布渠道已改成 GitHub Release，`release.yml` 不再从这里取任何东西，
+ * 注意（裁决 #614 决定 2）：正式发布渠道已改成 GitHub Release，~~`release.yml`~~ 不在这里取任何东西了
+ * （那个 workflow 已于 `ce7968e3` / 2026-11-24 整条删除，仓库里**没有任何流水线**再读这份清单），
  * 本脚本复核的是「dl 清单真的写进去了没有」（internal/私有包与历史版本仍需要它）。所以上传返回 ok:true 之后，真正的验收是：
  *   1. releases.json 里出现这个版本，并且 latest / releases[0] / 记录三处对得上
  *   2. 记录的 versionCode / size / sha256 / buildType 与本次一致
@@ -239,7 +240,7 @@ async function main(argv) {
     return EXIT_FAIL;
   }
   console.log(`  PASS  ${version} 已在线上生效，hash 一致`);
-  console.log(`  下一步: 打 tag v${version} 并推送，然后按 docs/RELEASE-MANUAL.md §6.1 发 GitHub Release（.github/workflows/release.yml 已改成手动触发，推 tag 不再自动跑）`);
+  console.log(`  下一步: 打 tag v${version} 并推送（推 tag **不触发任何 workflow** —— 仓库里已没有发布流水线），然后按 docs/RELEASE-MANUAL.md §6.1 做法 A 手工 gh release create`);
   if (args.json === true) console.log(JSON.stringify({ ok: true, version, record, warns }, null, 2));
   return EXIT_OK;
 }

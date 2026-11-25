@@ -30,8 +30,9 @@
  * `scripts/release-common.mjs` 的 `expectedCertSha256(root)` 曾经是同一判据的第二份实现（还留在
  * gradle 字面量上，恒返回 null），两处必须同源才能避免「一个真一个假」。本文件不再有任何读取代码。
  *
- * 降级模式 `--config-only`（#697 接线用）：CI 上**没有** release keystore（secret 只在
- * `.github/workflows/release.yml` 里注入），这一步没法验真签名。于是显式跑降级档：
+ * 降级模式 `--config-only`（#697 接线用）：`ci.yml` 的 `checks` job 里**没有** release keystore
+ * （那四个签名 Secret 只在 `.github/workflows/build-apk.yml` 里注入，且要 Environment `apk-signing`
+ * 批准后才可用），这一步没法验真签名。于是显式跑降级档：
  * 只校验「期望值的来源与一致性」（配置里有合法的 64 位十六进制 + build.gradle 若有副本必须相等），
  * **不校验真签名**。它不是静默跳过 —— 配置坏了照样红，并且把「校验了什么 / 没校验什么」打在日志里。
  * 全量（真 keytool 读指纹 + 指纹必须等于期望）由发布机的 `pnpm run check:keystore` 跑。
@@ -179,7 +180,9 @@ function configOnlyCheck(quiet) {
     console.log('模式: --config-only（CI 降级档）')
     console.log(`  期望证书 SHA-256      = ${expected.value}（来源 ${expected.source}）`)
     console.log('  本档**不校验真签名**：本机/CI 没有 release keystore 时无从比对，所以只校验「期望值的来源与一致性」。')
-    console.log(`  全量（keytool 读出证书指纹并要求等于上面的值）由发布机跑：pnpm run check:keystore（.github/workflows/release.yml 已接）。`)
+    console.log('  全量档（keytool 读出证书指纹并要求等于上面的值）要有真签名材料才跑得动，今天有两处调用它：')
+    console.log('    · 签名机上的 ./build-apk.sh release —— 构建前先跑（指纹不对就 die，不等 gradle 报）')
+    console.log('    · .github/workflows/build-apk.yml 注入签名材料后的「签名凭据自检」步骤（手动 workflow_dispatch）')
   }
   if (!quiet) console.log(`\n通过: ${APP_IDENTITY_REL} 的 expectedCertSha256 可用${gradleCertLiteral(ROOT) ? `，且与 ${BUILD_GRADLE_REL} 的字面量一致` : `（${BUILD_GRADLE_REL} 已无副本）`}。`)
   return EXIT_OK

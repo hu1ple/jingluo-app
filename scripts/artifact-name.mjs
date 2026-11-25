@@ -2,9 +2,14 @@
 /**
  * artifact-name.mjs —— 打印产物文件名（Issue #836 scope ①）
  *
- * 存在的理由：`.github/workflows/release.yml` 里曾经直接写 `apk="deepseek-chat-${version}.apk"`，
+ * 存在的理由：~~`.github/workflows/release.yml`~~ 里曾经直接写 `apk="deepseek-chat-${version}.apk"`，
  * 那就是「目录里第二份硬编码前缀」—— CI 改漏了，GitHub Release 资产名就和线上清单不一致，
- * 而两边都还能跑绿。现在 CI 只调这个 CLI，前缀始终来自 `config/appIdentity.json`。
+ * 而两边都还能跑绿。
+ *
+ * 那个 workflow 已于 `ce7968e3` / 2026-11-24 整条删除，仓库里**没有任何流水线**再决定 Release
+ * 资产名（也没有自动发布路径）。但「名字有几份」这件事没变：要产物名就调这个 CLI
+ * （`scripts/release-howto.mjs`、私有包发布脚本、`ci.yml` 的负向对照），前缀始终来自
+ * `config/appIdentity.json` —— **手工发版时同样别手抄名字**。
  *
  * 用法（标准包 = 公网清单 / GitHub Release 资产）：
  *   node scripts/artifact-name.mjs --version 1.5.0

@@ -9,7 +9,8 @@
  *   · 更早的 19 个已发布 APK 里 **15 个是 debug 包**（Issue #60），`v1.0.0`~`v1.3.0` 那些「正式版」
  *     全在内：漏的不是某一次操作，是「没有一条能一键复算的判据」；
  *   · 现有 `scripts/check-apk-debuggable.mjs` 只查 debuggable，其余三项（变体 / 回环标记 / 证书）
- *     散在 `docs/RELEASE-MANUAL.md` 的手打命令和 `.github/workflows/release.yml` 里，**别人用不上**。
+ *     散在 `docs/RELEASE-MANUAL.md` 的手打命令和 ~~`.github/workflows/release.yml`~~ 里（那个 workflow
+ *     已于 `ce7968e3` / 2026-11-24 整条删除，它内联的那份判据也随之一并消失），**别人用不上**。
  * 所以这里把判据做成同一张表：任何 lane、任何 APK，一条命令、一个退出码。
  *
  * ## 用法

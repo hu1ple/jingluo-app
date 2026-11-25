@@ -149,7 +149,9 @@ export const loadDebt = ({ root, gate, today = todayStr() }) => {
  * - `unregistered` —— 有一定「账上没登记 / 登记数不够」的违规。**这是真红**：已知缺陷可以挂账，
  *   新缺陷不行。
  * - `expired` —— 到期的债。**这是真红**：豁免不能无限续命。
- * - `shrink` —— 修好了但账没销（只提示，不判红，见文件头）。
+ * - `shrink` —— **账实不符**：账面登记比实际多（修好了但账没销）。判档由各门禁定，今天的分工：
+ *   `check-doc-refs` / `check-ui-shots` **判红**（账实不符 = 账本在骗人，留着它等于拿假账换绿灯）；
+ *   `check-capabilities` 仍是提示（未整合，见 docs/gates/audit-debt.md）。
  * - `settled` —— 在账期内、数量也对得上。
  */
 export const settleDebt = ({ actual, debt, today = todayStr() }) => {

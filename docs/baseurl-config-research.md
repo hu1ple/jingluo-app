@@ -45,7 +45,9 @@
 - **第 28 行**：默认值 `'https://api.deepseek.com'`。
 - **第 83 行**：`DefinePlugin` 把 `__API_ORIGIN__` 文本替换为字符串字面量。
 - **第 93 行**：`export default defineConfig(createConfig())` —— 默认导出调用时**没有传参**，所以 `pnpm build` 一定用第 28 行的默认值；要改就得改源码或 `createConfig({ apiOrigin })`。仓库没有从 `process.env` 读取的代码，也没有 `.env` 支持（`package.json` 的 `build` 脚本为 `rm -rf dist && NODE_ENV=production rspack build -c rspack.config.ts`，无额外变量）。
-- CI（`.github/workflows/pages.yml`）直接 `pnpm build`，同样走默认值。
+- ~~CI（`.github/workflows/pages.yml`）直接 `pnpm build`，同样走默认值~~：该 workflow 已于 `8e344a4b`
+  （「移除未使用的 GitHub Pages workflow」，2026-11-18）删除 —— **今天没有任何 CI 跑 `pnpm build` 发页面**，
+  `pnpm build` 只由本机或 `.github/workflows/build-apk.yml`（手动触发）调用，两条路都走上面第 28 行的默认值。
 
 **类型声明**：`src/env.d.ts:9`
 

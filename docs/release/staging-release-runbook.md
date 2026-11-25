@@ -46,22 +46,28 @@ staging 包只活在 GitHub Release 上。**任何情况下都不写 dl** ——
 
 ---
 
-## 2. 为什么不能用 `release.yml`（必须手工 `gh release create`）
+## 2. 为什么必须手工 `gh release create`
 
-`.github/workflows/release.yml` 是正式发布用的，它对我们这次 tag 有**两个硬冲突**，任一条都会红：
+> **2026-11-24 起的前提变了**：`~~.github/workflows/release.yml~~` 已随 `ce7968e3`（「移除 release.yml ——
+> 仓库里不再有任何『自动发布』的路径」）整条删除。**今天没有任何发布 workflow**，所以本节原来的结论
+> 「不能用它」升级成「根本没有它」：staging 包只能手工 `gh release create`（`--prerelease` 显式给）。
+> 下面两条硬冲突**保留为历史依据** —— 它们解释了为什么当初绕开它是对的，也是「以后若要恢复自动化，
+> 必须先把这两条改掉」的判据。
+
+它当年是正式发布用的，对我们这次 tag 有**两个硬冲突**，任一条都会红：
 
 1. **tag 版本必须等于 `package.json` 的 `version`**：工作流把 tag 去掉 `v` 前缀后逐字比较
-   （`.github/workflows/release.yml:95`）。`v1.4.4-staging` → `1.4.4-staging`，而
+   （`~~.github/workflows/release.yml:95~~`）。`v1.4.4-staging` → `1.4.4-staging`，而
    `package.json` 的 `version` 只能是 `1.4.4`（gradle 用它当 `versionName`，
    见 `android/app/build.gradle:646`）→ 必然 `::error::` 退出。
    把 `version` 改成 `1.4.4-staging` 也救不了：`versionName` 会变成 `1.4.4-staging`，
    包内版本与正式版对不上，属于「为了过闸改产物」。
-2. **prerelease 由 `version` 里有没有 `-` 推断**（`.github/workflows/release.yml:103`），
+2. **prerelease 由 `version` 里有没有 `-` 推断**（`~~.github/workflows/release.yml:103~~`），
    而上面那条已经把「`version` 里带 `-`」排除掉了 —— 所以这个工作流即使能跑，
    也只会把我们发成 **正式版**，正好是本次要避免的。
 
-结论：**本次手工执行 `gh release create`**，`--prerelease` 显式给。
-工作流里那套 draft → 上传 → 回读 → publish 的顺序照抄（`§6.5`），只是不经过 CI。
+结论：**手工执行 `gh release create`**，`--prerelease` 显式给。
+那个已删除的 workflow 里 draft → 上传 → 回读 → publish 的顺序照抄（`§6.5`），只是不经过 CI。
 
 ---
 
@@ -474,7 +480,8 @@ fi
 
 ### 6.5 先 draft → 上传 → 下载回读 → 再 publish
 
-顺序照抄 `release.yml` 那套（`.github/workflows/release.yml:455` 是它的 draft 分支）：
+顺序照抄那个已删除的 `release.yml` 那套（`~~.github/workflows/release.yml:455~~` 是它的 draft 分支，
+文件已随 `ce7968e3` 删除，这里只作历史依据）：
 **核对没过就永远不会出现「看起来还能下」的包。**
 
 ```bash
@@ -524,7 +531,7 @@ grep -cEi "$forbid" /tmp/pub-body.md || true    # 期望 0
 grep -c 'staging（预发布）构建，禁止当作正式版分发' /tmp/pub-body.md   # 期望 1（警告原文在）
 ```
 
-然后按 `docs/RELEASE-MANUAL.md:502` 那节的姿势再走一遍「下载回来比 hash」（本单只比 GitHub 这一个源，不涉及 dl）。
+然后按 [`docs/RELEASE-MANUAL.md`](RELEASE-MANUAL.md) §7「步骤 6 — 下载回来比 hash」那节的姿势再走一遍「下载回来比 hash」（本单只比 GitHub 这一个源，不涉及 dl）。
 
 ---
 

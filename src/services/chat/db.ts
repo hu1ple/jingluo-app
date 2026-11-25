@@ -192,6 +192,407 @@ const abortTransaction = (tx: { abort(): void }) => {
   }
 }
 
+// ---------------------------------------------------------------- 存储写失败分级（P0 事故修复）
+
+/**
+ * 本机写失败的**四类**。判定只认 `error.name`（`message` 各引擎写法不一致，靠它猜必错），
+ * 分类决定两件事：**要不要重试 / 要不要自愈**、以及**横幅说什么**。
+ *
+ * | kind | 触发 | 自愈动作 | 用户能做什么 |
+ * | --- | --- | --- | --- |
+ * | `quota` | `QuotaExceededError`（超配额）、Firefox 的 `NS_ERROR_DOM_QUOTA_REACHED` | 清孤儿 blob 后重试一次 | 清理 / 导出备份后重试 |
+ * | `clone` | `DataCloneError`：会话里混进了函数 / symbol 等不可结构化克隆的值 | 剔除坏字段后重试一次 | 重试（程序自己会修） |
+ * | `unavailable` | 宿主没有 IndexedDB（`StorageUnavailableError`）、WebKit 写 blob 抛的 `UnknownError`、`NotSupportedError`、`StorageVersionTooNewError` | 无 | 换 App / 换环境，重试没用 |
+ * | `unknown` | 其余，含 `InvalidStateError`（连接正在关闭，重连后能再试）与 `StorageBlockedError` | 重连后再试 | 重试 |
+ *
+ * 为什么 `UnknownError` 归 `unavailable` 而不是 `unknown`：WebKit 在写 blob 时抛
+ * `UnknownError`（配额 / 权限 / 沙箱三者它都不区分），实测**同一份数据重试一万次也一样失败**，
+ * 把它当「可重试」只会让用户反复点重试。这正是「清后台后记录消失、Web 端与手表端同时复现」的
+ * 现场：写不进去 + 库被系统淘汰，两个原因叠在一起。
+ */
+export type StorageFailureKind = 'quota' | 'clone' | 'unavailable' | 'unknown'
+
+/** 一次写失败的结构化描述（**只含元数据**：分类 / error.name / message / store，不含会话内容）。 */
+export type StorageFailure = {
+  kind: StorageFailureKind
+  /** 原始 `error.name`（`DataCloneError` / `QuotaExceededError` / `UnknownError` …） */
+  name?: string
+  /** 原始 `error.message`，截断到 200 字符；引擎给的都是固定句式，不带用户正文 */
+  message?: string
+  /** 失败涉及的 object store（逗号分隔）：定级时「哪一段没写进去」比「失败了」有用 */
+  stores?: string
+  at?: number
+}
+
+export const STORAGE_FAILURE_KINDS: readonly StorageFailureKind[] = [
+  'quota',
+  'clone',
+  'unavailable',
+  'unknown',
+]
+
+export const isStorageFailureKind = (value: unknown): value is StorageFailureKind =>
+  typeof value === 'string' && (STORAGE_FAILURE_KINDS as readonly string[]).includes(value)
+
+const errorNameOf = (error: unknown): string | undefined => {
+  if (typeof error === 'object' && error !== null) {
+    const name = (error as { name?: unknown }).name
+    if (typeof name === 'string' && name.length > 0) {
+      return name
+    }
+  }
+  return undefined
+}
+
+const errorMessageOf = (error: unknown): string | undefined => {
+  if (typeof error === 'object' && error !== null) {
+    const message = (error as { message?: unknown }).message
+    if (typeof message === 'string' && message.length > 0) {
+      return message
+    }
+  }
+  if (typeof error === 'string' && error.length > 0) {
+    return error
+  }
+  return undefined
+}
+
+/** 纯函数（L0 可单测）：`error` → 四类之一。不碰 DOM、不碰 IndexedDB，只看 `name`。 */
+export const classifyStorageFailure = (error: unknown): StorageFailureKind => {
+  switch (errorNameOf(error)) {
+    case 'DataCloneError':
+      return 'clone'
+    case 'QuotaExceededError':
+    case 'NS_ERROR_DOM_QUOTA_REACHED':
+      return 'quota'
+    // WebKit 写 Blob 失败：不区分配额 / 权限 / 沙箱，只能整体判成「这个环境写不进去」
+    case 'UnknownError':
+    case 'NotSupportedError':
+    case 'SecurityError':
+    case 'StorageUnavailableError':
+    case 'StorageVersionTooNewError':
+      return 'unavailable'
+    default:
+      // 含 InvalidStateError（连接正在关闭：重连后可以再试）与 StorageBlockedError（另一标签页占着：
+      // 关掉它再试就行）—— 两者都**不是**环境缺能力，别拿「建议用 App 打开」赶人
+      return 'unknown'
+  }
+}
+
+const FAILURE_MESSAGE_MAX = 200
+
+/** `error` → 可直接落库 / 进诊断包的 `StorageFailure`（纯函数）。 */
+export const storageFailureOf = (error: unknown, stores?: string): StorageFailure => {
+  const failure: StorageFailure = { kind: classifyStorageFailure(error), at: Date.now() }
+  const name = errorNameOf(error)
+  if (name) {
+    failure.name = name
+  }
+  const message = errorMessageOf(error)
+  if (message) {
+    failure.message = message.slice(0, FAILURE_MESSAGE_MAX)
+  }
+  if (stores) {
+    failure.stores = stores
+  }
+  return failure
+}
+
+/**
+ * 读旧值兼容：P0 之前的 `sessionSaveErrors` 是 `Record<id, boolean>`，
+ * `true` 只表示「这条会话没存上」，没有分类。**旧值一律当可重试档**（`unknown`）读 ——
+ * 不能因为「不知道原因」就把用户的会话判成「当前环境无法保存」（那个档位不给重试按钮）。
+ */
+export const normalizeStorageFailure = (value: unknown): StorageFailure | undefined => {
+  if (value === true) {
+    return { kind: 'unknown' }
+  }
+  if (typeof value !== 'object' || value === null) {
+    return undefined
+  }
+  const candidate = value as Partial<StorageFailure>
+  return {
+    ...candidate,
+    kind: isStorageFailureKind(candidate.kind) ? candidate.kind : 'unknown',
+  } as StorageFailure
+}
+
+/** 横幅档位（三档，与文案一一对应；`unavailable` 不给重试按钮） */
+export type SaveBannerTier = 'retry' | 'quota' | 'unavailable'
+
+export const saveBannerTierOf = (kind: StorageFailureKind): SaveBannerTier =>
+  kind === 'unavailable' ? 'unavailable' : kind === 'quota' ? 'quota' : 'retry'
+
+/** 严重度：会话级失败同时有多种原因时，**最严重的那条**决定文案（`unavailable` > `quota` > 可重试） */
+const TIER_SEVERITY: Record<SaveBannerTier, number> = { retry: 0, quota: 1, unavailable: 2 }
+
+/** 纯函数（L0 可单测）：从 `sessionSaveErrors`（含旧布尔值）里选出横幅档位。 */
+export const selectSaveBannerTier = (
+  errors: Record<string, StorageFailure | boolean | undefined> | null | undefined
+): SaveBannerTier | null => {
+  if (!errors) {
+    return null
+  }
+  let tier: SaveBannerTier | null = null
+  for (const value of Object.values(errors)) {
+    const failure = normalizeStorageFailure(value)
+    if (!failure) {
+      continue
+    }
+    const next = saveBannerTierOf(failure.kind)
+    if (tier === null || TIER_SEVERITY[next] > TIER_SEVERITY[tier]) {
+      tier = next
+    }
+  }
+  return tier
+}
+
+export type SaveBannerMessageKey =
+  | 'sessionSaveFailedRetryable'
+  | 'sessionSaveFailedQuota'
+  | 'sessionSaveFailedUnavailable'
+
+/** 档位 → i18n key（zh/en 成对存在，`check-i18n` 的 R1/R4 会盯住） */
+export const SAVE_BANNER_MESSAGE: Record<SaveBannerTier, SaveBannerMessageKey> = {
+  retry: 'sessionSaveFailedRetryable',
+  quota: 'sessionSaveFailedQuota',
+  unavailable: 'sessionSaveFailedUnavailable',
+}
+
+/** `unavailable` 档位**不显示重试按钮**：环境写不进去，点了也是同一个结果。 */
+export const saveBannerRetryable = (tier: SaveBannerTier): boolean => tier !== 'unavailable'
+
+// ---------------------------------------------------------------- 不可克隆字段的兜底剔除
+
+/** 兜底剔除的路径上限：坏字段多到几十个时，说明数据早就坏了，不必逐个试完 */
+const STRIP_PATHS_MAX = 24
+
+const isNonCloneableValue = (value: unknown): boolean =>
+  typeof value === 'function' || typeof value === 'symbol'
+
+/**
+ * 「下一层」里该被剔掉的成员：函数 / symbol，**以及**克隆不了的**非数组对象**
+ * （`WeakMap` / `Proxy` / 带 getter 的宿主对象这些）。
+ *
+ * 为什么连「非函数对象」也剔：剔除的判定标准是「`structuredClone` 一定失败」，不是「看起来像代码」。
+ * 一个 `new WeakMap()` 挂在某条消息上，后果和不小心挂了个函数完全一样 —— 整条会话存不上。
+ * 反过来，**数组一律不动**（消息正文、`blocks` 都在数组里）：宁可这一级修复失败、整条会话上报，
+ * 也不许把用户的对话内容当成「可疑对象」删掉。
+ */
+const isStrippableMember = (value: unknown): boolean => {
+  if (isNonCloneableValue(value)) {
+    return true
+  }
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    !isCloneable(value)
+  )
+}
+
+/**
+ * `structuredClone` 能不能克隆它。**不能**克隆时返回 false；宿主没有 `structuredClone` 时返回 true
+ * （老 WebView：这里没有判据，交给 IndexedDB 自己抛 `DataCloneError`，别凭空删字段）。
+ */
+const isCloneable = (value: unknown): boolean => {
+  if (typeof structuredClone !== 'function') {
+    return true
+  }
+  try {
+    structuredClone(value)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 「会话里混进不可克隆字段」的兜底：**先顶层浅扫，再逐字段试一次**。
+ *
+ * 三级顺序（每一级都只在上一级失败后才走）：
+ *  1. 顶层浅扫：值是 `function` / `symbol` 的字段直接剔掉（这就是 `DataCloneError` 的典型来源）；
+ *  2. 逐个顶层字段 `structuredClone` 试一次：克隆不了的字段再试一次**只往下一层**的修复
+ *     （数组逐元素 / 对象逐属性剔掉坏成员）—— 这一级是为了「宁可少一个字段，也别整条会话不落盘」；
+ *  3. 修不动的**关键字段**（`messages` / `id` / `title` …）**不删**：宁可直接失败并上报，
+ *     也不能存一条「标题在、消息没了」的空壳把用户的对话抹掉。
+ *
+ * 返回值里的 `removed` 只有**字段路径**（`messages[2].onDone` 这种），不含任何正文 —— 直接可进诊断包。
+ */
+export const stripNonCloneableFields = <T extends object>(value: T): { value: T; removed: string[] } => {
+  if (isCloneable(value)) {
+    return { value, removed: [] }
+  }
+  const removed: string[] = []
+  // ① 顶层浅扫：不可克隆的原始值（函数 / symbol）直接不进副本
+  const scanned = omitKeys(value as Record<string, unknown>, (key, item) => {
+    if (!isNonCloneableValue(item)) {
+      return false
+    }
+    removed.push(key)
+    return true
+  })
+  if (isCloneable(scanned)) {
+    return { value: scanned as T, removed }
+  }
+  // ② 逐个顶层字段试一次；克隆不了的先试「只往下一层」的修复
+  const next: Record<string, unknown> = {}
+  for (const key of Object.keys(scanned)) {
+    const item = scanned[key]
+    if (isCloneable(item)) {
+      next[key] = item
+      continue
+    }
+    const repaired = repairOneLevel(key, item)
+    if (repaired !== null && isCloneable(repaired.value)) {
+      next[key] = repaired.value
+      removed.push(...repaired.removed)
+      continue
+    }
+    if (PROTECTED_SESSION_KEYS.has(key)) {
+      // ③ 关键字段修不动也不删（见上面第 3 条）：带着它返回，让上层如实失败并上报
+      next[key] = item
+      continue
+    }
+    removed.push(key)
+    if (removed.length >= STRIP_PATHS_MAX) {
+      break
+    }
+  }
+  return { value: next as T, removed }
+}
+
+/**
+ * 按判定函数过滤对象键，返回**新对象**（不改调用方传入的那个）。
+ * 为什么不用 `delete`：兜底剔字段是「造一份干净副本去重试」，不是就地改用户的会话对象 ——
+ * 就地 delete 会把内存里那份会话也改掉（用户正在看的消息可能因此少字段）。
+ */
+const omitKeys = (
+  source: Record<string, unknown>,
+  shouldOmit: (key: string, value: unknown) => boolean
+): Record<string, unknown> => {
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(source)) {
+    if (!shouldOmit(key, source[key])) {
+      out[key] = source[key]
+    }
+  }
+  return out
+}
+
+/** 删掉就等于抹掉用户对话的字段：修不动时宁可失败，也不产出空壳 */
+const PROTECTED_SESSION_KEYS = new Set(['id', 'messages', 'title', 'createdAt', 'updatedAt', 'rootMessageId'])
+
+/**
+ * 只往下一层：数组逐元素、对象逐属性剔掉不可克隆成员；修不动返回 null。
+ * 同样是**造新对象**而不是就地删（用户的会话正文不许被兜底逻辑改动）。
+ */
+const repairOneLevel = (
+  key: string,
+  value: unknown
+): { value: unknown; removed: string[] } | null => {
+  const removed: string[] = []
+  if (Array.isArray(value)) {
+    const items = value.map((item, index) => {
+      if (isCloneable(item) || item === null || typeof item !== 'object') {
+        return item
+      }
+      const copy = omitKeys(item as Record<string, unknown>, (member, memberValue) => {
+        if (!isStrippableMember(memberValue)) {
+          return false
+        }
+        removed.push(`${key}[${index}].${member}`)
+        return true
+      })
+      return isCloneable(copy) ? copy : item
+    })
+    return { value: items, removed }
+  }
+  if (typeof value === 'object' && value !== null) {
+    const copy = omitKeys(value as Record<string, unknown>, (member, memberValue) => {
+      if (!isStrippableMember(memberValue)) {
+        return false
+      }
+      removed.push(`${key}.${member}`)
+      return true
+    })
+    return isCloneable(copy) ? { value: copy, removed } : null
+  }
+  return null
+}
+
+// ---------------------------------------------------------------- 持久化存储（防整库被淘汰）
+
+/**
+ * 申请「持久化存储」：`navigator.storage.persist()`。
+ *
+ * 不申请的话整库是 *best-effort* 的，系统在空间紧张时可以直接把整个 IndexedDB 清掉 ——
+ * 界面表现是「清后台再打开，列表空的、连横幅都没有」，而代码里一条报错都不会有。
+ * 这正是「网页端 / 手表端也丢」那条现场：不是我们写失败，是数据被系统淘汰了。
+ *
+ * 三条纪律：
+ *  1. **幂等**：只问一次，结果缓存；重复调用返回同一个 promise；
+ *  2. **失败静默**：没有 `storage.persist`（老 WebView / 部分内嵌浏览器）或用户拒绝，都不抛错；
+ *  3. **不阻塞首屏**：调用方 `void` 掉它，绝不 `await`。
+ */
+let persistRequest: Promise<boolean> | undefined
+
+const storageManager = (): StorageManager | undefined => {
+  if (typeof navigator === 'undefined') {
+    return undefined
+  }
+  const storage = (navigator as Navigator & { storage?: StorageManager }).storage
+  return storage && typeof storage === 'object' ? storage : undefined
+}
+
+export const ensurePersistentStorage = (): Promise<boolean> => {
+  if (persistRequest) {
+    return persistRequest
+  }
+  const storage = storageManager()
+  if (!storage || typeof storage.persist !== 'function') {
+    persistRequest = Promise.resolve(false)
+    return persistRequest
+  }
+  persistRequest = (async () => {
+    try {
+      if (typeof storage.persisted === 'function' && (await storage.persisted())) {
+        return true
+      }
+      return await storage.persist()
+    } catch {
+      return false
+    }
+  })()
+  return persistRequest
+}
+
+/** 当前是否已被批准持久化（`undefined` = 这个宿主没有这套 API）：诊断包用 */
+export const isStoragePersisted = async (): Promise<boolean | undefined> => {
+  const storage = storageManager()
+  if (!storage || typeof storage.persisted !== 'function') {
+    return undefined
+  }
+  try {
+    return await storage.persisted()
+  } catch {
+    return undefined
+  }
+}
+
+const estimateStorage = async (): Promise<{ usage?: number; quota?: number } | undefined> => {
+  const storage = storageManager()
+  if (!storage || typeof storage.estimate !== 'function') {
+    return undefined
+  }
+  try {
+    const estimate = await storage.estimate()
+    return { usage: estimate.usage, quota: estimate.quota }
+  } catch {
+    return undefined
+  }
+}
+
 /**
  * 库结构升级回调：**只新增、不迁移、不清空**（#399 起的口径，v12→v13、v13→v14 都是这样）。
  *
@@ -274,8 +675,116 @@ export class StorageUnavailableError extends Error {
   }
 }
 
+/**
+ * 另一个标签页攥着旧连接、升级被挡住（`blocked` 事件）。
+ *
+ * 之前 `openDB` 的 `blocked` **完全没处理**：请求既不成功也不失败，`getChatDB()` 的 promise
+ * 永远 pending，界面就永远停在「正在加载对话…」——用户以为是卡死，其实是另一个页面没关。
+ */
+export class StorageBlockedError extends Error {
+  /** 界面档位（store 直接读这个字段，因此不必 import 本类、测试替身也不必实现它） */
+  readonly initFailure = 'blocked' as const
+
+  constructor() {
+    super('Another tab holds an older database connection')
+    this.name = 'StorageBlockedError'
+  }
+}
+
+/**
+ * 库版本比代码新（`VersionError`）：`requested version < existing version`。
+ *
+ * 只会出现在「装过更新的构建 / 别的标签页先升过库」之后又回滚到老代码的场景。
+ * 它**不是**「加载失败」：重试一万次也一样，必须让用户更新应用 —— 所以文案单独一条，
+ * 不许复用「加载失败请重试」（那会把用户引进死循环）。
+ */
+export class StorageVersionTooNewError extends Error {
+  readonly initFailure = 'version' as const
+
+  constructor(message = 'The stored database version is newer than this app expects') {
+    super(message)
+    this.name = 'StorageVersionTooNewError'
+  }
+}
+
+/** `blocked` 之后等多久判「对方不配合」：5s 足够让一次正常升级跑完，又不至于让用户盯着转圈 */
+export const BLOCKED_TIMEOUT_MS = 5000
+
+/** 启动期读库失败的两种「换文案」情形（其余仍走「加载失败请重试」） */
+export type StorageInitFailure = 'blocked' | 'version'
+
 /** 运行期能力探测：宿主有没有 IndexedDB。每次调用都问一遍，成本可忽略 */
 export const isIndexedDBAvailable = (): boolean => typeof indexedDB !== 'undefined'
+
+/**
+ * 打开库，并给 `blocked` 补上**超时兜底**：`blocked` 触发后开始计时，超时就以
+ * `StorageBlockedError` 失败（而不是让调用方永远 pending）。
+ *
+ * 超时判负之后底层请求可能还会成功 —— 那时连接已经没人要了，必须 `close()` 掉，
+ * 否则它会一直占着升级锁，把**下一个**标签页也堵死。
+ */
+const openWithBlockedGuard = (onTerminated: () => void): Promise<IDBPDatabase<ChatDB>> => {
+  let armBlocked = () => {}
+  const raw = openDB<ChatDB>(DB_NAME, DB_VERSION, {
+    upgrade: upgradeChatDB,
+    // 连接被浏览器单方面关掉（`terminated`）时必须忘掉缓存，否则后续每次读写都拿到死连接。
+    // 注意：忘掉的是 `getChatDB()` **缓存的那个** promise（由调用方传入），不是这里的包装 promise ——
+    // 两者不是同一个对象，用错一个就会「terminated 之后仍然重开不了」。
+    terminated: () => onTerminated(),
+    blocked: () => armBlocked(),
+  })
+  let opening: Promise<IDBPDatabase<ChatDB>>
+  opening = new Promise<IDBPDatabase<ChatDB>>((resolve, reject) => {
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const closeQuietly = (db: IDBPDatabase<ChatDB>) => {
+      try {
+        db.close()
+      } catch {
+        // 已经关掉 / 已被 terminated：没有可做的
+      }
+    }
+    armBlocked = () => {
+      if (settled || timer !== undefined) {
+        return
+      }
+      timer = setTimeout(() => {
+        if (settled) {
+          return
+        }
+        settled = true
+        void raw.then(closeQuietly, () => {})
+        reject(new StorageBlockedError())
+      }, BLOCKED_TIMEOUT_MS)
+    }
+    raw.then(
+      (db) => {
+        if (timer !== undefined) {
+          clearTimeout(timer)
+        }
+        if (settled) {
+          closeQuietly(db)
+          return
+        }
+        settled = true
+        resolve(db)
+      },
+      (error: unknown) => {
+        if (timer !== undefined) {
+          clearTimeout(timer)
+        }
+        if (settled) {
+          return
+        }
+        settled = true
+        reject(
+          errorNameOf(error) === 'VersionError' ? new StorageVersionTooNewError(errorMessageOf(error)) : error
+        )
+      }
+    )
+  })
+  return opening
+}
 
 export const getChatDB = (): Promise<IDBPDatabase<ChatDB>> => {
   // 缺能力时**不**写进 `dbPromise`：能力是环境属性、不是瞬时故障，
@@ -287,10 +796,12 @@ export const getChatDB = (): Promise<IDBPDatabase<ChatDB>> => {
   if (dbPromise) {
     return dbPromise
   }
-  const opening = openDB<ChatDB>(DB_NAME, DB_VERSION, {
-    upgrade: upgradeChatDB,
-    terminated: () => forgetConnection(opening),
-  }).catch((error: unknown) => {
+  // P0：真要碰库之前先申请「持久化存储」。放在这里而不是某个组件的 useEffect 里，是因为
+  // **任何**读库路径（首屏、诊断、导入）都会经过这里 —— 申请一次就够，且绝不阻塞（`void` 掉）。
+  // 幂等：`ensurePersistentStorage()` 内部只问一次，重复调用返回同一个 promise。
+  void ensurePersistentStorage()
+  let opening: Promise<IDBPDatabase<ChatDB>>
+  opening = openWithBlockedGuard(() => forgetConnection(opening)).catch((error: unknown) => {
     forgetConnection(opening)
     throw error
   })
@@ -343,15 +854,144 @@ export const loadSessionSummaries = async (): Promise<SessionSummary[]> => {
 export const loadSession = async (id: string): Promise<Session | undefined> =>
   runChatStoreRequest('sessions', 'readonly', (store) => store.get(id))
 
-export const saveSession = async (session: Session, files: StoredFile[] = []): Promise<void> => {
-  const summary = storedSummary(session)
-  const tx = await openChatTransaction(['sessions', 'sessionSummaries', 'files'], 'readwrite')
+/** 会话记录（事务 A）涉及的 store */
+const STORES_SESSION = 'sessions,sessionSummaries'
+/** 附件原件（事务 B）涉及的 store */
+const STORES_FILES = 'files'
+
+/**
+ * 会话记录（事务 A）写失败：带上分类与「兜底剔掉了哪些字段」。
+ *
+ * **不导出**：失败一律通过 `saveSession()` 的返回值（`outcome.failure`）交给调用方 ——
+ * 抛异常会让「catch 里忘了标红」重新变成静默丢数据的老路（这正是本单要治的病）。
+ */
+class SessionWriteError extends Error {
+  readonly failure: StorageFailure
+  readonly strippedFields: readonly string[]
+
+  constructor(failure: StorageFailure, strippedFields: readonly string[] = []) {
+    super(failure.message ?? failure.name ?? failure.kind)
+    this.name = 'SessionWriteError'
+    this.failure = failure
+    this.strippedFields = strippedFields
+  }
+}
+
+/** 单个附件的降级结论：只有 id / 字节数 / 分类，**不读正文、不读文件名**。 */
+export type FileDegradation = { id: string; bytes: number; failure: StorageFailure }
+
+export type SaveSessionOutcome = {
+  /** 事务 A 的结论：`null` = 会话与摘要**已提交** */
+  failure: StorageFailure | null
+  /** 事务 B 的结论：只有这些附件没写进去（会话本身已经落盘） */
+  degradedFiles: FileDegradation[]
+  /** `DataCloneError` 兜底剔除的字段路径（不含任何正文） */
+  strippedFields: string[]
+}
+
+export type SaveSessionOptions = {
+  /**
+   * 清理孤儿 blob 时要**避开**的原件 id：调用方手上「刚排队、还没写进去」的附件。
+   * 不清的话会把用户刚发的附件当成孤儿删掉，等于用腾空间的动作制造新的丢数据。
+   */
+  keepFileIds?: readonly string[]
+}
+
+/** 备注型留痕（配额预判这类「不是错误、但要能查」的事实），与 `reportStorageError` 分开 */
+const reportStorageNote = (action: string, detail: string) => {
+  // eslint-disable-next-line no-console
+  console.info(`[storage] ${action}: ${detail}`)
+}
+
+const blobBytesOf = (file: StoredFile): number =>
+  typeof file.blob === 'object' && file.blob !== null && typeof file.blob.size === 'number'
+    ? file.blob.size
+    : 0
+
+const putFilesOnce = async (files: StoredFile[]): Promise<void> => {
+  const tx = await openChatTransaction(['files'], 'readwrite')
   await Promise.all([
     (async () => {
       try {
         for (const file of files) {
-          await tx.objectStore('files').put(file)
+          await tx.store.put(file)
         }
+      } catch (error) {
+        abortTransaction(tx)
+        throw error
+      }
+    })(),
+    tx.done,
+  ])
+}
+
+/**
+ * 清掉**没有任何会话引用**的孤儿 blob，返回腾出的字节数（尽力而为，失败不抛）。
+ *
+ * 为什么只清孤儿、且必须避开 `keep`：
+ *  · 被 `sessionSummaries.fileIds` 索引引用的原件不能动（那是在用的图 / 文件）；
+ *  · `attachment-<sha256>` 前缀的文档附件原件不在 `fileIds` 里（引用关系在 `attachments` 表，
+ *    见 #531），所以按前缀整类跳过；
+ *  · `keep` 是调用方**还没写进去**的原件 id —— 它们是「孤儿」只是暂时的，删了就是丢数据。
+ */
+const sweepOrphanFiles = async (keep: ReadonlySet<string>): Promise<number> => {
+  const tx = await openChatTransaction(['sessionSummaries', 'files'], 'readwrite')
+  let freed = 0
+  try {
+    const referenced = new Set<string>()
+    for (
+      let cursor = await tx.objectStore('sessionSummaries').openCursor();
+      cursor;
+      cursor = await cursor.continue()
+    ) {
+      for (const id of cursor.value.fileIds ?? []) {
+        referenced.add(id)
+      }
+    }
+    const files = tx.objectStore('files')
+    const doomed: string[] = []
+    for (let cursor = await files.openCursor(); cursor; cursor = await cursor.continue()) {
+      const key = String(cursor.key)
+      if (referenced.has(key) || keep.has(key) || isAttachmentBlobKey(key)) {
+        continue
+      }
+      doomed.push(key)
+      freed += blobBytesOf(cursor.value)
+    }
+    // 先收齐再删：边删边 continue 的游标语义依赖实现细节
+    for (const key of doomed) {
+      await files.delete(key)
+    }
+  } catch (error) {
+    abortTransaction(tx)
+    throw error
+  }
+  await tx.done
+  return freed
+}
+
+/**
+ * 配额失败的兜底：**先 `estimate()` 预判，再清孤儿 blob**，最后由调用方重试一次。
+ * 预判结果只用于留痕与「连该腾多少都算不出来」的判断，不拿它当写不写得进去的判据
+ * （`estimate` 的 usage 含已排队但还没提交的数据，永远只能当参考）。
+ */
+const reclaimQuotaSpace = async (keepFileIds: readonly string[] = []): Promise<number> => {
+  const before = await estimateStorage()
+  const freed = await sweepOrphanFiles(new Set(keepFileIds)).catch(() => 0)
+  const after = await estimateStorage()
+  reportStorageNote(
+    'quota reclaim',
+    `usage ${before?.usage ?? '?'}→${after?.usage ?? '?'} / quota ${after?.quota ?? before?.quota ?? '?'} / freed ${freed}`
+  )
+  return freed
+}
+
+const writeSessionRecordOnce = async (session: Session): Promise<void> => {
+  const summary = storedSummary(session)
+  const tx = await openChatTransaction(['sessions', 'sessionSummaries'], 'readwrite')
+  await Promise.all([
+    (async () => {
+      try {
         await tx.objectStore('sessions').put(session)
         await tx.objectStore('sessionSummaries').put(summary)
       } catch (error) {
@@ -361,6 +1001,115 @@ export const saveSession = async (session: Session, files: StoredFile[] = []): P
     })(),
     tx.done,
   ])
+}
+
+/**
+ * **事务 A（必须成功）**：只写 `sessions` + `sessionSummaries`（几 KB）。
+ *
+ * 两条自愈各只做**一次**（重试爆炸比失败更糟）：
+ *  · `DataCloneError` → 剔掉不可克隆字段后重写（返回剔掉了哪些路径）；
+ *  · `QuotaExceededError` → 清孤儿 blob 后重写。
+ * 其余分类直接抛：这类失败重试也是同一个结果。
+ */
+const writeSessionRecord = async (session: Session): Promise<string[]> => {
+  try {
+    await writeSessionRecordOnce(session)
+    return []
+  } catch (error) {
+    const kind = classifyStorageFailure(error)
+    if (kind === 'clone') {
+      const { value, removed } = stripNonCloneableFields(session)
+      if (removed.length > 0) {
+        try {
+          await writeSessionRecordOnce(value)
+          return removed
+        } catch (retryError) {
+          throw new SessionWriteError(storageFailureOf(retryError, STORES_SESSION), removed)
+        }
+      }
+    }
+    if (kind === 'quota') {
+      await reclaimQuotaSpace()
+      try {
+        await writeSessionRecordOnce(session)
+        return []
+      } catch (retryError) {
+        throw new SessionWriteError(storageFailureOf(retryError, STORES_SESSION))
+      }
+    }
+    throw new SessionWriteError(storageFailureOf(error, STORES_SESSION))
+  }
+}
+
+/**
+ * **事务 B（可以失败）**：只写 `files` 里的附件 blob。失败**只降级这些附件**，
+ * 已经提交的会话一个字都不动 —— 这是本单止血的核心：几 KB 的会话不该被几 MB 的 blob 拖下水。
+ */
+const writeAttachmentBlobs = async (
+  files: StoredFile[],
+  keepFileIds: readonly string[]
+): Promise<FileDegradation[]> => {
+  if (files.length === 0) {
+    return []
+  }
+  let failure: StorageFailure
+  try {
+    await putFilesOnce(files)
+    return []
+  } catch (error) {
+    failure = storageFailureOf(error, STORES_FILES)
+    if (failure.kind === 'quota') {
+      await reclaimQuotaSpace(keepFileIds)
+      try {
+        await putFilesOnce(files)
+        return []
+      } catch (retryError) {
+        failure = storageFailureOf(retryError, STORES_FILES)
+      }
+    }
+  }
+  // 批量失败后**逐个**再试一次：一个坏附件不该让同一轮的其它附件一起降级。
+  // 配额不足是全局条件，逐个试只是把同一个失败重复 N 次，跳过。
+  if (files.length > 1 && failure.kind !== 'quota') {
+    const degraded: FileDegradation[] = []
+    for (const file of files) {
+      try {
+        await putFilesOnce([file])
+      } catch (error) {
+        degraded.push({ id: file.id, bytes: blobBytesOf(file), failure: storageFailureOf(error, STORES_FILES) })
+      }
+    }
+    return degraded
+  }
+  return files.map((file) => ({ id: file.id, bytes: blobBytesOf(file), failure }))
+}
+
+/**
+ * 保存一条会话 + 它的附件原件。**两个事务，不再是一个原子事务**（P0）。
+ *
+ * 改造前：`sessions + sessionSummaries + files` 放在**同一个** readwrite 事务里，
+ * 于是任意一个 store 写失败（`DataCloneError` / `QuotaExceededError` / WebKit 写 blob 的
+ * `UnknownError`）= **整条会话一个字都不落盘**，而内存里照常可用 → 用户清后台重开就回到上次状态，
+ * 表现成「聊天记录少了几轮」（实测配额注入下：界面 3 轮、盘上 1 轮）。
+ *
+ * 现在：事务 A 落了就是落了；事务 B 失败只把**这一批附件**记成不可用（返回 `degradedFiles`），
+ * 调用方保留原件引用以便重试。失败分类与自愈见 `classifyStorageFailure` / `writeSessionRecord`。
+ */
+export const saveSession = async (
+  session: Session,
+  files: StoredFile[] = [],
+  options: SaveSessionOptions = {}
+): Promise<SaveSessionOutcome> => {
+  let strippedFields: string[] = []
+  try {
+    strippedFields = await writeSessionRecord(session)
+  } catch (error) {
+    const failure = error instanceof SessionWriteError ? error.failure : storageFailureOf(error, STORES_SESSION)
+    const stripped = error instanceof SessionWriteError ? [...error.strippedFields] : []
+    return { failure, degradedFiles: [], strippedFields: stripped }
+  }
+  const degradedFiles = await writeAttachmentBlobs(files, options.keepFileIds ?? [])
+  return { failure: null, degradedFiles, strippedFields }
 }
 
 /** 未打开的会话也可重命名，只读取该会话，原子更新详情和列表。 */

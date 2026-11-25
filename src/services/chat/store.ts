@@ -47,6 +47,7 @@ import {
   recordAction,
   recordError,
   recordEvent,
+  reportStorageSaveFailure,
 } from '../diagnostics/collector.js'
 import { getApiKey, getBaseUrl, getCurrentSpec, getModel, getProviderKind } from '../api/apiConfig.js'
 import { buildMeta, endpointKeyFromUrl } from '../diagnostics/fields.js'
@@ -143,13 +144,30 @@ const autoTitleTasks = new Map<string, AbortController>()
 type ChatState = {
   ready: boolean
   initError: boolean
+  /**
+   * 启动期读库失败的**具体档位**：`blocked`（另一个标签页攥着旧连接）/ `version`（库比代码新）。
+   * 这两种都**不该**复用「加载失败请重试」——前者要用户去关别的页面，后者要用户更新应用，
+   * 重试一万次都是同一个结果。`null` = 没有这一类失败。
+   */
+  initFailure: db.StorageInitFailure | null
   /** 历史导入或全部删除期间锁定交互，提交成功前仍展示原有记录。 */
   importingHistory: boolean
   /** 仅列表元数据，按 updatedAt 降序；流式消息更新不会改变此数组。 */
   sessions: SessionSummary[]
   sessionCache: Record<string, Session>
   sessionLoadErrors: Record<string, boolean>
-  sessionSaveErrors: Record<string, boolean>
+  /**
+   * 会话没存到本机的原因（P0）。**值从布尔改成结构化分类**（`quota` / `clone` / `unavailable` / `unknown`），
+   * 因为不同原因的文案与「要不要给重试按钮」完全不同；`boolean` 只为兼容旧值读取保留
+   * （旧值 `true` 一律当可重试档，见 `db.normalizeStorageFailure`）。
+   */
+  sessionSaveErrors: Record<string, db.StorageFailure | boolean>
+  /**
+   * 附件降级（事务 B 失败）：**会话已经落盘**，坏的只是这些附件的 blob。
+   * 与 `sessionSaveErrors` 分开存：混在一起会让「对话丢了」和「图看不清」用同一句话提示，
+   * 而这两件事对用户的后果完全不同（前者丢内容，后者丢的是原件）。
+   */
+  degradedAttachments: Record<string, DegradedAttachments>
   /** null 表示新对话（欢迎页） */
   activeId: string | null
   /** 正在生成回复的会话 */
@@ -165,14 +183,23 @@ type ChatState = {
   waitHints: Record<string, WaitHint>
 }
 
+/** 附件降级：会话在、原件不在（只记 id / 字节数 / 分类，不存正文） */
+export type DegradedAttachments = {
+  failure: db.StorageFailure
+  ids: string[]
+  bytes: number
+}
+
 export const useChatStore = create<ChatState>(() => ({
   ready: false,
   initError: false,
+  initFailure: null,
   importingHistory: false,
   sessions: [],
   sessionCache: {},
   sessionLoadErrors: {},
   sessionSaveErrors: {},
+  degradedAttachments: {},
   activeId: null,
   streaming: {},
   importSkipped: [],
@@ -434,46 +461,279 @@ const updateReply = (sessionId: string, reply: AssistantMessage) =>
     ),
   }))
 
+const attachmentBytesOf = (files: db.StoredFile[] | undefined): number =>
+  (files ?? []).reduce(
+    (sum, file) => sum + (typeof file.blob?.size === 'number' ? file.blob.size : 0),
+    0
+  )
+
+/** 还在排队等着写进去的原件 id：清理孤儿 blob 时必须避开它们（否则等于用腾空间制造新丢数据） */
+const keepFileIds = (): string[] =>
+  Array.from(pendingFiles.values()).flatMap((files) => files.map((file) => file.id))
+
+/**
+ * 同一个失败重复上报会刷爆日志（流式收尾会反复 persist）：
+ * 只有「会话 + 分类 + 步骤」变了才再报一条，保存成功后清空。
+ */
+const reportedSaveFailures = new Set<string>()
+const reportedDegradations = new Set<string>()
+/** 「兜底剔除救回来了」只报一次：这个事实不会随保存成功而失效，同一个坏字段不该每次落盘都报 */
+const reportedRecoveries = new Set<string>()
+
+const failureAsError = (failure: db.StorageFailure): Error => {
+  const error = new Error(failure.message ?? failure.kind)
+  error.name = failure.name ?? 'StorageFailure'
+  return error
+}
+
+const clearSaveFailure = (sessionId: string) =>
+  set((state) => ({
+    sessionSaveErrors: Object.fromEntries(
+      Object.entries(state.sessionSaveErrors).filter(([id]) => id !== sessionId)
+    ),
+  }))
+
+const clearDegraded = (sessionId: string) =>
+  set((state) => ({
+    degradedAttachments: Object.fromEntries(
+      Object.entries(state.degradedAttachments).filter(([id]) => id !== sessionId)
+    ),
+  }))
+
+/**
+ * 会话没存到本机：**内存状态 + 诊断包一起记**（P0 治「下次还查不出来」）。
+ *
+ * 改造前只有 `sessionSaveErrors[id] = true`，而且只活在内存里 —— 进程一结束，
+ * 数据丢了、连「丢过」这件事都没了。现在：
+ *  · store 里留结构化分类（`kind`），横幅据此分档；
+ *  · `reportStorageSaveFailure()` 写一条 error 级日志（kind / error.name / store / 消息条数 / 附件字节数）。
+ */
+const markSaveFailure = (
+  sessionId: string,
+  failure: db.StorageFailure,
+  step: string,
+  stats: { messages: number; attachmentBytes: number; strippedFields?: readonly string[] }
+) => {
+  const key = `${sessionId}|${failure.kind}|${step}`
+  if (!reportedSaveFailures.has(key)) {
+    reportedSaveFailures.add(key)
+    reportStorageSaveFailure(
+      {
+        kind: failure.kind,
+        stores: failure.stores ?? 'sessions,sessionSummaries',
+        messages: stats.messages,
+        attachmentBytes: stats.attachmentBytes,
+        strippedFields: stats.strippedFields,
+        step,
+      },
+      failureAsError(failure)
+    )
+  }
+  set((state) => ({
+    sessionSaveErrors: { ...state.sessionSaveErrors, [sessionId]: failure },
+  }))
+}
+
+/**
+ * 附件降级（会话已落盘、blob 没写进去）：单独一条状态 + 单独一条诊断。
+ *
+ * 「只降级该附件」的落点就在这里 —— 会话记录已经在事务 A 提交了，这里连回滚的念头都不该有。
+ * 原件引用留在 `pendingFiles` 里，用户点「重试」时会再写一次。
+ */
+const markDegradedAttachments = (
+  sessionId: string,
+  degraded: db.FileDegradation[],
+  messages: number
+) => {
+  const bytes = degraded.reduce((sum, item) => sum + item.bytes, 0)
+  const failure = degraded[0]?.failure ?? { kind: 'unknown' as const }
+  const key = `${sessionId}|${failure.kind}|${degraded.map((item) => item.id).join(',')}|${bytes}`
+  if (!reportedDegradations.has(key)) {
+    reportedDegradations.add(key)
+    reportStorageSaveFailure(
+      {
+        kind: failure.kind,
+        stores: failure.stores ?? 'files',
+        messages,
+        attachmentBytes: bytes,
+        step: 'save attachments',
+      },
+      failureAsError(failure)
+    )
+  }
+  set((state) => ({
+    degradedAttachments: {
+      ...state.degradedAttachments,
+      [sessionId]: { failure, ids: degraded.map((item) => item.id), bytes },
+    },
+  }))
+}
+
+/**
+ * 读库失败的档位：只读错误对象上的 `initFailure` 标记 / 类名，**不 import 错误类** ——
+ * 测试替身（`tests/fixtures/**` 的假 db）不必为实现两个错误类埋单，而真实现的
+ * `StorageBlockedError` / `StorageVersionTooNewError` 自带 `initFailure`（见 `db.ts`）。
+ */
+const initFailureOf = (error: unknown): db.StorageInitFailure | null => {
+  const bag = (typeof error === 'object' && error !== null ? error : {}) as {
+    initFailure?: unknown
+    name?: unknown
+  }
+  if (bag.initFailure === 'blocked' || bag.initFailure === 'version') {
+    return bag.initFailure
+  }
+  if (bag.name === 'StorageBlockedError') {
+    return 'blocked'
+  }
+  if (bag.name === 'StorageVersionTooNewError') {
+    return 'version'
+  }
+  return null
+}
+
+/** `saveSession()` 的兜底形状：替身 / 老实现可能什么都不返回 */
+const EMPTY_OUTCOME: db.SaveSessionOutcome = { failure: null, degradedFiles: [], strippedFields: [] }
+
+/** 落盘过程本身抛出（不是 `outcome.failure`）时的兜底分类：只可能是替身或未预料的代码路径 */
+const failureOfThrown = (error: unknown, stores: string): db.StorageFailure => {
+  const bag = (typeof error === 'object' && error !== null ? error : {}) as {
+    name?: unknown
+    message?: unknown
+  }
+  const name = typeof bag.name === 'string' ? bag.name : undefined
+  const message = typeof bag.message === 'string' ? bag.message : undefined
+  return {
+    kind: 'unknown',
+    ...(name === undefined ? {} : { name }),
+    ...(message === undefined ? {} : { message: message.slice(0, 200) }),
+    stores,
+    at: Date.now(),
+  }
+}
+
 const persist = (sessionId: string) => {
-  const session = getSession(sessionId)
-  if (session) {
-    unsavedSessions.add(sessionId)
-    if (deletingSessions.has(sessionId)) {
+  const cached = getSession(sessionId)
+  unsavedSessions.add(sessionId)
+  if (deletingSessions.has(sessionId)) {
+    return undefined
+  }
+  const epoch = historyEpoch
+  const files = pendingFiles.get(sessionId)
+
+  /** 落盘之后的状态收敛：缓存路径与「从库里读回来再写」路径共用这一份 */
+  const settled = (session: Session, fromCache: boolean, outcome: db.SaveSessionOutcome) => {
+    if (epoch !== historyEpoch) {
       return undefined
     }
-    const epoch = historyEpoch
-    const files = pendingFiles.get(sessionId)
-    return db
-      .saveSession(session, files)
-      .then(() => {
-        if (epoch !== historyEpoch || !getSession(sessionId)) {
-          return undefined
-        }
-        if (pendingFiles.get(sessionId) === files) {
-          pendingFiles.delete(sessionId)
-        }
-        if (getSession(sessionId) === session) {
-          unsavedSessions.delete(sessionId)
-          set((state) => ({
-            sessionSaveErrors: Object.fromEntries(
-              Object.entries(state.sessionSaveErrors).filter(([id]) => id !== sessionId)
-            ),
-          }))
-          trimSessionCache()
-        }
-        return true
+    // 事务 A 失败：会话**没**落盘。这才是「这段对话没存到本机」那一档，附件降级不走这里。
+    if (outcome.failure) {
+      markSaveFailure(sessionId, outcome.failure, 'save session', {
+        messages: session.messages.length,
+        attachmentBytes: attachmentBytesOf(files),
+        strippedFields: outcome.strippedFields,
       })
+      return false
+    }
+    if (outcome.strippedFields.length > 0) {
+      // 兜底救回来了：会话落了盘，但「这次剔掉了哪些字段」必须留痕（不是用户的错，也不该无声）。
+      // 同一个会话的同一次剔除只报一次：一个坏字段会被后续每次落盘都命中，全报就是刷屏。
+      const recoveryKey = `${sessionId}|clone|${outcome.strippedFields.join(',')}`
+      if (!reportedRecoveries.has(recoveryKey)) {
+        reportedRecoveries.add(recoveryKey)
+        recordError(
+          'storage.saveFailure: recovered by stripping fields',
+          {
+            'storage.kind': 'clone',
+            'storage.stores': 'sessions,sessionSummaries',
+            'storage.messages': session.messages.length,
+            'storage.attachmentBytes': attachmentBytesOf(files),
+            'storage.stripped': outcome.strippedFields.join(','),
+          },
+          failureAsError({ kind: 'clone', name: 'DataCloneError' })
+        )
+      }
+    }
+    if (outcome.degradedFiles.length === 0) {
+      if (pendingFiles.get(sessionId) === files) {
+        pendingFiles.delete(sessionId)
+      }
+      clearDegraded(sessionId)
+    } else {
+      markDegradedAttachments(sessionId, outcome.degradedFiles, session.messages.length)
+    }
+    if (!fromCache) {
+      // 从库里读回来的：内存里没有正文，不存在「还有新改动没落盘」的可能
+      unsavedSessions.delete(sessionId)
+    } else if (getSession(sessionId) === session) {
+      unsavedSessions.delete(sessionId)
+      clearSaveFailure(sessionId)
+      reportedSaveFailures.clear()
+      trimSessionCache()
+    }
+    // 附件降级时**留在待保存集合里**：点「重试」会再写一次这批 blob
+    if (outcome.degradedFiles.length > 0) {
+      unsavedSessions.add(sessionId)
+    }
+    return true
+  }
+
+  const save = (session: Session, fromCache: boolean) => {
+    // 同步发起落盘（与改造前一致：调用方在同一 tick 里就能看到写请求），同步抛出也转成 rejection
+    const invoked = (() => {
+      try {
+        return db.saveSession(session, files, { keepFileIds: keepFileIds() })
+      } catch (error) {
+        return Promise.reject(error)
+      }
+    })()
+    return Promise.resolve(invoked)
+      .then((raw) => settled(session, fromCache, raw ?? EMPTY_OUTCOME))
       .catch((error: unknown) => {
         db.reportStorageError('save session')(error)
-        if (epoch === historyEpoch && getSession(sessionId)) {
-          set((state) => ({
-            sessionSaveErrors: { ...state.sessionSaveErrors, [sessionId]: true },
-          }))
+        if (epoch === historyEpoch && (!fromCache || getSession(sessionId) !== undefined)) {
+          markSaveFailure(sessionId, failureOfThrown(error, 'sessions,sessionSummaries'), 'save session', {
+            messages: session.messages.length,
+            attachmentBytes: attachmentBytesOf(files),
+          })
         }
         return false
       })
   }
-  return undefined
+
+  if (cached !== undefined) {
+    return save(cached, true)
+  }
+  /**
+   * **缓存未命中不再静默 return**（改造前的 bug：`sessionCache` 里没有这条会话时直接返回，
+   * 既不写库也不报错 —— 内存里看着一切正常，其实什么都没落盘）。现在改成从库里读回来再写；
+   * 读不回来才标失败 —— 「读不回来」与「本来就没事」必须能分开。
+   */
+  return Promise.resolve(db.loadSession(sessionId))
+    .catch((error: unknown) => {
+      db.reportStorageError('read session for persist')(error)
+      return undefined
+    })
+    .then((session) => {
+      if (epoch !== historyEpoch) {
+        return undefined
+      }
+      if (session === undefined) {
+        markSaveFailure(
+          sessionId,
+          {
+            kind: 'unknown',
+            name: 'SessionMissingFromCache',
+            message: 'session body is neither in memory nor readable from IndexedDB',
+            stores: 'sessions',
+            at: Date.now(),
+          },
+          'persist read-back',
+          { messages: 0, attachmentBytes: attachmentBytesOf(files) }
+        )
+        return false
+      }
+      return save(session, false)
+    })
 }
 
 export const saveSessionPrompt = async (id: string, draft: string) => {
@@ -573,7 +833,7 @@ export const initChat = (): Promise<void> => {
     return initTask
   }
   const epoch = historyEpoch
-  set({ initError: false })
+  set({ initError: false, initFailure: null })
   initTask = (async () => {
     try {
       const summaries = await db.loadSessionSummaries()
@@ -582,7 +842,7 @@ export const initChat = (): Promise<void> => {
       }
     } catch (error) {
       if (epoch === historyEpoch) {
-        set({ initError: true })
+        set({ initError: true, initFailure: initFailureOf(error) })
         db.reportStorageError('read local sessions')(error)
       }
     } finally {
@@ -835,10 +1095,12 @@ export const importHistoryInto = async (
       set({
         ready: true,
         initError: false,
+        initFailure: null,
         sessions: sortSessions(summaries),
         sessionCache: {},
         sessionLoadErrors: {},
         sessionSaveErrors: {},
+        degradedAttachments: {},
         importSkipped: skipped,
         importSummary: summary,
         activeId: null,
@@ -852,10 +1114,12 @@ export const importHistoryInto = async (
       set({
         ready: true,
         initError: false,
+        initFailure: null,
         sessions: sortSessions(summaries),
         sessionCache: {},
         sessionLoadErrors: {},
         sessionSaveErrors: {},
+        degradedAttachments: {},
         importSkipped: skipped,
         importSummary: summary,
         // 当前打开的会话本地还在就继续停在它上面，别把用户从正在看的那条会话上踢走。
@@ -1054,6 +1318,9 @@ const removeSessionData = async (id: string): Promise<boolean> => {
       ),
       sessionSaveErrors: Object.fromEntries(
         Object.entries(state.sessionSaveErrors).filter(([key]) => key !== id)
+      ),
+      degradedAttachments: Object.fromEntries(
+        Object.entries(state.degradedAttachments).filter(([key]) => key !== id)
       ),
       activeId: state.activeId === id ? null : state.activeId,
     }))

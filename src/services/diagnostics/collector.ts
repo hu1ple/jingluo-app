@@ -617,6 +617,25 @@ const readStorageBytes = async (): Promise<number | undefined> => {
   }
 }
 
+/**
+ * `navigator.storage.persisted()`：整库有没有被批准「持久化」。
+ *
+ * 为什么必须进诊断包：`false` 表示这份数据只是 best-effort —— 系统可以随时把整库淘汰掉，
+ * 而应用侧一条错都不会有（界面表现是「清后台再打开，列表空的、连横幅都没有」）。
+ * 有了这个布尔，「用户说记录没了但我们查不到任何写失败」就有了一条可验证的解释。
+ */
+const readStoragePersisted = async (): Promise<boolean | undefined> => {
+  try {
+    const storage = (navigator as Navigator & { storage?: StorageManager }).storage
+    if (!storage || typeof storage.persisted !== 'function') {
+      return undefined
+    }
+    return await storage.persisted()
+  } catch {
+    return undefined
+  }
+}
+
 /** 周期性 / 关键动作后的状态快照：会话数、附件数、IndexedDB 占用、provider/model、当前界面 */
 export const captureStateSnapshot = async (reason: string): Promise<LogEntry> => {
   let facts: SnapshotFacts = defaultFacts
@@ -628,6 +647,7 @@ export const captureStateSnapshot = async (reason: string): Promise<LogEntry> =>
     // 拿不到就用默认值，快照本身仍然要写
   }
   const storageBytes = await readStorageBytes()
+  const storagePersisted = await readStoragePersisted()
   return record('state_snapshot', 'info', `state: sessions=${facts.sessions} files=${facts.files} ${facts.provider}/${facts.model} view=${facts.view}`, {
     reason,
     sessions: facts.sessions,
@@ -637,8 +657,47 @@ export const captureStateSnapshot = async (reason: string): Promise<LogEntry> =>
     view: facts.view,
     configured: facts.configured,
     ...(storageBytes === undefined ? {} : { storageBytes }),
+    ...(storagePersisted === undefined ? {} : { 'storage.persisted': storagePersisted }),
   })
 }
+
+/**
+ * 本机保存失败（P0「清后台后聊天记录不见了」）：**必须留下证据**。
+ *
+ * 改造前这条信息只活在内存里（`sessionSaveErrors`），进程一结束就没了 —— 用户重启后
+ * 既丢数据又不知道自己丢了，我们也拿不到任何线索。现在每次失败都写一条 error 级日志，
+ * 带 `kind` / `error.name` / 涉及的 store / 该会话消息条数 / 附件字节数。
+ *
+ * **只记元数据**：会话正文、附件正文、文件名一个都不进这条（`strippedFields` 只有字段路径）。
+ */
+export type StorageSaveFailureReport = {
+  /** `classifyStorageFailure()` 的四类取值 */
+  kind: string
+  /** 失败涉及的 object store（逗号分隔） */
+  stores: string
+  /** 该会话的消息条数（体积感：几 KB 的会话不该被几 MB 的 blob 拖下水） */
+  messages: number
+  /** 同一轮要写的附件字节数 */
+  attachmentBytes: number
+  /** 兜底剔除掉的字段路径（不含值） */
+  strippedFields?: readonly string[]
+  /** 哪个调用点报的（`save session` / `retry save` …），写进 msg，便于按它筛 */
+  step: string
+}
+
+export const reportStorageSaveFailure = (
+  report: StorageSaveFailureReport,
+  error?: unknown
+): LogEntry =>
+  recordError(`storage.saveFailure: ${report.kind} @ ${report.step}`, {
+    ...(report.strippedFields === undefined || report.strippedFields.length === 0
+      ? {}
+      : { 'storage.stripped': report.strippedFields.join(',') }),
+    'storage.kind': report.kind,
+    'storage.stores': report.stores,
+    'storage.messages': report.messages,
+    'storage.attachmentBytes': report.attachmentBytes,
+  }, error)
 
 export type ActionRecord = { t: number; action: string }
 

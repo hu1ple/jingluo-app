@@ -308,6 +308,8 @@ export const en = {
   settingsAnnouncementExpand: 'Show full text',
   settingsAnnouncementCollapse: 'Show less',
   settingsAnnouncementPopupDismiss: 'Got it',
+  // Forced-read countdown (disabled "Got it" while the 5s gate is running; `{seconds}` = seconds left)
+  settingsAnnouncementPopupDismissCount: 'Got it ({seconds}s)',
   // Relative times (picked by `components/announcements/relativeTime.ts`)
   announceTimeJustNow: 'Just now',
   announceTimeMinutesAgo: '{count} min ago',

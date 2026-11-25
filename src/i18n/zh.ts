@@ -302,6 +302,8 @@ export const zh = {
   settingsAnnouncementExpand: '展开全文',
   settingsAnnouncementCollapse: '收起',
   settingsAnnouncementPopupDismiss: '知道了',
+  // 强制阅读倒计时（`AnnouncementPopup` 5 秒内按钮禁用时用它，`{seconds}` 是剩余秒数）
+  settingsAnnouncementPopupDismissCount: '知道了（{seconds}s）',
   // 相对时间（`components/announcements/relativeTime.ts` 按档位挑一条）
   announceTimeJustNow: '刚刚',
   announceTimeMinutesAgo: '{count} 分钟前',

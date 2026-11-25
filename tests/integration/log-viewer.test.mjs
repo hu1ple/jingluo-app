@@ -16,6 +16,8 @@ import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { serveDist } from '../helpers/runtime.mjs'
 import { assertNoEgress, installEgressGate } from '../helpers/helpers.mjs'
+import { BUILTIN_KEY_CLAIM_STUB } from '../fixtures/consume-gateway-stubs/builtin-key-claim.mjs'
+
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const DIST = path.resolve(root, process.env.LOGVIEW_DIST || 'dist')
@@ -83,7 +85,7 @@ const openFeedback = async (page) => {
     await page.getByRole('button', { name: /边栏|菜单|sidebar|menu/i }).first().click()
     await page.getByRole('button', { name: /设置|Settings/ }).last().click()
   }
-  await page.getByRole('tab', { name: /数据管理|Data/ }).first().click()
+  await page.getByTestId('settings-row-data').first().click()
   await page.getByRole('button', { name: /写反馈/ }).first().click()
   const form = page.locator('[role="dialog"]:has(#feedback-description)')
   await form.locator('#feedback-description').waitFor({ state: 'visible' })
@@ -219,7 +221,7 @@ try {
      * 日志是本页 `__diagnostics` 进程内夹具，全部通路都在被测产物自己的 origin 上；
      * 白名单里只写它（精确 host:port）。
      */
-    await installEgressGate(page, { appUrl: server.url, allowHosts: [new URL(server.url).host] })
+    await installEgressGate(page, { stubs: [BUILTIN_KEY_CLAIM_STUB], appUrl: server.url, allowHosts: [new URL(server.url).host] })
     await page.goto(`${server.url}/?diag-debug`, { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(() => !!window.__diagnostics)
 

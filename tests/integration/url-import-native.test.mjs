@@ -12,6 +12,8 @@ import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { buildArchiveZip, textPayload } from '../fixtures/domain05/archive-fixture.mjs'
 import { assertNoEgress, installEgressGate } from '../helpers/helpers.mjs'
+import { BUILTIN_KEY_CLAIM_STUB } from '../fixtures/consume-gateway-stubs/builtin-key-claim.mjs'
+
 
 const APP_URL = process.env.APP_URL || 'http://127.0.0.1:5181'
 // fileURLToPath：Windows 下 pathname 是 /D:/...，当路径用会变成 D:\D:\...
@@ -94,7 +96,7 @@ const openApp = async ({ payload, deferred = false }) => {
    * 白名单里只写被测产物自己的 origin（精确 host:port）。万一 mock 漏了、请求真发出去，总闸会记录 + abort
    * 并在收尾断言里点名 `host+path`。
    */
-  await installEgressGate(page, { appUrl: APP_URL, allowHosts: [new URL(APP_URL).host] })
+  await installEgressGate(page, { stubs: [BUILTIN_KEY_CLAIM_STUB], appUrl: APP_URL, allowHosts: [new URL(APP_URL).host] })
   await page.goto(APP_URL, { waitUntil: 'domcontentloaded' })
   await page.evaluate(() => window.localStorage.clear())
   await page.reload({ waitUntil: 'domcontentloaded' })
@@ -106,7 +108,7 @@ const openApp = async ({ payload, deferred = false }) => {
       .click()
   }
   await page
-    .getByRole('tab', { name: /数据管理|Data/ })
+    .getByTestId('settings-row-data')
     .first()
     .click()
   return { browser, page, consoleErrors }

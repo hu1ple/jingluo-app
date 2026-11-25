@@ -25,6 +25,7 @@ import { chromium } from 'playwright'
 import { defaultDist, serveDir, verifyDist } from '../helpers/env.mjs'
 import { assertNoEgress, installEgressGate } from '../helpers/helpers.mjs'
 import { KNOWN_GAPS, NEGATIVE_CASES, TOAST } from '../fixtures/domain08-09/feedback-negative-cases.mjs'
+import { BUILTIN_KEY_CLAIM_STUB } from '../fixtures/consume-gateway-stubs/builtin-key-claim.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, '../..')
@@ -94,7 +95,7 @@ const openFeedbackDialog = async (page, appUrl) => {
     await page.getByRole('button', { name: /设置|Settings/ }).last().click()
   }
   await settle(page)
-  const dataTab = page.getByRole('tab', { name: /数据管理|Data/ })
+  const dataTab = page.getByTestId('settings-row-data')
   if ((await dataTab.count()) > 0) await dataTab.first().click()
   await page.waitForTimeout(300)
   await page.getByRole('button', { name: /写反馈/ }).first().click()
@@ -117,7 +118,7 @@ const runCase = async (browser, appUrl, row) => {
      * `feedback-export` 与 L0 的单测）；白名单里只有被测产物自己的 origin —— 一旦界面背地里
      * 往 `feedback.rose7.cn` 之类的地方发东西，这一行的失败就会点名那个 host。
      */
-    await installEgressGate(page, { appUrl })
+    await installEgressGate(page, { stubs: [BUILTIN_KEY_CLAIM_STUB], appUrl })
     await page.addInitScript(PATCHES[row.patch])
     const form = await openFeedbackDialog(page, appUrl)
 

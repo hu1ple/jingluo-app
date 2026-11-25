@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { buildArchive, textPayload } from '../fixtures/domain05/archive-fixture.mjs'
 import { assertNoEgress, installEgressGate } from '../helpers/helpers.mjs'
+import { BUILTIN_KEY_CLAIM_STUB } from '../fixtures/consume-gateway-stubs/builtin-key-claim.mjs'
+
 
 const APP_URL = (process.env.APP_URL || 'http://127.0.0.1:5181').replace(/\/+$/, '')
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -260,7 +262,7 @@ const browser = await chromium.launch()
    * 本用例把 CapacitorHttp 换成按 Range 头分块返回的进程内 mock，`https://obs.example.test/...` 不会真出网；
    * 白名单里只写被测产物自己的 origin（精确 host:port）。mock 漏了、请求真发出去 → 记录 + abort + 收尾点名。
    */
-  await installEgressGate(page, { appUrl: APP_URL, allowHosts: [new URL(APP_URL).host] })
+  await installEgressGate(page, { stubs: [BUILTIN_KEY_CLAIM_STUB], appUrl: APP_URL, allowHosts: [new URL(APP_URL).host] })
   await page.goto(APP_URL, { waitUntil: 'domcontentloaded' })
   await page.evaluate(() => window.localStorage.clear())
   await page.reload({ waitUntil: 'domcontentloaded' })
@@ -272,7 +274,7 @@ const browser = await chromium.launch()
       .click()
   }
   await page
-    .getByRole('tab', { name: /数据管理|Data/ })
+    .getByTestId('settings-row-data')
     .first()
     .click()
   return { browser, page, consoleErrors }

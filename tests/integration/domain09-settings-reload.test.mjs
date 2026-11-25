@@ -44,13 +44,13 @@ const openSettings = async (page) => {
 }
 
 const openGeneralTab = async (page) => {
-  const tab = page.getByRole('tab', { name: /通用设置|General/ })
+  const tab = page.getByTestId('settings-row-general')
   if ((await tab.count()) > 0) await tab.first().click()
   await settle(page, 400)
 }
 
 const openDataTab = async (page) => {
-  const tab = page.getByRole('tab', { name: /数据管理|Data/ })
+  const tab = page.getByTestId('settings-row-data')
   if ((await tab.count()) > 0) await tab.first().click()
   await settle(page, 400)
 }

@@ -106,9 +106,9 @@ const openModelSource = async (page) => {
     await entry.last().click()
     await page.waitForTimeout(600)
   }
-  await page.getByRole('tab', { name: /账户与消费|Account/ }).first().click()
+  await page.getByTestId('account-consume-open').first().click()
   await page.waitForTimeout(500)
-  await page.getByRole('tab', { name: /模型来源|Model source/ }).first().click()
+  await page.getByTestId('account-consume-source').first().click()
   await page.waitForTimeout(600)
   return page.getByRole('dialog').first()
 }

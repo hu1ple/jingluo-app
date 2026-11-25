@@ -17,9 +17,35 @@ const served = await serveDir(STANDARD, { port: process.env.PORT, label: '标准
 const port = served.port
 /** #686：出站总闸的失败会收进这里，再下面用一条 assert 定成红 */
 const failures = []
+/**
+ * 「设置层在场吗」——按设置层自己的标识判，**不是**按「屏幕上有没有一层 `role="dialog"`」。
+ *
+ * 为什么必须这样：公告弹层（`settings-announcement-popup`）、启动更新提示（`StartupUpdatePrompt`）、
+ * 分支确认（`SessionBranchDialog`）、图片预览、附件面板**都**是 `Modal` → 都带 `role="dialog"`。
+ * 用 dialog 计数当「设置开着」，等于把这五个东西当成同一个 —— 2026-11-25 那条
+ * 「无 Key 首启自动打开设置」的过期断言就是靠公告弹层蒙过去的。
+ *
+ * 设置层自己的两个标识（`src/components/settings/SettingsDialog.tsx`）：
+ * 一级列表 `settings-list`、二级页 `settings-page-<page>`。两者有一个在，设置层就在。
+ */
+const SETTINGS_LAYER = '[data-testid="settings-list"], [data-testid^="settings-page-"]'
+const settingsLayer = (scope) => scope.locator(SETTINGS_LAYER)
 const browser = await chromium.launch({ headless: true })
 try {
   const context = await browser.newContext({ viewport: { width: 393, height: 851 }, isMobile: true, deviceScaleFactor: 1, locale: 'zh-CN', acceptDownloads: true })
+  /**
+   * 场景前提：**产物一开屏就是「已配置」**（种一把官方 Key），本用例只测「离线导出日志」。
+   *
+   * 为什么要种：`TEST_AUTH_SEAM=1` 让产物认为已登录，于是**未配置**的首屏会走 #803
+   * 「登录后自动领内置 Key」→ 两条真实的 `GET https://apia.ecsafe.cn/api/v1/keys?search=app-<设备前缀>`
+   * （实测：不种 Key 时首屏就有 2 次出站）。那既不是本用例的对象，也会让下面「0 次真实出网」
+   * 的断言红在一个与本用例无关的链路上。种了之后总闸实测 0 次出站 —— 断言的含义没变，
+   * 依然是「导出这条路一次网都不许出」。
+   */
+  await context.addInitScript(() => {
+    window.localStorage.setItem('chat-demo:provider-kind', 'deepseek')
+    window.localStorage.setItem('chat-demo:api-key', 'sk-testkey-feedback-export')
+  })
   const page = await context.newPage()
   /**
    * #686：出站总闸，**必须在 `page.goto` 之前**装上（首屏请求一旦发出去就收不回来，#673 的 g16 就是这么漏的）。
@@ -44,13 +70,31 @@ try {
     window.__diagnostics.setFeedbackTransport({ name: 'offline-test', send: async () => ({ ok: false, error: 'network' }) })
     window.__diagnostics.recordError('offline-test marker', { 'http.status': 503, token: 'PRIVATE_TOKEN', content: 'PRIVATE_CHAT' })
   })
-  if (await page.getByRole('dialog').count() === 0) {
-    await page.getByRole('button', { name: /侧边栏|菜单|sidebar|menu/i }).first().click()
-    await page.getByRole('button', { name: /设置|Settings/ }).last().click()
+  // 进设置：**按设置层自己的标识**等它出现，而不是「屏幕上有没有一层 role=dialog」。
+  // 改前这里写的是 `if (dialog 数为 0) { 点 /侧边栏|菜单|sidebar|menu/ → 点设置 }`，两个问题叠在一起：
+  //   1) 那个分支从来没执行过 —— 它靠的是「无 Key 首启会自动弹设置」这个**已废掉的旧行为**
+  //      （2026-11-25 产品决定：压根不自动打开设置）。也就是说里面那行失效的选择器
+  //      `/侧边栏|菜单|sidebar|menu/` 一直是死代码：本仓的抽屉开关文案是「打开边栏 / 收起边栏」
+  //      （i18n `expandSiderbarButton` / `collapseSiderbarButton`），一个都不匹配。
+  //      旧行为一撤，分支开始真的执行，于是这条用例当场红在「找不到菜单按钮」。
+  //   2) 「有 dialog」不等于「设置开着」：公告弹层（`settings-announcement-popup`）和启动更新提示
+  //      也都是 `role="dialog"`，共用 `Modal`。靠 dialog 计数判断会把它们当成设置层。
+  // 现在它守护的事：**从首屏走到「设置 → 数据管理 → 写反馈」这条路必须点得通**（不是「碰巧已经开着」）。
+  if ((await settingsLayer(page).count()) === 0) {
+    const expandSidebar = page.getByRole('button', { name: /^(打开边栏|Open sidebar)$/ })
+    if ((await expandSidebar.count()) > 0) {
+      await expandSidebar.first().click()
+    }
+    await page.getByRole('button', { name: /^设置$|^Settings$/ }).first().click()
   }
-  await page.getByRole('tab', { name: /数据管理|Data/ }).first().click()
+  await settingsLayer(page).first().waitFor({ state: 'visible', timeout: 10_000 })
+  // 设置改版（2026-11-24）后是「一级列表 + 二级页」：「数据管理」是列表里的一行
+  // （`settings-row-data`），不再是 `role="tab"` —— 全仓已经没有任何 role=tab 了。
+  await page.getByTestId('settings-row-data').first().click()
   await page.getByRole('button', { name: /写反馈/ }).first().click()
-  const form = page.getByRole('dialog').last()
+  // 反馈弹层按自己的标题认（`Modal` 用 `aria-labelledby` 把标题挂成可访问名），
+  // 不用 `.last()`：同一时刻屏幕上有设置层 + 反馈层两层 dialog，位置/顺序不是身份。
+  const form = page.getByRole('dialog', { name: /^(反馈与日志|Feedback & logs)$/ })
   const save = form.getByRole('button', { name: '保存日志文件' })
   await save.waitFor({ state: 'visible' })
   const out = path.join(root, 'docs/ui')

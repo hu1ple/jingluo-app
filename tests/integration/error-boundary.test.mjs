@@ -22,6 +22,7 @@ import { chromium } from 'playwright'
 import { seedClaimedApiKey } from '../helpers/ours-claim.mjs'
 import { serveDist } from '../helpers/runtime.mjs'
 import { buildArchive } from '../fixtures/domain05/archive-fixture.mjs'
+import { installBuiltinKeyClaimStub } from '../fixtures/consume-gateway-stubs/builtin-key-claim.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, '../..')
@@ -134,7 +135,7 @@ const seedViaImport = async (page, { keepConfirmOpen = false } = {}) => {
     await page.waitForTimeout(300)
   }
   await page
-    .getByRole('tab', { name: /数据管理|Data/ })
+    .getByTestId('settings-row-data')
     .first()
     .click()
   const keyInput = page.locator('input[type="password"]').first()
@@ -204,6 +205,9 @@ const run = async () => {
   const consoleErrors = []
   page.on('pageerror', (error) => pageErrors.push(`${error.name}: ${error.message}`))
   page.on('console', (message) => message.type() === 'error' && consoleErrors.push(message.text()))
+  // #803 + 测试接缝：未配置首屏会真的去领内置 Key（并留下一条 401 console error）。
+  // 就地按「这台设备还没有服务端下发的 Key」应答 —— 见 tests/fixtures/consume-gateway-stubs/builtin-key-claim.mjs
+  await installBuiltinKeyClaimStub(page)
   // 上游探测请求打桩：探针失败与本用例无关
   await page.route('**/models', (route) =>
     route.fulfill({

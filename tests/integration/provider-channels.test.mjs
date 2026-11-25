@@ -165,7 +165,7 @@ const openSettings = async () => {
   if ((await page.getByRole('dialog').count()) === 0) {
     await page.getByRole('button', { name: /设置|Settings/ }).last().click()
   }
-  await page.getByRole('tab', { name: /数据管理|Data/ }).first().click()
+  await page.getByTestId('settings-row-data').first().click()
   await page.waitForTimeout(400)
   return page.getByRole('dialog').first()
 }

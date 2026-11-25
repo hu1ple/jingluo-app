@@ -12,6 +12,12 @@ import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { serveDist } from '../helpers/runtime.mjs'
 import { assertNoEgress, installEgressGate } from '../helpers/helpers.mjs'
+import { BUILTIN_KEY_CLAIM_STUB } from '../fixtures/consume-gateway-stubs/builtin-key-claim.mjs'
+
+
+/** 设置层在场判据：设置层自己的两个标识（一级列表 / 二级页），不是「有没有一层 role=dialog」 */
+const SETTINGS_LAYER = '[data-testid="settings-list"], [data-testid^="settings-page-"]'
+const settingsLayer = (scope) => scope.locator(SETTINGS_LAYER)
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const out = path.join(root, 'docs/ui/feedback-draft')
@@ -32,11 +38,20 @@ const browser = await chromium.launch({ headless: true })
 
 /** 打开设置 → 数据管理 → 写反馈，返回表单元件 */
 const openFeedback = async (page) => {
-  if ((await page.getByRole('dialog').count()) === 0) {
-    await page.getByRole('button', { name: /边栏|菜单|sidebar|menu/i }).first().click()
-    await page.getByRole('button', { name: /设置|Settings/ }).last().click()
+  // 进设置这一步改前是 `if (dialog 数 === 0) { 点 /边栏|菜单|sidebar|menu/ → 点设置 }`：
+  // 那个分支靠「无 Key 首启会自动弹设置」这个**已废掉的行为**才没被执行过，而里面的
+  // `/边栏|菜单|sidebar|menu/` 在本仓根本不存在（抽屉开关的文案是「打开边栏 / 收起边栏」，
+  // i18n `expandSiderbarButton`）。旧行为一撤，分支开始真的执行 → 当场红在找不到按钮。
+  // 现在按「设置层自己的 testid」判在场，并走真实的抽屉开关。
+  if ((await settingsLayer(page).count()) === 0) {
+    const expandSidebar = page.getByRole('button', { name: /^(打开边栏|Open sidebar)$/ })
+    if ((await expandSidebar.count()) > 0) {
+      await expandSidebar.first().click()
+    }
+    await page.getByRole('button', { name: /^设置$|^Settings$/ }).first().click()
   }
-  await page.getByRole('tab', { name: /数据管理|Data/ }).first().click()
+  await settingsLayer(page).first().waitFor({ state: 'visible', timeout: 10000 })
+  await page.getByTestId('settings-row-data').first().click()
   await page.getByRole('button', { name: /写反馈/ }).first().click()
   // 设置弹窗也在 DOM 里，按「含反馈描述框」锁定反馈这一个对话框，别用 .last()
   const form = page.locator('[role="dialog"]:has(#feedback-description)')
@@ -93,7 +108,7 @@ try {
      * 本用例的反馈通道是 `__diagnostics.setFeedbackTransport` 的进程内假实现，全部通路都在被测产物
      * 自己的 origin 上；白名单里只写这个 origin（精确 host:port），不写 `*`、不放开回环。
      */
-    await installEgressGate(page, { appUrl: BASE_URL, allowHosts: [new URL(BASE_URL).host] })
+    await installEgressGate(page, { stubs: [BUILTIN_KEY_CLAIM_STUB], appUrl: BASE_URL, allowHosts: [new URL(BASE_URL).host] })
     page.on('console', (message) => {
       if (message.type() === 'error') consoleErrors.push(message.text())
     })

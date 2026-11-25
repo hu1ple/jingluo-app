@@ -87,7 +87,7 @@ try {
   await page.evaluate(() => { for(let i=0;i<30;i++) window.__diagnostics.recordError('scroll regression log '+i); window.__diagnostics.setFeedbackTransport({name:'offline',send:async()=>({ok:false,error:'network'})}) })
   const baseOverflow=await page.evaluate(()=>getComputedStyle(document.body).overflow)
   if (!await page.getByRole('dialog').count()) { await page.getByRole('button',{name:/边栏|菜单|sidebar|menu/i}).first().tap(); await page.getByRole('button',{name:/设置|Settings/}).last().tap() }
-  await page.getByRole('tab',{name:/数据管理|Data/}).tap()
+  await page.getByTestId('settings-row-data').first().tap()
   await page.getByRole('button',{name:'写反馈',exact:true}).tap()
   await page.locator('#feedback-description').waitFor()
   const form = page.getByRole('dialog').last()

@@ -10,8 +10,10 @@
       "recordedAt": "2026-11-19",
       "recordedBy": "Issue #365（L1 接入 CI 前逐条复测）",
       "note": "#365 接线前把 45 个集成文件全量重测了一遍（1188s）：7 条既有红登记为 known-red（各带 evidence/followUp），其余 38 条 pass。known-red 只允许减：条目跑绿会报 FIXED? 并要求删条目。",
-      "note2026_11_20": "#406 第二轮逐条复核：7 条 known-red 里 6 条判定为「断言过时 / 测试自身 bug」，改测试后转绿并删条目（diagnostics-contract / log-viewer / mode-switch / url-import-stages / full-acceptance / feedback-scroll）；剩 1 条 upstream-html 判定为真实产品缺陷（C 类），保留条目并开 follow-up issue #432。"
-    }
+      "note2026_11_20": "#406 第二轮逐条复核：7 条 known-red 里 6 条判定为「断言过时 / 测试自身 bug」，改测试后转绿并删条目（diagnostics-contract / log-viewer / mode-switch / url-import-stages / full-acceptance / feedback-scroll）；剩 1 条 upstream-html 判定为真实产品缺陷（C 类），保留条目并开 follow-up issue #432。",
+      "note2026_11_25_red": "2026-11-25 本轮实测仍红的文件与根因（本机 load≈12，internal/standard/scroll 三份产物齐备，TEST_AUTH_SEAM=1）。**一条都没有登记成 known-red**（豁免只减不增；红就该是红，交给下面的 follow-up 收）。\nA. 根因在 tests/helpers/helpers.mjs（不在本 lane 领地，需跨 lane 落地）：`providerKindTrigger` / `selectProviderKind` / `fillApiKey` / `openSettingsDataSection` 还是 2026-11-24 改版前的口径 —— #807 之后来源页是「三行手风琴 + 行底确认使用」，`ApiConfigFields` 在该页 `hideProviderKind`，全仓已经没有「渠道」下拉这个触发器。受影响：caps / auto-title[11] / provider-channels / provider-anthropic / legacy-config / internal-build / ours-services / mode-switch 等。\nB. 根因在「测试接缝 × #803 自动领 Key」：TEST_AUTH_SEAM 让产物以为已登录，于是未配置首屏会真的发 2 次 `GET apia.ecsafe.cn/api/v1/keys` 并拿到 401 —— 带出站总闸的用例记成「未登记出站」，断言 console error=0 的用例被带红。本轮已给 11 个文件装了同一份桩（tests/fixtures/consume-gateway-stubs/builtin-key-claim.mjs）；仍走 helpers `openApp()`（自己装闸、不接受 stubs）的用例（如 caps）在 helpers 侧收。\nC. 结论已过期、但**换什么口径要产品说话**（不替产品下结论）：domain09-settings-reload / internal-build 断言的「设置页有渠道下拉」「ours 渠道只读行 / 重新领取」——这些行现在长在「模型来源 → 内置服务」里，断言要按新 IA 重写或退役。\nD. 选择器歧义（新 UI 里同文案出现两次）：url-import-native / url-import-stages 的 `getByRole('button', { name: '导入', exact: true })` 命中 2 个 → strict mode violation，要按 testid 收敛。\nE. 未判定（疑似产品行为变化，需人看）：chat-newline-enter-610 的 390 宽「输入区域居中 / 编辑操作完整可见」；domain02-reply-error-ui 的 F2-07「请求过于频繁」不再出现 + F2-09 请求数 2（429 分类口径可能变了）。"
+    },
+    "note2026_11_25": "gate-integration（L1：让断言与产品口径同源）。三件事：① 修口径过期/靠巧合通过的用例 —— domain01-first-run 的「无 Key 首启不自动打开设置」原来是靠 `role=\"dialog\"` 个数判的，而公告弹层（settings-announcement-popup）/启动更新提示也是 dialog，那条断言当年就是被公告蒙过去的；现在改按设置层自己的 testid 判。feedback-export / quota-exhausted 原来点 `role=\"tab\"` 的数据管理、以及 #807 之后已经不渲染的「渠道」下拉（来源页 hideProviderKind），改成走真实界面路（一级列表 settings-row-* / 行底「确认使用」）。② 补齐 12 个漏登记的用例文件，并删掉 `knownRed`（run-layer 与 test-report 都不读它，写进去看着像豁免、实际不生效）；新用例 `baseline-integrity.test.mjs` 从此会拦「目录里有用例但清单没登记」「幽灵条目」「豁免缺 reason/evidence/followUp」。③ 本轮实测仍红的文件与根因逐条记在下面 reverified.note2026_11_25_red —— **一条都没有登记成 known-red**（豁免只减不增，红就该是红）。"
   },
   "exemptionContract": {
     "enforcedBy": "pnpm run check:exemptions（scripts/check-test-exemptions.mjs，CI 每次跑）",
@@ -46,126 +48,59 @@
     "noImplicitBuild": "沿用 tests/helpers/runtime.mjs 的约定：用例不做隐式构建，缺产物就 SKIP(env) 并打印构建命令。"
   },
   "files": {
-    "update-stuck-button-373.test.mjs": {
-      "expected": "pass",
-      "artifact": "harness(自建，dist-update-373)",
-      "reason": "#373 回归：自建 harness（@capacitor/core alias 成 mock 桥）+ 自起静态服务，端口自动分配；缺产物时自己构建（~170ms，无网络）"
-    },
     "auto-title.test.mjs": {
       "expected": "pass",
       "artifact": "standard",
       "reason": "自起静态服务 + verifyAppUrl(standard)；产物用 STANDARD_DIST_DIR/DIST_DIR（默认 dist-standard），端口自动分配"
+    },
+    "baseline-integrity.test.mjs": {
+      "expected": "pass",
+      "artifact": "无（纯 Node，不起浏览器、不要产物）",
+      "reason": "基线清单自我校验（#gate-integration）：目录里每个用例都要登记、没有幽灵条目、没有并列的第二份豁免注册表（knownRed 已删）、known-red 必须有 reason+evidence+followUp 且不许拿环境问题当豁免。",
+      "evidence": "2026-11-25 实测 PASS（<0.1s，42 条断言级检查）"
     },
     "caps.test.mjs": {
       "expected": "pass",
       "artifact": "standard",
       "reason": "runner 注入共享标准产物服务的 APP_URL（以前要手起 5181，漏了就整批假红）"
     },
+    "chat-newline-enter-610.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard（DIST_DIR / DIST_DIR_STANDARD，默认 dist-standard）+ 自起服务",
+      "reason": "#610 回归：换行档 / 编辑框回车不退出编辑、长会话上滑不被内容变化弹回；产物守卫 verifyDist + readBuildInfo。"
+    },
+    "compact-toolbar-813.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard（自起 dist-standard 服务，SELF_SERVED）",
+      "reason": "#813 精简工具栏 markup：官方渠道只留最右文件上传、语音入口不渲染；按 testid 判，不看视觉。"
+    },
     "copy-limit.test.mjs": {
       "expected": "pass",
       "artifact": "standard(自建)",
       "reason": "自己构建 dist-copy-limit（DIST_DIR_STANDARD 可注入）+ 自起静态服务；端口自动分配"
+    },
+    "db-v12-v13-migration.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard",
+      "reason": "#547 新增：v12 → v13 迁移不变量（造真 v12 旧库 + 旧数据 → 产物自己升级 → 断言新 store 建出、旧 store 与旧数据逐字节未变）；DIST_DIR_STANDARD / dist-standard + 自起服务",
+      "evidence": "2026-11-20 实测 PASS 17 项断言 / ~20s"
+    },
+    "diagnostics-contract.test.mjs": {
+      "expected": "pass",
+      "artifact": "internal + standard（DIST_DIR / STANDARD_DIST_DIR 各一份，SELF_SERVED）",
+      "reason": "诊断日志「有效性」契约：6 类真实故障各注入一次，断言上传 payload 的可归因字段齐全。"
     },
     "diagnostics.test.mjs": {
       "expected": "pass",
       "artifact": "internal",
       "reason": "verifyDist(internal) 守卫产物种类；自起服务（PORT 可注入）"
     },
-    "error-boundary.test.mjs": {
-      "expected": "pass",
-      "artifact": "standard",
-      "reason": "dist 上进程内 serveDist（端口 0 原子分配）"
-    },
-    "feedback-draft.test.mjs": {
-      "expected": "pass",
-      "artifact": "standard",
-      "reason": "自起静态服务（端口 0），不再固定 5399"
-    },
-    "feedback-export.test.mjs": {
-      "expected": "pass",
-      "artifact": "standard",
-      "reason": "DIST_STANDARD_DIR 指向标准产物，verifyDist(standard) 守卫后自起服务"
-    },
-    "internal-build.test.mjs": {
-      "expected": "pass",
-      "artifact": "internal",
-      "reason": "verifyDist(internal) + 读 build-info.json 校验 main/variant；自起服务"
-    },
-    "legacy-config.test.mjs": {
-      "expected": "pass",
-      "artifact": "standard",
-      "reason": "runner 注入共享标准产物服务的 APP_URL"
-    },
-    "mode-switch-plain.test.mjs": {
-      "expected": "pass",
-      "artifact": "standard",
-      "reason": "自起服务（PORT 可注入）；PLAIN_URL/BASELINE_URL 可外部注入"
-    },
-    "mode-switch-request.test.mjs": {
-      "expected": "pass",
-      "artifact": "standard",
-      "reason": "自起服务（PORT 可注入）；以前固定连 127.0.0.1:8090 的 pnpm dev，没起服务就假红"
-    },
-    "motion.test.mjs": {
-      "expected": "pass",
-      "artifact": "internal",
-      "reason": "verifyDist(internal) + MOTION_BASE/PORT 可注入；自起服务"
-    },
-    "paths.test.mjs": {
-      "expected": "pass",
-      "artifact": "standard",
-      "reason": "runner 注入共享标准产物服务的 APP_URL"
-    },
-    "probe-auth.test.mjs": {
-      "expected": "pass",
-      "artifact": "standard",
-      "reason": "runner 注入共享标准产物服务的 APP_URL；上游由路由拦截伪造"
-    },
-    "probe-auth-protocols.test.mjs": {
-      "expected": "pass",
-      "artifact": "standard",
-      "reason": "runner 注入共享标准产物服务的 APP_URL；多协议探测全走 mock"
-    },
-    "probe-nokey.test.mjs": {
-      "expected": "pass",
-      "artifact": "standard",
-      "reason": "runner 注入共享标准产物服务的 APP_URL；无 Key 场景不触网"
-    },
-    "provider-anthropic.test.mjs": {
-      "expected": "pass",
-      "artifact": "standard",
-      "reason": "runner 注入共享标准产物服务的 APP_URL；上游 mock"
-    },
-    "provider-channels.test.mjs": {
-      "expected": "pass",
-      "artifact": "standard",
-      "reason": "DIST_DIR_STANDARD 标准产物，自起服务后 verifyAppUrl(standard)"
-    },
-    "request-body.test.mjs": {
-      "expected": "pass",
-      "artifact": "standard",
-      "reason": "runner 注入共享标准产物服务的 APP_URL；请求体断言不触网"
-    },
-    "upstream-html.test.mjs": {
-      "expected": "pass",
-      "artifact": "standard",
-      "reason": "runner 注入共享标准产物服务的 APP_URL；上游返回 200 + text/html 的场景用 mock 路由。#434 修好后本用例转绿（html 单独成档、不重试、折叠区带响应摘要），known-red 条目已删"
-    },
-    "url-import-native.test.mjs": {
-      "expected": "pass",
-      "artifact": "standard",
-      "reason": "runner 注入共享标准产物服务的 APP_URL；抓取阶段全 mock"
-    },
-    "url-import-web.test.mjs": {
-      "expected": "pass",
-      "artifact": "standard",
-      "reason": "runner 注入共享标准产物服务的 APP_URL；只看标题前缀"
-    },
     "domain01-first-run.test.mjs": {
       "expected": "pass",
       "artifact": "standard",
       "reason": "requireDist(DIST_DIR) + verifyAppUrl(standard)；#365 起 runner 注入 DIST_DIR=dist-standard（此前默认 dist=内测包 → 恒 SKIP(env)）",
-      "evidence": "2026-11-19 实测 PASS 3.5s"
+      "evidence": "2026-11-19 实测 PASS 3.5s",
+      "note2026_11_25": "2026-11-25（gate-integration）：首启「不自动打开设置」改按设置层自己的 testid（settings-list / settings-page-*）判，不再用 role=dialog 计数 —— 改前那条断言是靠公告弹层（同样是 role=dialog）蒙过去的。它现在守护的事：产品不许在无 Key 首启时把用户拽进设置层，且「点通知上的按钮才进设置」这条路必须点得通。"
     },
     "domain01-session-load.test.mjs": {
       "expected": "pass",
@@ -190,6 +125,19 @@
       "artifact": "standard",
       "reason": "同上；#365 起 runner 注入 dist-standard",
       "evidence": "2026-11-19 实测 PASS 71.1s"
+    },
+    "domain03-settings-probe-model.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard",
+      "reason": "DIST_DIR_STANDARD / dist-standard + 自起服务",
+      "evidence": "2026-11-19 实测 PASS 84.2s"
+    },
+    "domain04-session-list-flow.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard",
+      "reason": "DIST_DIR_STANDARD / dist-standard + 自起服务",
+      "evidence": "2026-11-19 实测 PASS 27.4s",
+      "note2026_11_20": "#547：fixture 不再写死 v12 建库（库由产物自己建，版本号取自 src/services/chat/db.ts），VersionError 已消除"
     },
     "domain05-ui-export-import.test.mjs": {
       "expected": "pass",
@@ -227,30 +175,148 @@
       "reason": "自建临时产物 + 假原生桥，跑完即删；不依赖仓库里的 dist",
       "evidence": "2026-11-19 实测 PASS 4.8s"
     },
+    "error-boundary.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard",
+      "reason": "dist 上进程内 serveDist（端口 0 原子分配）"
+    },
+    "feedback-draft.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard",
+      "reason": "自起静态服务（端口 0），不再固定 5399"
+    },
+    "feedback-export.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard",
+      "reason": "DIST_STANDARD_DIR 指向标准产物，verifyDist(standard) 守卫后自起服务",
+      "note2026_11_25": "2026-11-25（gate-integration）：改前两处过期 —— ① 进设置靠 `if (dialog 数 === 0)`，里面点的是 `/侧边栏|菜单|sidebar|menu/`，本仓根本没有这个按钮（抽屉开关叫「打开边栏 / 收起边栏」），这行从来没执行过，靠的是「无 Key 首启会自动弹设置」这个已废行为；② 点 `role=tab` 的数据管理（2026-11-24 改版后不存在）。另外补种「已配置」前提：TEST_AUTH_SEAM 下未配置首屏会真的去领内置 Key（2 次出站），把 0 出站断言红在无关链路上。"
+    },
+    "feedback-scroll.test.mjs": {
+      "expected": "pass",
+      "artifact": "scroll（dist-scroll，SCROLL_DIST_DIR 可注入）+ 自起服务",
+      "reason": "真 Chromium 触控滑动回归（5 个场景）。**必须带 `--timeout-ms 600000`**：实测 190~200s，默认 180s 会假 TIMEOUT。"
+    },
+    "full-acceptance.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard（runner 注入共享标准产物服务的 APP_URL）",
+      "reason": "1.3.0 时期的一次性验收合集（8 组断言）。历史遗留，新用例一律拆小；保留是为了不丢既有覆盖。"
+    },
+    "imported-attachment-source-379.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard（runner 注入 APP_URL）",
+      "reason": "#379 回归：导入的历史会话（曾带附件）继续聊天不许报「上传失败」；只钉用户屏幕上能看到的四件事。"
+    },
+    "internal-build.test.mjs": {
+      "expected": "pass",
+      "artifact": "internal",
+      "reason": "verifyDist(internal) + 读 build-info.json 校验 main/variant；自起服务"
+    },
+    "legacy-config.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard",
+      "reason": "runner 注入共享标准产物服务的 APP_URL"
+    },
+    "log-viewer.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard（自起 dist 服务的 dist，PORT 可注入）",
+      "reason": "#305 定向回归：日志展示层的过滤 / 搜索 / 分组 / 复制 / 条数口径 / 空态与负向。"
+    },
+    "mode-switch-plain.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard",
+      "reason": "自起服务（PORT 可注入）；PLAIN_URL/BASELINE_URL 可外部注入"
+    },
+    "mode-switch-request.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard",
+      "reason": "自起服务（PORT 可注入）；以前固定连 127.0.0.1:8090 的 pnpm dev，没起服务就假红"
+    },
+    "mode-switch.test.mjs": {
+      "expected": "pass",
+      "artifact": "internal（DIST_DIR，默认 dist）+ 自起服务",
+      "reason": "模式切换控件验收：402×874 截图 + getComputedStyle + 3 次切换回归；要内测构建（默认渠道 ours）。"
+    },
+    "motion.test.mjs": {
+      "expected": "pass",
+      "artifact": "internal",
+      "reason": "verifyDist(internal) + MOTION_BASE/PORT 可注入；自起服务"
+    },
+    "ours-services.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard（runner 注入 APP_URL）",
+      "reason": "旧 OursServicesDialog 退役后的「账户与消费」渠道门禁 + 新页面上屏验收（#166 / #562 / #583）。"
+    },
+    "paths.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard",
+      "reason": "runner 注入共享标准产物服务的 APP_URL"
+    },
+    "probe-auth-protocols.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard",
+      "reason": "runner 注入共享标准产物服务的 APP_URL；多协议探测全走 mock"
+    },
+    "probe-auth.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard",
+      "reason": "runner 注入共享标准产物服务的 APP_URL；上游由路由拦截伪造"
+    },
+    "probe-nokey.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard",
+      "reason": "runner 注入共享标准产物服务的 APP_URL；无 Key 场景不触网"
+    },
+    "provider-anthropic.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard",
+      "reason": "runner 注入共享标准产物服务的 APP_URL；上游 mock"
+    },
+    "provider-channels.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard",
+      "reason": "DIST_DIR_STANDARD 标准产物，自起服务后 verifyAppUrl(standard)"
+    },
     "quota-exhausted.test.mjs": {
       "expected": "pass",
       "artifact": "standard",
       "reason": "requireDist(DIST_DIR) + verifyAppUrl(standard)；#365 起 runner 注入 dist-standard（此前恒 SKIP(env) 产物种类不对）",
-      "evidence": "2026-11-19 实测 PASS 23.3s"
+      "evidence": "2026-11-19 实测 PASS 23.3s",
+      "note2026_11_25": "2026-11-25（gate-integration）：改前点 `role=tab` 的数据管理 + `providerKindTrigger`（#807 之后来源页 hideProviderKind，下拉不渲染）→ 双双点不到。改成真实界面路：官方 Key 走「账户与消费 → 模型来源 → DeepSeek 官方服务 → 确认使用」；内置渠道前置用产物自己的两个存储键写成，并把领 Key 的查重接口按空列表打桩（否则重载后那次真实 401 会把 Key 判成未领取）。"
     },
-    "domain04-session-list-flow.test.mjs": {
+    "request-body.test.mjs": {
       "expected": "pass",
       "artifact": "standard",
-      "reason": "DIST_DIR_STANDARD / dist-standard + 自起服务",
-      "evidence": "2026-11-19 实测 PASS 27.4s",
-      "note2026_11_20": "#547：fixture 不再写死 v12 建库（库由产物自己建，版本号取自 src/services/chat/db.ts），VersionError 已消除"
+      "reason": "runner 注入共享标准产物服务的 APP_URL；请求体断言不触网"
     },
-    "db-v12-v13-migration.test.mjs": {
+    "update-dialog-517.test.mjs": {
+      "expected": "pass",
+      "artifact": "harness(自建 dist-update-dialog，mkdtemp 内的标准产物)",
+      "reason": "#517 更新策略弹窗里只有真浏览器能验的那一半（L0 已钉住「该判哪一档」的规则）。"
+    },
+    "update-stuck-button-373.test.mjs": {
+      "expected": "pass",
+      "artifact": "harness(自建，dist-update-373)",
+      "reason": "#373 回归：自建 harness（@capacitor/core alias 成 mock 桥）+ 自起静态服务，端口自动分配；缺产物时自己构建（~170ms，无网络）"
+    },
+    "upstream-html.test.mjs": {
       "expected": "pass",
       "artifact": "standard",
-      "reason": "#547 新增：v12 → v13 迁移不变量（造真 v12 旧库 + 旧数据 → 产物自己升级 → 断言新 store 建出、旧 store 与旧数据逐字节未变）；DIST_DIR_STANDARD / dist-standard + 自起服务",
-      "evidence": "2026-11-20 实测 PASS 17 项断言 / ~20s"
+      "reason": "runner 注入共享标准产物服务的 APP_URL；上游返回 200 + text/html 的场景用 mock 路由。#434 修好后本用例转绿（html 单独成档、不重试、折叠区带响应摘要），known-red 条目已删"
     },
-    "domain03-settings-probe-model.test.mjs": {
+    "url-import-native.test.mjs": {
       "expected": "pass",
       "artifact": "standard",
-      "reason": "DIST_DIR_STANDARD / dist-standard + 自起服务",
-      "evidence": "2026-11-19 实测 PASS 84.2s"
+      "reason": "runner 注入共享标准产物服务的 APP_URL；抓取阶段全 mock"
+    },
+    "url-import-stages.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard（runner 注入 APP_URL）",
+      "reason": "「从链接导入」的分阶段进度 / 取消 / 失败分类；只替换原生桥，走真实的分块下载 → ZIP 校验 → importHistory。"
+    },
+    "url-import-web.test.mjs": {
+      "expected": "pass",
+      "artifact": "standard",
+      "reason": "runner 注入共享标准产物服务的 APP_URL；只看标题前缀"
     }
   }
 }

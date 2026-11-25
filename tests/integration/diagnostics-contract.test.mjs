@@ -23,6 +23,7 @@ import { oursServerKeyMark } from '../helpers/ours-claim.mjs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { chromium } from 'playwright'
+import { installBuiltinKeyClaimStub } from '../fixtures/consume-gateway-stubs/builtin-key-claim.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, '../..')
@@ -72,6 +73,10 @@ const cleanup = () => Promise.all([internalServer.close(), standardServer.close(
 const openApp = async ({ appUrl = INTERNAL_URL, native, routes, apiKey = true } = {}) => {
   const context = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1280, height: 900 } })
   await context.route('**/feedback.rose7.cn/**', (route) => route.abort())
+  // #803 + 测试接缝：未配置首屏会真的去领内置 Key（GET apia.ecsafe.cn/api/v1/keys → 401），
+  // 那条 401 会作为一条 net_response 落进诊断日志，把下面「本用例注入的那条故障」挤出断言窗口。
+  // 就地按「这台设备还没有服务端下发的 Key」应答（见 tests/fixtures/consume-gateway-stubs/builtin-key-claim.mjs）。
+  await installBuiltinKeyClaimStub(context)
   if (native) {
     await context.addInitScript((response) => {
       window.androidBridge = { postMessage: () => {} }
@@ -118,7 +123,7 @@ const openDataSection = async (page) => {
   if ((await page.getByRole('dialog').count()) === 0) {
     await page.getByRole('button', { name: /设置|Settings/ }).last().click()
   }
-  await page.getByRole('tab', { name: /数据管理|Data/ }).first().click()
+  await page.getByTestId('settings-row-data').first().click()
   await page.waitForTimeout(300)
 }
 

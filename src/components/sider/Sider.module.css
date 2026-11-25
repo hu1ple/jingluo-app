@@ -66,7 +66,7 @@
     transform: scale(0.97);
   }
 
-  &:hover {
+  &:hover:not(:disabled) {
     box-shadow:
       0 4px 4px 0 rgba(72, 104, 178, 0.04),
       0 -3px 4px 0 rgba(72, 104, 178, 0.04),
@@ -81,77 +81,180 @@
   }
 }
 
+/* 多选态：主按钮不可用（设计稿右图第 1 项）。灰底 + 灰字 + 去掉投影，视觉上明确「点不动」 */
+.newChat:disabled {
+  background: var(--dsw-specific-sidebar-nav-item-hover);
+  color: var(--dsw-alias-label-tertiary);
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
 .newChatIcon {
   display: flex;
   margin-right: 6px;
 }
 
-/* #390 选择性导出：列表上方的「选择 / 退出选择」入口 */
-.selectionToggleRow {
+/*
+ * 「历史对话」那一行（默认态：标题 + 蓝色「选择」／多选态：蓝色「全选」+「取消」）。
+ * 两态共用同一个容器与同一个行高，切换时列表不跳动。
+ */
+.listHeader {
   display: flex;
-  justify-content: flex-end;
-  padding: 0 12px 2px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  min-height: 30px;
+  padding: 4px 6px 2px 10px;
 }
 
-.selectionToggle {
-  padding: 4px 8px;
+.listHeaderTitle {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 蓝色文字链接（选择 / 全选）：按钮元素但按链接长相呈现 */
+.listHeaderLink {
+  flex-shrink: 0;
+  padding: 2px 2px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 6px;
+  background: none;
+  color: var(--dsw-alias-brand-text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  cursor: pointer;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+/* 「取消」：右侧的次要动作，不着色（设计稿右图是中性文字） */
+.listHeaderCancel {
+  flex-shrink: 0;
+  padding: 2px 2px;
+  border: 0;
+  border-radius: 6px;
   background: none;
   color: var(--dsw-alias-label-secondary);
   font: inherit;
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 13px;
+  line-height: 20px;
   cursor: pointer;
+
+  &:hover {
+    color: var(--dsw-alias-label-primary);
+  }
 }
 
-.selectionToggle:hover {
-  background-color: var(--dsw-specific-sidebar-nav-item-hover);
-}
-
-/* 选择模式的底栏：已选条数 + 全选 / 反选 / 导出选中 */
+/*
+ * 多选态底部操作条：与列表之间一条分隔线，左「已选 N 项」+「导出选中」，右红色「删除」。
+ * 它在 `.sider` 的 flex 列里、位于滚动容器 `.listWrap` 之外 → 列表滚到底也始终可见。
+ */
 .selectionBar {
   display: flex;
-  flex-direction: column;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 8px 6px 8px 10px;
   border-top: 1px solid var(--dsw-alias-border-l2);
 }
 
-.selectionCount {
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-secondary);
-}
-
-.selectionActions {
+.selectionFooterLeft {
   display: flex;
-  flex-wrap: wrap;
+  min-width: 0;
   align-items: center;
   gap: 8px;
 }
 
-.selectionAction {
-  padding: 4px 8px;
+.selectionCount {
+  flex-shrink: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* 「导出选中」降级为次要文字按钮：功能保留，但不抢「删除」的主视觉 */
+.selectionExport {
+  flex-shrink: 0;
+  min-width: 0;
+  padding: 2px 2px;
+  overflow: hidden;
   border: 0;
-  border-radius: 8px;
+  border-radius: 6px;
   background: none;
   color: var(--dsw-alias-label-secondary);
   font: inherit;
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 13px;
+  line-height: 20px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   cursor: pointer;
+
+  &:hover:not(:disabled) {
+    color: var(--dsw-alias-label-primary);
+    text-decoration: underline;
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
 }
 
-.selectionAction:hover {
-  background-color: var(--dsw-specific-sidebar-nav-item-hover);
+/* 主操作：红色「🗑 删除」（图标 + 文字，无描边底） */
+.selectionDelete {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--dsw-alias-state-error-primary);
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background-color: var(--dsw-alias-interactive-bg-hover-danger);
+  }
+
+  /* 没勾任何会话时禁用（设计稿：已选 0 项 + 删除灰掉） */
+  &:disabled {
+    color: var(--dsw-alias-label-tertiary);
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+}
+
+.selectionDeleteIcon {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 4px;
+
+  svg {
+    width: 14px;
+    height: 14px;
+  }
 }
 
 .listWrap {
   position: relative;
   flex: 1;
   min-height: 0;
-  margin-top: 24px;
+  /* 「历史对话」那一行自己带内边距，这里的上间距只需补一点点，别再叠 24px（设计稿里两者是紧邻的） */
+  margin-top: 8px;
 }
 
 .list {
@@ -367,7 +470,32 @@
   max-width: calc(100vw - 48px);
 
   .listWrap {
-    margin-top: 16px;
+    margin-top: 8px;
+  }
+
+  .listHeaderTitle {
+    font-size: 16px;
+    line-height: 24px;
+  }
+
+  .listHeaderLink,
+  .listHeaderCancel {
+    font-size: 14px;
+    line-height: 22px;
+  }
+
+  .selectionBar {
+    padding: 10px 6px 10px 12px;
+  }
+
+  .selectionCount {
+    font-size: 14px;
+    line-height: 22px;
+  }
+
+  .selectionDelete {
+    font-size: 16px;
+    line-height: 22px;
   }
 
   .sectionHeader {
@@ -418,12 +546,11 @@
 }
 
 :global(html[data-flex-gap-fallback]) .selectionBar > *:not(:last-child) {
-  margin-bottom: 8px;
+  margin-right: 8px;
 }
 
-:global(html[data-flex-gap-fallback]) .selectionActions > *:not(:last-child) {
+:global(html[data-flex-gap-fallback]) .selectionFooterLeft > *:not(:last-child) {
   margin-right: 8px;
-  margin-bottom: 8px;
 }
 
 :global(html[data-flex-gap-fallback]) .collapsed > *:not(:last-child) {

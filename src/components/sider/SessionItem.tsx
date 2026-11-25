@@ -72,12 +72,28 @@ export const SessionItem = memo(function SessionItem({
 
   if (selecting) {
     return (
+      /*
+       * 多选态的行（设计稿右图第 3 项）：
+       * - 左侧圆形勾选控件：选中 = 蓝底 + 白色对勾，未选中 = 灰色实心圆（`.check` / `.checkOn`，纯 CSS 画的）
+       * - 行内不再渲染 `…` 更多按钮（这条分支里根本没有 `.action` 节点）
+       * - 行高与默认态完全一致（同一个 `.item`，height 固定），切进去列表不跳动
+       * - 无障碍：真实可聚焦控件 = 行本身 `role="checkbox"` + `aria-checked` + tabIndex=0，
+       *   空格 / 回车切换（`aria-label` 用会话标题）
+       */
       <div
         role="checkbox"
         aria-checked={selected}
         aria-label={displayTitle}
-        className={clsx(styles.item, styles.selectable, selected && styles.selected)}
+        tabIndex={0}
+        data-testid={`sider-session-check-${session.id}`}
+        className={clsx(styles.item, styles.selectable, active && styles.active)}
         onClick={() => onToggle?.(session.id)}
+        onKeyDown={(event) => {
+          if (event.key === ' ' || event.key === 'Spacebar' || event.key === 'Enter') {
+            event.preventDefault()
+            onToggle?.(session.id)
+          }
+        }}
       >
         <span className={clsx(styles.check, selected && styles.checkOn)} aria-hidden="true">
           {selected ? <IconCheckOutline16 /> : null}
@@ -90,6 +106,7 @@ export const SessionItem = memo(function SessionItem({
   return (
     <div
       className={clsx(styles.item, active && styles.active)}
+      data-testid={`sider-session-${session.id}`}
       onClick={() => {
         selectSession(session.id)
         closeMobileSider()

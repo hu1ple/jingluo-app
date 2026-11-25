@@ -1,15 +1,27 @@
 // [layer: integration | 依赖: playwright + chromium + 本地静态服务 | 耗时: ~1 分钟]
 //
-// N6 设置重载 + 渠道凭证隔离（域 9）—— #362 / #367
+// N6 设置重载 + 来源凭证隔离（域 9）—— #362 / #367
 //
 // N2 证明了「模块层读回」（写进去、重启后 store 读得到），但那只证明**键被读到了**，
 // 证不到**界面真的消费了它**。本用例补的是这一层：seed 一张表 → reload → 断言界面。
 //
 // 覆盖：F9-01 主题（深/浅/跟随系统）· F9-02 阅读三档 · F9-03 思考显示 · F9-05 回车行为
-// · F9-06 界面语言 · F9-09 渠道选择 · F9-10 切渠道凭证隔离（A 的地址/模型不带进 B、Key 共用不丢）
+// · F9-06 界面语言 · F9-09 生效来源 · F9-10 来源之间的凭证隔离
 //
 // 表在 `tests/fixtures/domain08-09/reload-matrix.mjs`。每行都在独立上下文里跑：
 // 清存储 → seed → reload → 断言。
+//
+// ## 断言的是「凭证不串」，不是「渠道下拉」（裁决 2026-11-26，docs/testing/product-debt.md）
+//
+// 改版前的写法按 `getByRole('button', { name: '渠道' })` 找下拉、读它的值 —— #807 之后来源页
+// 是三行**单层手风琴**（内置 / 第三方 / 官方），那个下拉不存在了，于是整条用例卡在第一步、
+// 后面「重载后凭证隔离」一条断言都没跑到。意图本身没变，落点改成界面现在真实表达这两件事的地方：
+//
+//   1. **当前生效来源仍是同一行**：重载后打勾的那一行（`settings-source-current`）必须还是 seed 的
+//      `chat-demo:provider-kind` 对应的那一行 —— 重载不许把来源挪走、也不许「谁都打勾」；
+//   2. **别的行的凭证没有被合并/丢失**：第三方行的草稿里只有它自己那一份地址/模型
+//      （不出现另一槽位的值，也不出现老的共享 `chat-demo:model` 残留）；官方服务的地址/模型仍然
+//      不可编辑（它本来就没有那两格）。
 //
 //   node --test tests/integration/domain09-settings-reload.test.mjs
 import assert from 'node:assert/strict'
@@ -19,7 +31,7 @@ import { test } from 'node:test'
 
 import { chromium } from 'playwright'
 import { defaultDist, serveDir, verifyDist } from '../helpers/env.mjs'
-import { assertNoEgress, installEgressGate } from '../helpers/helpers.mjs'
+import { assertNoEgress, installEgressGate, openSettingsPage, openSourceRow, SETTINGS_ROW } from '../helpers/helpers.mjs'
 import { ANTHROPIC_HOST, FAKE_KEY, OPENAI_HOST, RELOAD_CASES } from '../fixtures/domain08-09/reload-matrix.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -49,10 +61,27 @@ const openGeneralTab = async (page) => {
   await settle(page, 400)
 }
 
-const openDataTab = async (page) => {
-  const tab = page.getByTestId('settings-row-data')
-  if ((await tab.count()) > 0) await tab.first().click()
-  await settle(page, 400)
+/** 打开「设置 → 账户与消费 → 模型来源」（#807 起渠道/Key 字段都在这一页） */
+const openSourceSection = async (page) => {
+  await openSettingsPage(page, SETTINGS_ROW.consume)
+  if ((await page.locator('[data-testid="settings-source-accordion"]').count()) === 0) {
+    await page.getByTestId('account-consume-source').first().click()
+    await page.locator('[data-testid="settings-source-accordion"]').first().waitFor({ state: 'visible' })
+  }
+}
+
+/** 打勾的那一行（`settings-source-current` 所在的行头）；一行都没打勾时返回 null */
+const currentSourceRow = async (page) =>
+  page.evaluate(() => {
+    const check = document.querySelector('[data-testid="settings-source-current"]')
+    const header = check?.closest('button[data-testid^="settings-source-"]')
+    return header?.getAttribute('data-testid')?.replace(/^settings-source-/, '') ?? null
+  })
+
+/** 当前展开的那一行里某个草稿字段的值（没这一格返回 null） */
+const draftValue = async (page, field) => {
+  const input = page.getByTestId(`settings-source-draft-${field}`)
+  return (await input.count()) === 0 ? null : input.first().inputValue()
 }
 
 const readSelectLabel = async (page, ariaLabel) => {
@@ -61,15 +90,9 @@ const readSelectLabel = async (page, ariaLabel) => {
   return (await trigger.first().innerText()).trim()
 }
 
-const inputValue = async (page, ariaLabel) => {
-  const input = page.getByLabel(ariaLabel)
-  if ((await input.count()) === 0) return null
-  return input.first().inputValue()
-}
-
 /**
  * 每个 probe 返回「失败说明数组」。
- * 断言对象是**界面**（body 类名 / 根 data-* / 选择器文案 / 输入框真实值），不是 store。
+ * 断言对象是**界面**（body 类名 / 根 data-* / 手风琴打勾行 / 输入框真实值），不是 store。
  */
 const PROBES = {
   async theme(page, expect) {
@@ -118,50 +141,60 @@ const PROBES = {
     return failures
   },
 
-  async channel(page, expect) {
-    await openSettings(page)
-    await openDataTab(page)
+  /**
+   * 来源页：生效来源那一行 + 两行草稿里的凭证。
+   *
+   * `expect.currentRow`：打勾的那一行必须是它（重载不许挪来源，也不许两个都打勾）。
+   * `expect.third`：第三方行草稿的地址/模型（`''` = 它自己那一份还没填）。
+   * `expect.thirdForbids`：不许出现在第三方行里的值（另一槽位 / 老的共享残留）。
+   * `expect.official`：官方服务的地址/模型是否可编辑（那条路的产品定义是「地址固定，只填 Key」）。
+   */
+  async source(page, expect) {
     const failures = []
-    const channelLabel = await readSelectLabel(page, '渠道')
-    if (!channelLabel || !channelLabel.includes(expect.channelLabel)) {
-      failures.push(`渠道选择器显示「${channelLabel}」，期望「${expect.channelLabel}」`)
-    }
-    if (expect.hasBaseUrl !== undefined) {
-      const present = (await page.getByLabel('服务地址').count()) > 0
-      if (present !== expect.hasBaseUrl) failures.push(`服务地址行 present=${present}，期望 ${expect.hasBaseUrl}`)
-    }
-    if (expect.hasModel !== undefined) {
-      const present = (await page.getByLabel('模型').count()) > 0
-      if (present !== expect.hasModel) failures.push(`模型行 present=${present}，期望 ${expect.hasModel}`)
-    }
-    if (expect.baseUrl !== undefined) {
-      const actual = await inputValue(page, '服务地址')
-      if (actual !== expect.baseUrl) failures.push(`服务地址输入框=${actual}，期望 ${expect.baseUrl}`)
-    }
-    if (expect.model !== undefined) {
-      const actual = await inputValue(page, '模型')
-      if (actual !== expect.model) failures.push(`模型输入框=${actual}，期望 ${expect.model}`)
-    }
-    return failures
-  },
+    await openSourceSection(page)
 
-  async 'switch-keep-key'(page, expect) {
-    await openSettings(page)
-    await openDataTab(page)
-    const failures = []
-    const masked = '*'.repeat(FAKE_KEY.length)
-    const hasMask = (await page.getByText(masked, { exact: true }).count()) > 0
-    if (hasMask !== expect.masked) failures.push(`Key 掩码 present=${hasMask}，期望 ${expect.masked}`)
-    // 切到另一个渠道：Key 必须还在（共用一把），并给出「请确认 Key 是否适用」的提示
-    await page.getByRole('button', { name: '渠道', exact: true }).first().click()
-    await settle(page, 300)
-    await page.getByRole('option', { name: 'OpenAI 兼容' }).first().click()
-    await settle(page, 500)
-    const stillMasked = (await page.getByText(masked, { exact: true }).count()) > 0
-    if (stillMasked !== expect.masked) failures.push('切渠道后 Key 掩码消失了（Key 应四渠道共用）')
-    const hint = page.getByText('切换渠道后，请确认 API Key 是否适用')
-    const hintVisible = (await hint.count()) > 0
-    if (hintVisible !== expect.hint) failures.push(`切渠道提示 present=${hintVisible}，期望 ${expect.hint}`)
+    const checked = await currentSourceRow(page)
+    if (expect.currentRow !== undefined && checked !== expect.currentRow) {
+      const all = await page.evaluate(() =>
+        [...document.querySelectorAll('[data-testid$="-status"]')].map(
+          (node) => `${node.getAttribute('data-testid')}=${node.getAttribute('data-status')}`
+        )
+      )
+      failures.push(`重载后打勾的行 = ${JSON.stringify(checked)}，期望 ${JSON.stringify(expect.currentRow)}（行状态：${all.join('、')}）`)
+    }
+
+    if (expect.third) {
+      await openSourceRow(page, 'third')
+      const baseUrl = await draftValue(page, 'baseUrl')
+      const model = await draftValue(page, 'model')
+      if (baseUrl !== expect.third.baseUrl) {
+        failures.push(`第三方行的地址草稿=${JSON.stringify(baseUrl)}，期望 ${JSON.stringify(expect.third.baseUrl)}`)
+      }
+      if (model !== expect.third.model) {
+        failures.push(`第三方行的模型草稿=${JSON.stringify(model)}，期望 ${JSON.stringify(expect.third.model)}`)
+      }
+      const panelText = await page.locator('[data-testid="settings-source-third-panel"]').innerText()
+      const leaked = (expect.thirdForbids ?? []).filter((value) => panelText.includes(value))
+      if (leaked.length > 0) failures.push(`第三方行串进了别的凭证：${leaked.join(' / ')}`)
+    }
+
+    if (expect.official) {
+      await openSourceRow(page, 'official')
+      const panel = page.locator('[data-testid="settings-source-official-panel"]')
+      const editableBaseUrl = (await panel.getByTestId('settings-source-draft-baseUrl').count()) > 0
+      const editableModel = (await panel.getByTestId('settings-source-draft-model').count()) > 0
+      if (editableBaseUrl !== expect.official.editableBaseUrl) {
+        failures.push(`官方行地址可编辑=${editableBaseUrl}，期望 ${expect.official.editableBaseUrl}`)
+      }
+      if (editableModel !== expect.official.editableModel) {
+        failures.push(`官方行模型可编辑=${editableModel}，期望 ${expect.official.editableModel}`)
+      }
+      // 「地址固定」必须看得见，否则用户会以为漏了一格（#807）
+      if ((await panel.getByTestId('settings-source-base-url-fixed').count()) === 0) {
+        failures.push('官方行没有「地址固定」那一行（用户看不到生效地址）')
+      }
+    }
+
     return failures
   },
 
@@ -175,7 +208,7 @@ const PROBES = {
   },
 }
 
-test('N6 设置重载 + 渠道凭证隔离：seed 一张表 → reload → 界面真的跟着变', async () => {
+test('N6 设置重载 + 来源凭证隔离：seed 一张表 → reload → 界面真的跟着变', async () => {
   verifyDist(DIST, { variant: 'standard' })
   const served = await serveDir(DIST, { port: process.env.PORT, label: '标准产物 dist' })
   const browser = await chromium.launch()
@@ -213,7 +246,8 @@ test('N6 设置重载 + 渠道凭证隔离：seed 一张表 → reload → 界�
           })),
         })
         await page.goto(served.url, { waitUntil: 'domcontentloaded' })
-        await seed(page, row.seed)
+        const values = typeof row.seed === 'function' ? await row.seed() : row.seed
+        await seed(page, values)
         await page.reload({ waitUntil: 'domcontentloaded' })
         await settle(page, 900)
         const rowFailures = await PROBES[row.probe](page, row.expect)
@@ -232,7 +266,7 @@ test('N6 设置重载 + 渠道凭证隔离：seed 一张表 → reload → 界�
     await browser.close()
     served.kill()
   }
-  console.log(`  ·  ${RELOAD_CASES.length} 行 seed → reload → 界面断言`)
+  console.log(`  ·  ${RELOAD_CASES.length} 行 seed → reload → 界面断言（FAKE_KEY=${FAKE_KEY.slice(0, 6)}…）`)
   assert.deepEqual(failures, [])
 })
 

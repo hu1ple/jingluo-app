@@ -8,7 +8,14 @@
 // 让 store 首次 hydration 就读到库里的会话（与 copy-limit / domain04 同一套做法）。
 //
 // 覆盖：
-//   [1] 回车 = 换行：编辑态仍在、值多一个 \n、光标落在新行首（390 移动端 + 1280 桌面端）
+// ⚠ 已知红（2026-11-26 实测，**真缺陷**，不是断言过时）：390 宽进编辑态后，右下角「回到底部」
+//   浮标压在「发送」按钮上（`document.elementFromPoint` 命中的是浮标），提交按钮点不到。
+//   按裁决 5「只钉编辑操作完整可见可点」这条必须留着红，等产品侧让位（隐藏浮标 / 编辑态让开），
+//   不许为了让绿把「可点」这条删掉。360 宽与桌面端正常。
+//
+//   [1] 回车 = 换行：编辑态仍在、值多一个 \n、光标落在新行首（390 移动端 + 1280 桌面端）；
+//       移动端另外只钉「编辑操作完整可见可点」（提交 / 取消），**不**钉「输入区居中」——
+//       裁决 2026-11-26：居中是实现细节，见 docs/testing/product-debt.md 已裁决第 5 条
 //   [2] 回车事件被输入框吃掉：document 冒泡 / window 都收不到（只剩 capture 能看到）
 //   [3] 会话没被切换：挂载窗口里的消息 id 全是本会话的
 //   [4] 中文输入法合成期（isComposing）不拦：事件不被 preventDefault，也不插换行
@@ -356,21 +363,72 @@ const scenario = async ({ label, width, height, isMobile }) => {
   })
   const rowsAfterEdit = await page.evaluate(() => window.__probe.rows())
 
-  // 移动端验证编辑区居中；桌面端继续验证 #610 的阅读位置保护。
+  // 移动端验证**编辑操作完整可见**；桌面端继续验证 #610 的阅读位置保护。
   const tracked = before.rows.find((row) => row.top >= 0)
   const trackedAfter = rowsAfterEdit.find((row) => row.id === tracked.id)
   if (isMobile) {
-    const geometry = await textarea.evaluate(el => {
-      const viewport = window.__probe.scroller().getBoundingClientRect()
-      const field = el.getBoundingClientRect()
-      const box = el.parentElement.getBoundingClientRect()
+    /**
+     * 裁决（2026-11-26，docs/testing/product-debt.md）：本条**不再**要求「390 宽下输入区域在视口内
+     * 居中（|offset| ≤ 2px）」—— 那是实现细节，不是用户的要求，产品也没答应过。
+     * 留下的是用户真的会疼的那一件事：**进编辑态之后，提交 / 取消都在视口内、都点得到**。
+     * 判据里两样都要：矩形整个在视口内（看得见）、中心点命中的就是它自己（没有被遮罩 / 别的层盖住）。
+     */
+    const actions = await textarea.evaluate((el) => {
+      const container = el.parentElement
+      const viewport = { top: 0, left: 0, right: window.innerWidth, bottom: window.innerHeight }
+      const buttons = [...container.querySelectorAll('button')]
       return {
-        offset: (field.top + field.bottom - viewport.top - viewport.bottom) / 2,
-        visible: box.top >= viewport.top && box.bottom <= viewport.bottom,
+        count: buttons.length,
+        list: buttons.map((button) => {
+          const rect = button.getBoundingClientRect()
+          const inside =
+            rect.top >= viewport.top &&
+            rect.left >= viewport.left &&
+            rect.bottom <= viewport.bottom &&
+            rect.right <= viewport.right &&
+            rect.width > 0 &&
+            rect.height > 0
+          const hit = document.elementFromPoint(
+            Math.round(rect.left + rect.width / 2),
+            Math.round(rect.top + rect.height / 2)
+          )
+          const clickable = Boolean(hit) && (hit === button || button.contains(hit))
+          return {
+            name: button.getAttribute('aria-label') ?? button.textContent?.trim() ?? '',
+            inside,
+            clickable,
+            // 没点着时把「谁盖住了它」原样带出来 —— 否则这条红只能靠人肉复现才查得动
+            ...(clickable
+              ? {}
+              : {
+                  coveredBy: hit
+                    ? `<${hit.tagName.toLowerCase()} aria-label=${JSON.stringify(hit.getAttribute('aria-label'))} class=${JSON.stringify(hit.getAttribute('class'))}>`
+                    : 'null（该点不在任何元素上）',
+                  rect: {
+                    top: Math.round(rect.top),
+                    bottom: Math.round(rect.bottom),
+                    left: Math.round(rect.left),
+                    right: Math.round(rect.right),
+                  },
+                  disabled: button.disabled,
+                }),
+          }
+        }),
       }
     })
-    expect(geometry.visible && Math.abs(geometry.offset) <= 2,
-      `[${label}][1c] 输入区域居中，编辑操作完整可见`, JSON.stringify(geometry))
+    expect(actions.count === 2, `[${label}][1c] 编辑态有提交 / 取消两个操作`, JSON.stringify(actions))
+    const actionsUsable = actions.list.every((item) => item.inside && item.clickable)
+    if (!actionsUsable) {
+      // 红了就把「谁盖住了它」的画面留在磁盘上：这条断言的对象是像素，光看 JSON 不够
+      const shot = `/tmp/issue610-edit-blocked-${label}.png`
+      await page.screenshot({ path: shot })
+      note(`编辑操作被遮挡的截图：${shot}`)
+    }
+    expect(
+      actionsUsable,
+      `[${label}][1c] 编辑操作完整可见可点（提交 / 取消都在视口内且没被遮住）`,
+      JSON.stringify(actions.list)
+    )
   } else {
     expect(Boolean(trackedAfter) && Math.abs(trackedAfter.top - tracked.top) <= 2,
       `[${label}][1c] 进入编辑态不移动阅读位置`,

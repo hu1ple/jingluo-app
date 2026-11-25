@@ -138,13 +138,51 @@ const run = async () => {
     return route.abort()
   })
   const page = await context.newPage()
+  /**
+   * 控制台口径（裁决 2026-11-26，见 docs/testing/product-debt.md 已裁决第 6 条）。
+   *
+   * 原判据「console error = 0」**过严**：本用例把所有非本机请求都 `route.abort()` 掉
+   * （settings/public、announcements、releases…），浏览器于是替我们打一条
+   * `Failed to load resource: net::ERR_FAILED` —— 那是**外部资源噪声**，与被测行为
+   * （导入会话里源缺失的附件不拖垮发送）无关，却把用例顶成红，而重跑一次又绿（假 flaky）。
+   *
+   * 放宽后的口径分两层，**不静默吞**：
+   *   1. **脚本异常 / 未捕获错误 = 0**（`pageerror`，一行都不许有）——这才是「坏」；
+   *   2. console error 只允许「资源加载失败」这一类噪声，而且**打出来**（类型 × 次数 + 样例）。
+   *      别的任何一条 console error（React 报错、逻辑报错…）照样红。
+   */
+  const RESOURCE_NOISE = [
+    { type: 'net::ERR_FAILED（外部资源被 abort / 连不上）', re: /Failed to load resource: net::ERR_FAILED/i },
+    { type: 'net::ERR_*（其它网络栈错误）', re: /Failed to load resource: net::ERR_[A-Z_]+/i },
+  ]
   const consoleErrors = []
+  const scriptErrors = []
   page.on('console', (message) => {
     if (message.type() === 'error') {
       consoleErrors.push(message.text())
     }
   })
-  page.on('pageerror', (error) => consoleErrors.push(`pageerror: ${error.message}`))
+  page.on('pageerror', (error) => scriptErrors.push(`pageerror: ${error.message}`))
+
+  /** 把一条 console error 归成「被忽略的噪声类型」；不是噪声就返回 null */
+  const ignoreReason = (text) => {
+    for (const rule of RESOURCE_NOISE) {
+      if (rule.re.test(text)) return rule.type
+    }
+    return null
+  }
+
+  /** 噪声聚合：类型 → { count, sample }（收尾打印，避免「悄悄放过」） */
+  const noise = new Map()
+  const collectNoise = () => {
+    for (const text of consoleErrors) {
+      const reason = ignoreReason(text)
+      if (reason === null) continue
+      const entry = noise.get(reason) ?? { count: 0, sample: text }
+      entry.count += 1
+      noise.set(reason, entry)
+    }
+  }
 
   /** 抓真请求体：`chats` 只要问答请求（自动标题请求带 max_tokens，单列） */
   const chats = []
@@ -401,8 +439,28 @@ const run = async () => {
   check('旧提问重发后仍说明跳过不可用附件，并缩短文件列表',
     editedText.includes('已跳过') && !editedText.includes(ATTACHMENT_NAME) && !editedText.includes(REPEATED_NAME), editedText)
 
-  console.log('\n[6] 整条通路没有 console error / 未捕获异常')
-  check('console error = 0', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | '))
+  console.log('\n[6] 整条通路没有脚本异常 / 非资源类 console error')
+  collectNoise()
+  const fatalErrors = consoleErrors.filter((text) => ignoreReason(text) === null)
+  check(
+    '脚本异常 / 未捕获错误 = 0',
+    scriptErrors.length === 0,
+    scriptErrors.slice(0, 3).join(' | ')
+  )
+  check(
+    '非资源类 console error = 0',
+    fatalErrors.length === 0,
+    fatalErrors.slice(0, 3).join(' | ')
+  )
+  if (noise.size > 0) {
+    // 必须打出来：用例放宽的是「哪一类噪声」，不是「有没有噪声」
+    const summary = [...noise.entries()]
+      .map(([type, entry]) => `${type} × ${entry.count}（样例：${entry.sample.slice(0, 80)}）`)
+      .join('；')
+    console.log(`  ·  已忽略的噪声类型（外部资源，不判失败）：${summary}`)
+  } else {
+    console.log('  ·  已忽略的噪声类型：（无）')
+  }
 
   await browser.close()
 

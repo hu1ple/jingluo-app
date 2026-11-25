@@ -1,13 +1,21 @@
 /**
- * N6 设置重载 + 渠道凭证隔离（域 9）的**唯一数据源**。
+ * N6 设置重载 + 来源凭证隔离（域 9）的**唯一数据源**。
  *
  * N2 已经证明「模块层读回」：写进去、重启后 `useSettings` / `getProviderKind()` 读得到。
  * 但那只证明**模块读到了键**，证不到**界面真的消费了它**（主题没落到 `body.dark`、
- * 阅读档没落到根 `data-*`、渠道没落到设置页的输入行）。这一层需要真实产物 + reload。
+ * 阅读档没落到根 `data-*`、生效来源没落到手风琴里打勾的那一行）。这一层需要真实产物 + reload。
  *
  * 一行 = 一张 seed 表 + 一次 reload + 一组界面断言：
  *   `seed` → reload → `probe` 决定了要看界面的哪一处，`expect` 是期望值。
- * F9-10（切渠道凭证隔离）用两行对称的 seed 证明「A 的地址/模型不会被带进 B」。
+ *
+ * ## F9-09 / F9-10 的口径（裁决 2026-11-26，见 docs/testing/product-debt.md）
+ *
+ * 意图是「**重载后凭证不串**」，不是「渠道下拉回到某个值」（#807 之后来源页是三行手风琴，
+ * 没有下拉）。所以：
+ *  - `currentRow`：重载后打勾的那一行 = seed 的 `chat-demo:provider-kind` 对应的那一行
+ *    （`rowOfKind`：ours→builtin / deepseek→official / 其余→third）；
+ *  - `third` / `official`：两行各自的**草稿**里只有自己那一份地址/模型 —— 互不合并、互不丢失。
+ *    「A 的地址被带进 B」是 #339 的根因，也是这里唯一要钉的东西。
  */
 
 export const FAKE_KEY = 'sk-reload-matrix-0123456789'
@@ -18,14 +26,14 @@ const OPENAI_BASE = 'https://relay-o.example.com'
 const OPENAI_MODEL = 'gpt-relay-model'
 
 /**
- * 这两个自填渠道的 host 会真的被界面拿去探测（打开设置页时 `GET {base}/v1/models`）。
- * 用例必须按 **host + path** 给它们打桩，否则探针会一路发到外网（#673 实测：改前每条真出网）。
+ * 这两条地址的 host 会被界面拿去探测（展开「第三方服务」时 `detectThirdPartyProtocol()`）。
+ * 用例必须按 **host + path** 打桩，否则探针会一路发到外网（#673 实测：改前每条真出网）。
  * 在 fixture 里导出 host，避免用例自己再抄一遍字符串。
  */
 export const ANTHROPIC_HOST = new URL(ANTHROPIC_BASE).host
 export const OPENAI_HOST = new URL(OPENAI_BASE).host
 
-/** 两个自填渠道各自一份配置：切来切去都不许互串（#339 的根因在读取侧） */
+/** 两个自填槽位各自一份配置：切来切去都不许互串（#339 的根因在读取侧） */
 const SCOPED_SEED = {
   'chat-demo:provider-kind': 'anthropic',
   'chat-demo:api-key': FAKE_KEY,
@@ -35,6 +43,20 @@ const SCOPED_SEED = {
   'chat-demo:model:openai': OPENAI_MODEL,
   'chat-demo:base-url': 'https://shared-legacy.example.com',
   'chat-demo:model': 'shared-legacy-model',
+}
+
+/** 第三方 / 官方两行的草稿期望（官方是「地址固定、只填 Key」，没有可编辑的地址与模型） */
+const THIRD_ANTHROPIC = {
+  currentRow: 'third',
+  third: { baseUrl: ANTHROPIC_BASE, model: ANTHROPIC_MODEL },
+  thirdForbids: [OPENAI_BASE, OPENAI_MODEL, 'shared-legacy-model'],
+  official: { editableBaseUrl: false, editableModel: false },
+}
+const THIRD_OPENAI = {
+  currentRow: 'third',
+  third: { baseUrl: OPENAI_BASE, model: OPENAI_MODEL },
+  thirdForbids: [ANTHROPIC_BASE, ANTHROPIC_MODEL, 'shared-legacy-model'],
+  official: { editableBaseUrl: false, editableModel: false },
 }
 
 export const RELOAD_CASES = [
@@ -102,42 +124,47 @@ export const RELOAD_CASES = [
   {
     id: 'R8',
     fn: 'F9-09',
-    label: '渠道=Anthropic 协议：重载后渠道还在，且渲染服务地址 / 模型两行',
+    label: '来源=第三方（anthropic）：重载后打勾的仍是第三方那一行',
     seed: { 'chat-demo:provider-kind': 'anthropic', 'chat-demo:api-key': FAKE_KEY },
-    probe: 'channel',
-    expect: { channelLabel: 'Anthropic 协议', hasBaseUrl: true, hasModel: true },
+    probe: 'source',
+    // F9-09 只问「生效来源还是不是同一行」：不展开别的行，免得为了看空草稿去打一次探针
+    expect: { currentRow: 'third' },
   },
   {
     id: 'R9',
     fn: 'F9-09',
-    label: '渠道=OpenAI 兼容：重载后渠道还在，且渲染服务地址 / 模型两行',
-    seed: { 'chat-demo:provider-kind': 'openai', 'chat-demo:api-key': FAKE_KEY },
-    probe: 'channel',
-    expect: { channelLabel: 'OpenAI 兼容', hasBaseUrl: true, hasModel: true },
+    label: '来源=DeepSeek 官方：重载后打勾的仍是官方那一行',
+    seed: { 'chat-demo:provider-kind': 'deepseek', 'chat-demo:api-key': FAKE_KEY },
+    probe: 'source',
+    expect: { currentRow: 'official' },
   },
   {
     id: 'R10',
     fn: 'F9-10',
-    label: '渠道=Anthropic：地址/模型只读自己那份（不串 OpenAI 也不串共享老键）',
+    label: '来源=第三方（anthropic）：重载后第三方行只读自己那份（不串 OpenAI，也不串共享老键）',
     seed: SCOPED_SEED,
-    probe: 'channel',
-    expect: { channelLabel: 'Anthropic 协议', baseUrl: ANTHROPIC_BASE, model: ANTHROPIC_MODEL },
+    probe: 'source',
+    expect: THIRD_ANTHROPIC,
   },
   {
     id: 'R11',
     fn: 'F9-10',
-    label: '渠道=OpenAI：地址/模型只读自己那份（不串 Anthropic）',
+    label: '来源=第三方（openai）：重载后第三方行只读自己那份（不串 Anthropic）',
     seed: { ...SCOPED_SEED, 'chat-demo:provider-kind': 'openai' },
-    probe: 'channel',
-    expect: { channelLabel: 'OpenAI 兼容', baseUrl: OPENAI_BASE, model: OPENAI_MODEL },
+    probe: 'source',
+    expect: THIRD_OPENAI,
   },
   {
     id: 'R12',
     fn: 'F9-10',
-    label: '切渠道后 Key 不丢（四渠道共用一把，只提示可重填）',
-    seed: { ...SCOPED_SEED, 'chat-demo:api-key': FAKE_KEY },
-    probe: 'switch-keep-key',
-    expect: { masked: true, hint: true },
+    label: '生效来源切到内置服务后，第三方那一份仍然在（别的行的凭证不丢、也不被合并）',
+    // 内置服务要「服务端下发的那把」才算已配置（#596）：Key + 下发标记一起种
+    seed: async () => {
+      const { claimedOursStorage } = await import('../../helpers/ours-claim.mjs')
+      return { ...SCOPED_SEED, 'chat-demo:provider-kind': 'ours', ...(await claimedOursStorage(FAKE_KEY)) }
+    },
+    probe: 'source',
+    expect: { ...THIRD_ANTHROPIC, currentRow: 'builtin' },
   },
   {
     id: 'R13',

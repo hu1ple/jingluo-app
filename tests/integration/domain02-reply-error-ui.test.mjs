@@ -33,6 +33,23 @@ import {
   writeStream,
 } from '../fixtures/domain01-02/mock-upstream.mjs'
 
+/**
+ * 文案口径（裁决 2026-11-26）：**期望句子从 `src/i18n/zh.ts` 现取**，用例里不抄字面量。
+ *
+ * 为什么必须这样：文案是产品定稿、会继续改的那一层。写死「请求过于频繁」这种字面量，
+ * 改文案就得改用例（于是有人图省事去改断言而不是改文案），而且改完之后用例还在断言一句
+ * **界面上已经不存在的话**。等值断言到 i18n key 之后：
+ *   · 产品再改文案 → 只改 `src/i18n/zh.ts` 一处，用例自动跟着；
+ *   · 真正会红的只剩「串档」（把 5xx 说成限流）与「这一档没了」—— 那才是坏。
+ */
+const { zh } = await import('../../src/i18n/zh.ts')
+
+/** 与 i18n 的插值同一口径：`{name}` → params[name] */
+const render = (key, params = {}) =>
+  String(zh[key]).replace(/\{(\w+)\}/g, (whole, name) =>
+    Object.hasOwn(params, name) ? String(params[name]) : whole
+  )
+
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, '../..')
 const DIST = await requireDist(process.env.DIST_DIR || path.join(ROOT, 'dist'))
@@ -108,10 +125,10 @@ const sendChat = async (page, text = '这条会失败') => {
 
 /**
  * 表驱动的 7 行。列就是断言口径：
- *   expectText   界面必须出现的那句话（这一档的招牌文案）
+ *   expectKey    界面必须出现的那一档文案**对应的 i18n key**（不是字面量句子，见上面的说明）
  *   notText      不许出现的串档文案（正则）
- *   calls        回答请求的**准确**次数（终态 1 / 可重试按上限 3）
- *   saysRetryable 文案有没有告诉用户「可以重试」
+ *   retries      这一档的**自动重试次数**（实测值，不是目标值）：总请求数 = 1 + retries
+ *   regenerate   界面是否给了「重新生成」这个出路（终态错误不给 —— 同一请求再发一次结果一样）
  *   action       出口动作：apiKey / topUp / null
  */
 const ROWS = [
@@ -119,10 +136,11 @@ const ROWS = [
     id: '行 1 401 Key 无效',
     covers: ['F2-05'],
     respond: (res) => writeJsonError(res, 401, { type: 'authentication_error', message: 'invalid api key' }),
-    expectText: 'API Key 无效或已被删除',
-    notText: /请求过于频繁|余额不足|服务器繁忙|未知错误/,
-    calls: 1,
-    saysRetryable: false,
+    expectKey: 'replyApiKeyNotFound',
+    notText: /余额不足|服务器繁忙|未知错误|发得太快/,
+    // 终态：Key 不对，重发多少次都是 401
+    retries: 0,
+    regenerate: false,
     action: 'apiKey',
     timeout: 20_000,
   },
@@ -130,10 +148,11 @@ const ROWS = [
     id: '行 2 429 限流',
     covers: ['F2-07'],
     respond: (res) => writeJsonError(res, 429, { type: 'rate_limit_error', message: 'rate limit exceeded' }),
-    expectText: '请求过于频繁',
+    expectKey: 'replyRateLimited',
     notText: /余额不足|API Key 无效|未知错误/,
-    calls: 3,
-    saysRetryable: true,
+    // 重试次数按**实际**行为（2026-11-26 实测：自动重试 2 次 = 总请求 3 次）
+    retries: 2,
+    regenerate: true,
     action: null,
     timeout: 40_000,
   },
@@ -141,10 +160,11 @@ const ROWS = [
     id: '行 3 502 服务端繁忙',
     covers: ['F2-07'],
     respond: (res) => writeJsonError(res, 502, { type: 'api_error', message: 'bad gateway' }),
-    expectText: '对方忙得团团转',
+    expectKey: 'replyServerBusy',
     notText: /余额|API Key 无效|发得太快|未知错误/,
-    calls: 3,
-    saysRetryable: true,
+    // 2026-11-26 实测：自动重试 2 次（与 429 同一档上限）
+    retries: 2,
+    regenerate: true,
     action: null,
     timeout: 40_000,
   },
@@ -156,10 +176,11 @@ const ROWS = [
         type: 'invalid_request_error',
         message: "prompt is too long: 210000 tokens > 200000 maximum",
       }),
-    expectText: '太长了机装不下了',
+    expectKey: 'replyContextLimit',
     notText: /发得太快|对方忙|未知错误/,
-    calls: 1,
-    saysRetryable: false,
+    // 上下文超长是终态：重发还是超长
+    retries: 0,
+    regenerate: false,
     action: null,
     timeout: 20_000,
   },
@@ -168,10 +189,11 @@ const ROWS = [
     covers: ['F2-09'],
     // 发一块正文后直接结束响应、不发 message_stop
     respond: (res) => writeCut(res, { chunks: ['半句就断了'] }),
-    expectText: '网络中途跑掉啦',
+    expectKey: 'replyStreamInterrupted',
     notText: /未知错误|对方忙|太长了/,
-    calls: 1,
-    saysRetryable: true,
+    // 2026-11-26 实测：断流后自动重连 1 次（总请求 2 次）
+    retries: 1,
+    regenerate: true,
     action: null,
     timeout: 30_000,
   },
@@ -181,15 +203,18 @@ const ROWS = [
     // 只发响应头 + 一块正文，然后一直不动：60s 空闲超时（LIMITS.requestTimeouts.idleMs，#568 从 45s 放宽）后收口
     respond: (res) => writeCut(res, { chunks: ['收到一句后上游不动了'] }),
     idle: true,
-    expectText: '怎么卡住了喵',
+    expectKey: 'replyIdleTimeout',
     notText: /网络中途跑掉|未知错误|对方忙/,
-    calls: 1,
+    // 2026-11-26 实测：空闲超时后自动重试 1 次（总请求 2 次）；两次各 60s 空闲窗口，
+    // 所以本行的等待上限要容得下「首发 + 一次重试」两个完整空闲窗口
+    retries: 1,
     // 空闲超时（replyIdleTimeout）2026-11-24 文案定稿：「怎么卡住了喵，点「重新生成」再给我一次机会QAQ」。
     // 连接还在、上游不动了，出路是换一条连接重生成，而不是干等重试 —— 所以这里认「重新生成」。
     retryHint: /重新生成/,
-    saysRetryable: false,
+    regenerate: true,
     action: null,
-    timeout: 90_000,
+    // 首发 + 一次重试 = 两个完整空闲窗口（各 60s），90s 不够，这里留到 150s
+    timeout: 150_000,
   },
   {
     id: '行 7 额度不足',
@@ -200,10 +225,11 @@ const ROWS = [
         message: 'Insufficient balance, please top up your account.',
         code: 'insufficient_balance',
       }),
-    expectText: '用完额度',
+    expectKey: 'replyInsufficientBalance',
     notText: /发得太快|对方忙|未知错误/,
-    calls: 1,
-    saysRetryable: false,
+    // 充值之前重发多少次都是同一个结果
+    retries: 0,
+    regenerate: false,
     action: 'topUp',
     timeout: 20_000,
   },
@@ -264,10 +290,11 @@ try {
       const opened = await openChat(mock)
       context = opened.context
       const page = opened.page
+      const expected = render(row.expectKey, row.params)
       await sendChat(page)
-      const hit = await waitForText(page, row.expectText, row.timeout)
+      const hit = await waitForText(page, expected, row.timeout)
       const text = await bodyText(page)
-      expect(hit, `${row.covers.join('/')} 界面出现这一档文案 ${JSON.stringify(row.expectText)}`)
+      expect(hit, `${row.covers.join('/')} 界面出现这一档文案（${row.expectKey}）${JSON.stringify(expected)}`)
       if (!hit) {
         console.log(`     ↳ 实际界面：${JSON.stringify(text.slice(0, 260))}`)
       }
@@ -276,15 +303,23 @@ try {
         `${row.covers.join('/')} 没有被串到别的档（不许出现 ${row.notText}）`
       )
       const calls = mock.state.chatCalls.length
-      expect(calls === row.calls, `${row.covers.join('/')} 回答请求次数 = ${row.calls}（实际 ${calls}）`)
+      const expectedCalls = 1 + row.retries
+      expect(
+        calls === expectedCalls,
+        `${row.covers.join('/')} 回答请求次数 = ${expectedCalls}（首发 1 + 自动重试 ${row.retries}；实际 ${calls}）`
+      )
       if (row.retryHint) {
         expect(row.retryHint.test(text), `${row.covers.join('/')} 文案给了可走的路（${row.retryHint}）`)
       }
-      if (row.saysRetryable) {
-        expect(/可以重试|点重新生成|再试/.test(text), `${row.covers.join('/')} 文案告诉用户可以重试`)
-      } else {
-        expect(!/可以重试/.test(text), `${row.covers.join('/')} 终态错误不误导成「可以重试」`)
-      }
+      // 「还能再试一次」这件事钉的是**出口在不在**（`errorNotice` 的 `regenerate` 那一列），
+      // 不钉文案里某个词：文案只改 `zh.ts` 一处，出口给不给是产品语义。
+      const regenerateShown = (await page.getByRole('button', { name: zh.regenerate }).count()) > 0
+      expect(
+        regenerateShown === row.regenerate,
+        row.regenerate
+          ? `${row.covers.join('/')} 界面给了「${zh.regenerate}」这个出路`
+          : `${row.covers.join('/')} 终态错误不给「${zh.regenerate}」（再发一次结果一样）`
+      )
       if (row.action === 'apiKey') {
         expect(
           (await page.getByRole('button', { name: /更换 API Key/ }).count()) > 0,

@@ -205,9 +205,9 @@ journalctl -u actions-runner -n 30 --no-pager
 
 这是本方案最重要的一节。先说一个**必须正视的结构事实**：
 
-> 当前 `ci.yml` 的 job 粒度**不等于**「轻活/重活」的粒度。`checks` 这一个 job（`.github/workflows/ci.yml:30`）里**同时**装着：
+> 当前 `ci.yml` 的 job 粒度**不等于**「轻活/重活」的粒度。`checks` 这一个 job（`.github/workflows/ci.yml ⇒ checks:`）里**同时**装着：
 > - 轻活：`type` / `lint` / `unit`、37 道 `check-*` 门禁、`test:dl-release`
-> - **偏重活**：`Build (internal)`（`.github/workflows/ci.yml:393`）、`Setup JDK 21`（`:413`）、`gradle 配置可解析`（`:474`）、keystore 负向对照（要真 keystore + 临时 key）
+> - **偏重活**：`Build (internal)`（`.github/workflows/ci.yml ⇒ - name: Build (internal)`）、`Setup JDK 21`（`.github/workflows/ci.yml ⇒ - name: Setup JDK 21`）、`gradle 配置可解析`（`.github/workflows/ci.yml ⇒ - name: gradle 配置可解析`）、keystore 负向对照（要真 keystore + 临时 key）
 >
 > **所以「只迁轻活」没法靠改一行 `runs-on` 实现**——`runs-on` 只能整 job 迁移。想要真正的「轻/重」切分，得**再拆一个 job**，那是一次独立的 `ci.yml` 改动（本文件不做，也不建议和计费故障的应急混在同一个 PR 里）。
 
@@ -216,8 +216,8 @@ journalctl -u actions-runner -n 30 --no-pager
 | job | 现状 | 建议 | 理由 |
 | --- | --- | --- | --- |
 | `checks`（type/lint/unit + 门禁） | `ubuntu-latest` | ⚠️ **可迁，但要接受它带着 build + gradle 校验一起过去** | 这是唯一「以轻活为主体」的 job。迁它的收益最大（分钟数占比高、且不含浏览器），但会把 JDK 与 Gradle 求值带到 4 核机上 |
-| `golden` | `ubuntu-latest` + **容器** `mcr.microsoft.com/playwright:v1.64.1-jammy`（`.github/workflows/ci.yml:945`） | ❌ **不迁** | ① 要 Chromium；② 用了 `container:`，自建 runner 上得先有 docker 且把 runner 用户加进 docker 组——**docker 组 ≈ root**，等于把 §3.4 的权限收紧全部作废 |
-| `integration` ×6（L1 分片 1/6…6/6） | `ubuntu-latest` + 同款容器（`:1091`） | ❌ **绝对不迁** | 6 个分片并发在 4 核机上 = 互相拖慢；P0 报告实测单分片 ~1147s 的全量口径，若 6 并发抢核，单分片会远超 `timeout-minutes: 25`（`.github/workflows/ci.yml:1082`）→ **红的原因从「没 runner」变成「超时」，更难分辨** |
+| `golden` | `ubuntu-latest` + **容器** `mcr.microsoft.com/playwright:v1.64.1-jammy`（`.github/workflows/ci.yml ⇒ image: mcr.microsoft.com/playwright:v1.64.1-jammy`） | ❌ **不迁** | ① 要 Chromium；② 用了 `container:`，自建 runner 上得先有 docker 且把 runner 用户加进 docker 组——**docker 组 ≈ root**，等于把 §3.4 的权限收紧全部作废 |
+| `integration` ×6（L1 分片 1/6…6/6） | `ubuntu-latest` + 同款容器（`.github/workflows/ci.yml ⇒ image: mcr.microsoft.com/playwright:v1.64.1-jammy`） | ❌ **绝对不迁** | 6 个分片并发在 4 核机上 = 互相拖慢；P0 报告实测单分片 ~1147s 的全量口径，若 6 并发抢核，单分片会远超 `timeout-minutes: 25`（`.github/workflows/ci.yml ⇒ timeout-minutes: 25`）→ **红的原因从「没 runner」变成「超时」，更难分辨** |
 | `flaky-cross-runner` | `ubuntu-latest` | ❌ **不迁** | 名字就是它的语义：**跨 runner 判定的 flaky 三态**。迁到单一自建 runner 会削弱「跨 runner」这个前提本身 |
 
 **结论（供决策的一句话）**：C 的合理形态是「**`checks` 迁过去分担，L1 与 golden 等 A/B 恢复**」。C 省下的是 `checks` 那部分分钟数；**L1 的 6 个分片仍是计费大头**，这部分 C 帮不上忙。
@@ -372,13 +372,27 @@ gh run rerun <run-id> --failed
 
 | 事实 | 位置 |
 | --- | --- |
-| `checks` job 定义（轻活主体 + build/gradle 混装） | `.github/workflows/ci.yml:30` |
-| `checks` 的 `runs-on` / 超时 | `.github/workflows/ci.yml:32` |
-| `Build (internal)`（偏重活，在 `checks` 内） | `.github/workflows/ci.yml:393` |
-| `Setup JDK 21`（偏重活） | `.github/workflows/ci.yml:413` |
-| `gradle 配置可解析`（偏重活） | `.github/workflows/ci.yml:474` |
-| `golden` 的 `runs-on` / 容器镜像 | `.github/workflows/ci.yml:937` · `.github/workflows/ci.yml:945` |
-| `integration` 的 `runs-on` / 超时 / 容器镜像 | `.github/workflows/ci.yml:1081` · `.github/workflows/ci.yml:1082` · `.github/workflows/ci.yml:1091` |
-| `flaky-cross-runner` 的 `runs-on` | `.github/workflows/ci.yml:1347` |
+| `checks` job 定义（轻活主体 + build/gradle 混装） | `.github/workflows/ci.yml ⇒ checks:` |
+| `checks` 的 `runs-on` / 超时 | `.github/workflows/ci.yml ⇒ name: type / lint / unit / 产物兼容门禁`（job 头；`runs-on: ubuntu-latest`，job 级兜底 `timeout-minutes` 见其下一行） |
+| `Build (internal)`（偏重活，在 `checks` 内） | `.github/workflows/ci.yml ⇒ - name: Build (internal)` |
+| `Setup JDK 21`（偏重活） | `.github/workflows/ci.yml ⇒ - name: Setup JDK 21` |
+| `gradle 配置可解析`（偏重活） | `.github/workflows/ci.yml ⇒ - name: gradle 配置可解析` |
+| `golden` 的 `runs-on` / 容器镜像 | `.github/workflows/ci.yml ⇒ timeout-minutes: 15` · `.github/workflows/ci.yml ⇒ image: mcr.microsoft.com/playwright:v1.64.1-jammy` |
+| `integration` 的 `runs-on` / 超时 / 容器镜像 | `.github/workflows/ci.yml ⇒ timeout-minutes: 25` · `.github/workflows/ci.yml ⇒ image: mcr.microsoft.com/playwright:v1.64.1-jammy` |
+| `flaky-cross-runner` 的 `runs-on` | `.github/workflows/ci.yml ⇒ flaky-cross-runner:` |
 
-（行号对应 `main@aab53de0`。若 `ci.yml` 之后有改动，以 `git log -L` 重新核对——本文档的行号会被 `check:doc-refs` 盯住。）
+**这张表刻意不写行号**（2026-11-26 改）：`ci.yml` 是本仓库位移最频繁的文件 —— 上一版这 8 行
+写的 `:30 / :393 / :413 / :474 / :937 / :945 / :1081 / :1082 / :1091 / :1347` 里**只剩 `:30`
+还是对的**，其余全指到了空行、别的注释、甚至 `android/app/src/main/assets/**` 的说明上，而
+`check-doc-refs` 当时**一个都没报**（它只验「行在、非空行」，不验「这一行是不是那个东西」）。
+现在改成「路径 `⇒` 期望片段」：门禁去 `ci.yml` 里找那段文字，**找不到就红**，而这个
+锚点不会因为有人在上半部分插两行就失效。人要看的时候照抄这段去 `grep -n` 即可。
+
+```bash
+grep -nF -- '- name: Build (internal)' .github/workflows/ci.yml
+grep -n '^  checks:' .github/workflows/ci.yml
+```
+
+（**没有行号可对**了：本表用的是「路径 `⇒` 片段」，`check:doc-refs` 会去 `ci.yml` 里找那段文字，
+找不到就红。上一版写着「行号对应 `main@aab53de0`」并以为「`check:doc-refs` 会盯住」—— 实测它
+盯不住：行号落在空行才红，落在**别人身上**照样绿。这正是本表改成片段定位的原因。）

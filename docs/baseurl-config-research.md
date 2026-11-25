@@ -56,16 +56,23 @@ declare const __API_ORIGIN__: string
 
 ### 1.2 全仓库引用清单（`grep -rn "API_ORIGIN\|__API_ORIGIN__"`，排除 node_modules）
 
+> **快照状态（2026-11-26 复核）**：本节的「文件:行」是 #4xx 那一轮取证当时的形状。之后地址层重构
+> （#484 / #651 / #653）把三个派生常量从 `client.ts` / `speech.ts` 收进了
+> `src/services/api/apiConfig.ts`：`__API_ORIGIN__` 现在只作为 `DEFAULT_BASE_URL`（生成器注入的
+> 兜底值），运行时一律走 `getBaseUrl()` / `getToolsBaseUrl()`。**符号已消失的行按「曾存在、
+> 现已删除」处理（删除线），还活着的行改成 `路径 ⇒ 片段` 定位**（不写行号：这文件的事已经
+> 不是「行号对不对」，而是「符号还在不在」）。
+
 | # | 文件:行 | 内容 | 角色 |
 | --- | --- | --- | --- |
 | 1 | `rspack.config.ts` 的 `__API_ORIGIN__` 注释（`apiOrigin`） | 注释 | — |
-| 2 | `rspack.config.ts:83` | `new rspack.DefinePlugin({ __API_ORIGIN__: JSON.stringify(apiOrigin) })` | **注入点** |
-| 3 | `src/env.d.ts:9` | `declare const __API_ORIGIN__: string` | 类型声明 |
-| 4 | `src/services/api/client.ts:13` | `export const API_ORIGIN = __API_ORIGIN__` | **唯一的运行时取值点** |
-| 5 | `src/services/api/client.ts:15` | `` const ANTHROPIC_BASE_URL = `${API_ORIGIN}/anthropic/v1` `` | 派生 |
-| 6 | `src/services/api/client.ts:94` | `` request(`${API_ORIGIN}/models`, …) `` | 派生（verifyApiKey） |
-| 7 | `src/services/api/speech.ts:1` | `import { ApiError, API_ORIGIN, request } from './client.js'` | 跨模块引用 |
-| 8 | `src/services/api/speech.ts:9` | `` const TOOLS_BASE_URL = `${API_ORIGIN}/v1/tools` `` | 派生 |
+| 2 | `rspack.config.ts:506 ⇒ __API_ORIGIN__: JSON.stringify(apiOrigin)` | `new rspack.DefinePlugin({ __API_ORIGIN__: JSON.stringify(apiOrigin) })` | **注入点** |
+| 3 | `src/env.d.ts:9 ⇒ declare const __API_ORIGIN__: string` | `declare const __API_ORIGIN__: string` | 类型声明 |
+| 4 | ~~`src/services/api/client.ts:13`~~ `export const API_ORIGIN = __API_ORIGIN__` | 已删除（常量搬走）→ 现在是 `src/services/api/apiConfig.ts:57 ⇒ export const DEFAULT_BASE_URL: string = __API_ORIGIN__` | 兜底值（不再是「唯一取值点」） |
+| 5 | ~~`src/services/api/client.ts:15`~~ `` const ANTHROPIC_BASE_URL = `${API_ORIGIN}/anthropic/v1` `` | 已删除：Anthropic 地址现在由 `getCurrentSpec().paths` 拼（`src/services/api/apiConfig.ts:586 ⇒ export const getToolsBaseUrl`） | 派生于 provider spec |
+| 6 | `src/services/api/client.ts:453 ⇒ await request(joinUrl(baseUrl, spec.paths.models)` | `` request(joinUrl(baseUrl, spec.paths.models), …) ``（在 `client.ts:449 ⇒ export const verifyApiKey` 里） | 派生（verifyApiKey） |
+| 7 | `src/services/api/speech.ts:1 ⇒ import { getBaseUrl, getToolsBaseUrl } from './apiConfig.js'` | `import { getBaseUrl, getToolsBaseUrl } from './apiConfig.js'` | 跨模块引用（已改为走 apiConfig） |
+| 8 | ~~`src/services/api/speech.ts:9`~~ `` const TOOLS_BASE_URL = `${API_ORIGIN}/v1/tools` `` | 已删除 → `src/services/api/apiConfig.ts:586 ⇒ export const getToolsBaseUrl` | 派生 |
 
 `grep -rn "deepseek.com" src` 只剩 4 处与 API 无关的文档/外链：`AssistantMessage.tsx` 的充值页链接、`attachments.ts` 的 `DELETE_FILE_DOCS_URL`（删除文件文档链接）、`src/services/api/types.ts` 的协议文档链接注释、`client.ts:12`（注释）。**没有任何第二套 URL 常量。**
 
@@ -88,11 +95,12 @@ $ cd /root/deepseek-app/dist && grep -ro "https://api.deepseek.com" . | sort | u
 
 ### 2.1 拼接点
 
-| 派生常量 | 定义位置 | 值 | 使用位置 |
+| 派生常量 | 定义位置（2026-11-26 复核后） | 值 | 使用位置 |
 | --- | --- | --- | --- |
-| `API_ORIGIN` | `client.ts:13` | `__API_ORIGIN__` | `client.ts:94`、`speech.ts:9`（经 import） |
-| `ANTHROPIC_BASE_URL` | `client.ts:15` | `${API_ORIGIN}/anthropic/v1` | `client.ts` 的 `uploadFile()`、`deleteFile()`、`streamMessage()`（三个使用点按函数名定位；原文写的是当次行号 116/127/149，会漂） |
-| `TOOLS_BASE_URL` | `speech.ts:9` | `${API_ORIGIN}/v1/tools` | `speech.ts:24`、`speech.ts:55` |
+| `DEFAULT_BASE_URL` | `src/services/api/apiConfig.ts:57 ⇒ export const DEFAULT_BASE_URL: string = __API_ORIGIN__` | `__API_ORIGIN__`（构建期注入） | 只在 `getBaseUrl()` 解析不出渠道/已存值时兜底 |
+| `getBaseUrl()` | `src/services/api/apiConfig.ts:329 ⇒ export const getBaseUrl = (): string => resolveBaseUrl()` | 运行时解析结果 | 全仓唯一的地址出口（`client.ts` 的 `verifyApiKey` / `uploadFile()` / `deleteFile()` / `streamMessage()` 都从它取） |
+| `getToolsBaseUrl()` | `src/services/api/apiConfig.ts:586 ⇒ export const getToolsBaseUrl = (): string => joinUrl(getBaseUrl(), getCurrentSpec().paths.tools)` | `getBaseUrl() + spec.paths.tools` | `src/services/api/speech.ts` 的转写 / 合成两处 |
+| ~~`API_ORIGIN`~~ / ~~`ANTHROPIC_BASE_URL`~~ / ~~`TOOLS_BASE_URL`~~ | ~~`client.ts:13` / `client.ts:15` / `speech.ts:9`~~ | 已删除（本表是当时形状，保留为取证） | — |
 
 ### 2.2 每种能力的完整 URL（以 `ORIGIN=https://api.deepseek.com` 为例）
 

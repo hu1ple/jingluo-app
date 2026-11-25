@@ -109,7 +109,7 @@ staging 上两者会打架（账户 `balance=2.02`，Key 侧 403，见第五节�
 | `POST /api/v1/redeem` | `src/services/consume/redeem.ts:278 redeemCode` → `postRedeem` 的 body **只有 `{code}`**；`grep -rn "api_key\|request_id" src/services/consume/redeem.ts` → 唯一命中是 `:274` 的一行注释（「sub2api 不收 `request_id`」），**请求体里没有这两个字段** | ✅ 已对接（不再传 `api_key` / `request_id`） |
 | `GET /api/v1/redeem/history` | `src/services/consume/redeem.ts:127 getRedeemHistory`，由 `verifyCredited:204` 用于「超时 / 409 / 202 后核对到账」 | ✅ 已对接 |
 | **兑换后重拉 `/user/profile` 刷余额**（不再是某把 Key 的 quota） | **本单修掉**：`redeemed` 结局原来带的是 `refreshUsage: true`（指向 `/v1/usage` = Key 的 quota），而且**没有任何代码消费这个标志**。现在字段改为 `refreshProfile`，并由 `src/components/consume/myCardsModel.ts afterRedeemed()` 真的去拉一次 `GET /api/v1/user/profile`，把 `balance` 上屏 | 🔴 **已修正**（字段语义不符 + 没人执行） |
-| 旧 `POST /api/redeem {card_no, api_key, request_id}` | 仍留在 `src/services/ours/api.ts:490 redeemCard`；**`grep -rn redeemCard src/` → 0 个调用点**（只有单测 `tests/unit/ours-api.test.mjs`） | 🟡 死代码（不阻塞：界面上已无入口；随 W1-D 清理，**本单不删**，删它会连带删既有单测 = 降断言） |
+| 旧 `POST /api/redeem {card_no, api_key, request_id}` | **已移除**：`grep -rn redeemCard src/` → **0 个文件**（只剩 `tests/unit/ours-payment-logs-312.test.mjs` 的注释说「兑换节点随 redeemCard 一起移除」） | ✅ 已清理（比本单原判「🟡 死代码待清」更进一步） |
 
 ---
 
@@ -117,9 +117,9 @@ staging 上两者会打架（账户 `balance=2.02`，Key 侧 403，见第五节�
 
 | 端点 | 客户端现在调什么（证据） | 判定 |
 | --- | --- | --- |
-| `GET /api/v1/user/aff` | `src/services/consume/aff.ts:70 getAffiliate`；「我的邀请」`src/components/consume/invitePanelModel.ts:83 loadInvite`（`invitation_code_enabled=false` 时整块隐藏） | ✅ 已对接（staging 该开关 = false → 入口隐藏，契约预期内） |
+| `GET /api/v1/user/aff` | `src/services/consume/aff.ts:70 getAffiliate`；「我的邀请」`src/components/consume/invitePanelModel.ts:203 ⇒ export const loadInvite`（`invitation_code_enabled=false` 时整块隐藏） | ✅ 已对接（staging 该开关 = false → 入口隐藏，契约预期内） |
 | `POST /api/v1/user/aff/transfer` | **0 命中** | 🚫 明确不做（#676 六：本期不启用） |
-| 注册时邀请码放 `aff_code` | 客户端放的是 **`invitation_code`**（`src/components/auth/RegisterPage.tsx:97`），`aff_code` 只有类型占位（`consume/auth.ts` 的 `ConsumeRegisterInput.affCode`）**没人传** | 🟡 字段名与 #676 写法不同，**先不改**：服务端两个字段都收（`backend/internal/handler/auth_handler.go:58-59` `InvitationCode` + `AffCode` 并列），改错一边反而会把「绑定奖励」换「比例返利」通道。列 D-676-3 等后端一句话定性 |
+| 注册时邀请码放 `aff_code` | 客户端放的是 **`invitation_code`**（`src/components/auth/RegisterPage.tsx:147 ⇒ invitationCode:`），`aff_code` 只有类型占位（`consume/auth.ts` 的 `ConsumeRegisterInput.affCode`）**没人传** | 🟡 字段名与 #676 写法不同，**先不改**：服务端两个字段都收（`backend/internal/handler/auth_handler.go:58-59` `InvitationCode` + `AffCode` 并列），改错一边反而会把「绑定奖励」换「比例返利」通道。列 D-676-3 等后端一句话定性 |
 | `POST /api/v1/auth/validate-invitation-code` | `src/services/consume/aff.ts:49 validateInvitationCode`；**无 UI 调用**（注册页不做预校验） | 🟡 层内已接 / UI 未接 |
 
 ---

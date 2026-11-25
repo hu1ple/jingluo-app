@@ -115,22 +115,67 @@ test('two suite entrypoints reuse injected dist without build, and fail missing 
   assert.equal(await readFile(path.join(dist, 'index.html'), 'utf8'), 'immutable')
 })
 
+/** 「等第一行输出」的诊断上限：只用来区分「输出被缓冲」和「机器太慢」，不是通过判据（见用例内注释） */
+const STREAM_WAIT_MS = 30_000
+
 test('runner streams output before case exit (handshake, not buffered)', async (t) => {
   const dir = await privateRoot(t)
   const file = path.join(dir, 'live.mjs')
   const release = path.join(dir, 'release')
-  await writeFile(file, `import { watch, existsSync } from 'node:fs'; const watcher=watch(${JSON.stringify(dir)},()=>{if(existsSync(${JSON.stringify(release)})){watcher.close()}}); console.log('READY');`)
+  /**
+   * 探针：先 `console.log('READY')`，然后**阻塞到 release 文件出现**再退出。
+   *
+   * 等 release 用轮询而不是 `fs.watch`：inotify 实例是**每个用户 128 个**的全局稀缺资源
+   * （`/proc/sys/fs/inotify/max_user_instances`），同机跑着构建 + 浏览器 + 其它 agent 时会被用完，
+   * 于是 `watch()` 直接抛 `EMFILE: too many open files`，探针在打印 READY 之前就死了 ——
+   * 本用例得到的却是一条「没有流式输出」的假红（实测过一次；真正的流式行为毫无问题）。
+   * 探针要的只是「过一会儿再看一眼」，那个语义用定时轮询表达就够，不该占用一个全局名额。
+   */
+  await writeFile(
+    file,
+    `import { existsSync } from 'node:fs';
+const timer = setInterval(() => { if (existsSync(${JSON.stringify(release)})) { clearInterval(timer); process.exit(0) } }, 25);
+console.log('READY');`,
+  )
   const driver = path.join(dir, 'driver.mjs')
   await writeFile(driver, `import {runCase} from ${JSON.stringify(new URL('../helpers/runtime.mjs', import.meta.url).href)}; const r=await runCase(${JSON.stringify(file)},{cwd:${JSON.stringify(dir)},timeoutMs:10000}); process.exitCode=r.ok?0:1;`)
   const child = spawn(process.execPath, [driver], { stdio: ['ignore', 'pipe', 'pipe'] })
   const closed = new Promise((resolve) => child.once('close', resolve))
   t.after(() => { if (child.exitCode === null) child.kill() })
+  /**
+   * 等待的判据是**终态**（收到 READY），不是「5 秒内必须收到」——后者是假红的来源：
+   * 这里要跨三层进程（本文件 → driver → 被测用例）才可能看到第一行输出，而这台机器上
+   * 同时跑着构建/浏览器时，三层 node 冷启动就能吃掉 5 秒（实测过一次 5.03s 的超时）。
+   *
+   * 上限仍然要有（缓冲型输出会一直等不到 READY，探针自己又不肯退出），但它只当**诊断上限**用：
+   * 真超时要能一眼区分「输出被缓冲（缺陷）」和「机器太慢」。真正证明「流式」的断言是下面的
+   * `child.exitCode === null`：READY 到达时用例**还没退出**。
+   */
+  const startedAt = Date.now()
+  let readyMs = null
+  const noise = []
+  child.stdout.on('data', (chunk) => noise.push(String(chunk)))
+  child.stderr.on('data', (chunk) => noise.push(String(chunk)))
   await new Promise((resolve, reject) => {
-    const deadline = setTimeout(() => reject(new Error('missing live output')), 5000)
-    child.stdout.on('data', (chunk) => { if (String(chunk).includes('READY')) { clearTimeout(deadline); resolve() } })
+    const deadline = setTimeout(
+      () => reject(new Error(`诊断上限 ${STREAM_WAIT_MS}ms 内没收到 READY：要么子进程输出被缓冲（这是要报的缺陷），要么机器太慢（三层 node 冷启动超过 ${STREAM_WAIT_MS}ms）\n${noise.join('')}`)),
+      STREAM_WAIT_MS,
+    )
+    child.stdout.on('data', (chunk) => {
+      if (!String(chunk).includes('READY')) return
+      readyMs = Date.now() - startedAt
+      clearTimeout(deadline)
+      resolve()
+    })
+    // 子进程提前退出 = 探针自己崩了（装配/环境问题），不是「输出被缓冲」——
+    // 这两种情况必须分得开，否则每次都是 30s 白等 + 一句误导的「没有流式输出」。
+    child.once('close', (code, signal) => {
+      clearTimeout(deadline)
+      reject(new Error(`子进程在打印 READY 之前就退出了（code=${code} signal=${signal}）—— 这是探针/环境问题，不是「输出被缓冲」。输出：\n${noise.join('')}`))
+    })
     child.once('error', reject)
   })
-  assert.equal(child.exitCode, null)
+  assert.equal(child.exitCode, null, `READY 必须在用例退出**之前**到达（这就是「流式」的含义；实测 ${readyMs}ms）`)
   await writeFile(release, 'continue')
   assert.equal(await closed, 0)
 })

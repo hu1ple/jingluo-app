@@ -156,7 +156,21 @@ test('V7：normalizeBaseForCompare 忽略末尾斜杠与大小写（gradle 侧�
 // ---------------------------------------------------------------------------
 test('G1：rspack 注入点用生效值，并把 endpoints 写进 build-info.json（gradle 的判据来源）', () => {
   const rspack = read('rspack.config.ts')
-  assert.match(rspack, /applyBaseOverrides\(loadConsumePay\(ENDPOINTS_FILE\), endpoints\)/)
+  /**
+   * 判据是**数据流**不是标识符名：`effectiveConsumePay` 必须派生自
+   * `applyBaseOverrides(loadConsumePay(<文件>), endpoints)` —— 也就是「读到配置就校验，
+   * 校验失败直接中止构建」这条链必须在注入点上真的存在（#651 的事故就是缺了这半条：
+   * 值从别处来，override 设了也没进产物）。
+   *
+   * 这里**不钉** `ENDPOINTS_FILE` 这个变量名：它随着「支持 ENDPOINTS_PROFILE 选配置文件」
+   * 改成了 `endpointsFile`，而那是一次正确的改动 —— 钉名字会让门禁为正确的重构变红
+   * （守护现状，不是守护意图）。文件名从哪来不在本条判据里，见 G3/G4 与 build.mjs 的用例。
+   */
+  assert.match(
+    rspack,
+    /applyBaseOverrides\(\s*loadConsumePay\([^()]*\)\s*,/,
+    'rspack.config.ts 的生效值必须来自 applyBaseOverrides(loadConsumePay(…), …)',
+  )
   assert.match(rspack, /baseUrl: effectiveConsumePay\.config\.consume\.baseUrl/)
   assert.match(rspack, /baseUrl: effectiveConsumePay\.config\.pay\.baseUrl/)
   // build-info.json 必须记 endpoints（否则 gradle 只能猜；删掉这段 = 交叉核对退化成永远「读不到」）

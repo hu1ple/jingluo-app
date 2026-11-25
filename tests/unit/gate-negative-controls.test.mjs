@@ -442,7 +442,9 @@ const REGISTRY = {
   // （与「配错」的 1 区分开，硬要求）。
   // #697 之后这道门禁**接进了 ci.yml**（不再是 unwired）：CI 上跑降级档 `--config-only`
   // （只校验 config/appIdentity.json 的期望值与 build.gradle 的一致性，并把「不验真签名」打在日志里），
-  // 真签名比对在发布机（release.yml 注入签到材料后跑全量）。两条的对照都在 ci.yml 里现场注入。
+  // 真签名比对（拿 APK 里的证书算指纹）只能在发布机上人工执行 `pnpm run check:keystore`：
+  // 原先由 release.yml 注入签到材料后跑全量，该 workflow 已按决策删除，目前已无自动化触发点。
+  // 两条的对照仍在 ci.yml 里现场注入。
   'check:keystore': {
     where: 'tests/unit/gate-negative-controls.test.mjs',
     kind: 'inject',

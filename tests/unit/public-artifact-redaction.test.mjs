@@ -334,15 +334,24 @@ test('T5 XML 命名空间与占位域名不误报，但要计数打印（不静�
 
 test('T6 不传 --config 时读的就是 config/endpoints.json（地址在运行时拼，不在测试里抄一份）', () => {
   const raw = JSON.parse(fs.readFileSync(ENDPOINTS, 'utf8'))
-  // 用**旧池**那个字段（`feedbackUrl`，#869 之后 `inviteBaseUrl` 已从配置删除），不是产品端点：产品端点现在按功能需要放行（T7），
-  // 拿它当「必须红」的样本就测不出真配置被读到了。
-  const invite = raw.feedbackUrl
-  assert.ok(invite, 'config/endpoints.json 里应当有 feedbackUrl（旧池样本）')
-  const address = new URL(invite).host
+  /**
+   * 样本必须**从配置里读出来**（`legacyHosts[]` 是登记过的旧主机，R1b 的裸 IP 判据认它），
+   * 这样才证明「门禁读的是那份真配置」，而不是测试自己抄了一份地址。
+   *
+   * 为什么不再用 `feedbackUrl`：那是本题原先的样本，但 #745 / #869 把网关收敛到
+   * `apia.ecsafe.cn` 之后，`feedbackUrl` 的主机 == `consume.baseUrl` 的主机，于是按
+   * 「同一地址既像产品端点又像旧池时按产品端点算」（本门禁的裁决第 3 条）它已经合法放行 ——
+   * 拿它当「必须红」的样本，红不红取决于地址搬迁，测不出「真配置被读到了」这件事。
+   * 旧主机名单（`legacyHosts`）是配置里**唯一保证「必须红」**的一类：它们已下线、且没有调用方。
+   */
+  const legacy = Array.isArray(raw.legacyHosts) ? raw.legacyHosts : []
+  const address = legacy.find((host) => /^\d{1,3}(\.\d{1,3}){3}$/.test(String(host)))
+  assert.ok(address, `config/endpoints.json 的 legacyHosts 里应当有裸 IP 的旧主机（旧池样本），实际：${JSON.stringify(legacy)}`)
 
   const work = scratch()
   try {
-    const dist = work.writeDist('main.00000009.js', `const base="${invite}";export{base};\n`)
+    // 产物里出现「引号包着的旧主机 IP」：与 R1b（裸 IP 主机字面量）的形态一致
+    const dist = work.writeDist('main.00000009.js', `const base="${address}";export{base};\n`)
     const red = runGate(['--dist', dist])
     assert.equal(red.code, EXIT.LEAK, `真实配置里的旧池地址必须判红，实际 exit=${red.code}\n${red.stdout}`)
     assert.match(red.stdout, new RegExp(address.replace(/\./g, '\\.')), '要点名真实配置里的地址')

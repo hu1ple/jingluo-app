@@ -50,6 +50,16 @@ after(() => {
 /** 一份**与真仓同形**的配置：`expectedCertSha256` 就是已发布证书（前门唯一放行的写法） */
 const CONFIG_REL = 'config/appIdentity.json';
 const GRADLE_REL = 'android/app/build.gradle';
+/**
+ * `config/endpoints.json` 也是「与真仓同形」的一部分（#763）：`verifyReleaseApk` 的第 6 项
+ * 「包内 consume.baseUrl 与期望一致」要把**期望值**从这份配置读出来，读不到就判 UNKNOWN 并 exit 2。
+ *
+ * 不带它的后果（本用例实测过）：S0 第二拍走完整 `verifyReleaseApk` 时，红的原因变成
+ * 「读不到 config/endpoints.json」，于是 `读不到 APK` 那条断言永远不成立 —— 这一拍就不再是在测
+ * 「健康配置能过前门」，而是在测「临时树缺文件」。直接照抄真仓那份：地址本来就只能有一个来源。
+ */
+const ENDPOINTS_REL = 'config/endpoints.json';
+const ENDPOINTS_SOURCE = path.join(ROOT, ENDPOINTS_REL);
 
 /**
  * gradle 片段：与真仓一致（#271 之后指纹从配置派生，gradle 里**没有** 64 位字面量）。
@@ -76,6 +86,8 @@ const writeTree = (root, { config = healthyConfig(), gradle = GRADLE_DERIVED } =
   fs.mkdirSync(path.join(root, 'android', 'app'), { recursive: true });
   if (config !== null) fs.writeFileSync(path.join(root, CONFIG_REL), config);
   if (gradle !== null) fs.writeFileSync(path.join(root, GRADLE_REL), gradle);
+  // 端点配置照抄真仓（见 ENDPOINTS_REL 注释）：前门的第 6 项要它才判得下去
+  fs.copyFileSync(ENDPOINTS_SOURCE, path.join(root, ENDPOINTS_REL));
 };
 
 /**

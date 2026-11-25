@@ -588,6 +588,19 @@ const HELPER_FIXTURE_FAMILY = {
   chatStub: 'chat-stubs',
   chatCollectorStub: 'chat-stubs',
   chatFakeDb: 'chat-stubs',
+  /**
+   * helpers/chat-host-stubs.mjs 的整族装配（漏登记的第二个实例，#513 的同一类）。
+   *
+   * 这个函数把 `@capacitor/core` 无条件换成 `tests/fixtures/chat-stubs/capacitor.mjs`（那个替身
+   * 只有 `Capacitor` 那几个导出，**没有** `registerPlugin`），而 `registerHooks` 装的钩子进程内只增不减。
+   * 用例源码里只有一行 `installChatHostStubs()`，既没有 `fixtures/chat-stubs/` 字面量、也没有
+   * `chatStub(` 调用，于是它被归进 `no-fixture` 桶，和「要真 `@capacitor/core`」的文件同批 ——
+   * 实测：`thinking-effort-363`（装此族）排在 `update-gate`（`updateManifest.ts` 要 `registerPlugin`）
+   * 前面，后者加载即失败：`The requested module '@capacitor/core' does not provide an export named
+   * 'registerPlugin'`（批内 0 用例 red、单跑 14/14 绿，即 run-layer 报的 DEGRADED）。登记进这张表后
+   * 两拨文件分桶，不必把一个文件一个进程地兜。
+   */
+  installChatHostStubs: 'chat-stubs',
 }
 const harnessKeyCache = new Map()
 async function harnessKey(file, source) {

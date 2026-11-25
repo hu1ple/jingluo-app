@@ -282,13 +282,19 @@ test('额度不足：真实 store 一次都不重试，界面给明确文案 + �
   assert.equal(reply.status, 'error')
   // 上游 code 存进回复：刷新后仍认得出
   assert.equal(reply.error?.upstreamCode, 'insufficient_quota')
-  // [3] 文案与出路
+  // [3] 出路与档位归属（钉**行为**，不钉句子里的词）
+  //
+  // 这一档的文案在 2026-11-24 定稿整体换了语气（`replyInsufficientBalance` 现在是
+  // 「你是一直等着用完额度好去找其他AI吗。。。(╥﹏╥)」）。以前这里还额外 grep「不足以 / 无法继续生成」，
+  // 那是在钉**某一版文案的用词**：文案一改就红，而它想防的事故（额度不足被说成网络异常 / 泛化失败，
+  // 用户不知道该去充值）根本没变。所以改成三条与措辞无关的判据：
   assert.ok(notice, '必须有提示，不能静默失败')
-  assert.equal(notice.text, zh.replyInsufficientBalance)
-  assert.match(notice.text, /余额|额度/, '文案要点明余额/额度')
-  assert.match(notice.text, /不足以|无法继续生成/, '文案要说清无法继续生成')
-  assert.doesNotMatch(notice.text, /网络|生成失败|未知错误/, '不许退回网络异常 / 泛化失败')
-  assert.equal(notice.action, 'topUp', '必须给出充值 / 兑换入口')
+  assert.equal(notice.text, zh.replyInsufficientBalance, '文案只有一个来源（i18n），不许就地拼一句')
+  assert.equal(notice.action, 'topUp', '必须给出充值 / 兑换入口 —— 这才是「用户知道下一步做什么」的载体')
+  // 不许落到别的档位：既不是「服务器忙（可以重试）」，也不是那个泛化兜底
+  assert.notEqual(notice.text, zh.replyServerBusy, '额度不足不是「服务器繁忙」档（那档会引导人重试）')
+  assert.notEqual(notice.text, zh.replyUnknownError, '额度不足不是那个泛化兜底')
+  assert.notEqual(notice.text, zh.replyNetworkUnreachable, '额度不足不是网络档')
   // [4] 诊断可区分
   assert.ok(failureRecord, '失败必须落一条 error 日志')
   assert.equal(failureRecord.fields['ui.condition'], 'insufficientBalance')
@@ -332,7 +338,13 @@ test('负向：普通 400 不重试，落到参数错误档（#324 之前这里�
     zh.replyParamInvalid.replace('{status}', 'HTTP 400').replace('{field}', 'max_tokens')
   )
   assert.equal(notice?.action, 'settings', '参数错误要给出「打开设置」入口（#347 / #353）')
-  assert.match(notice?.text ?? '', /不要重试/)
+  // 「别重试」这件事现在由**行为**表达，不再由文案里的「不要重试」四个字表达：
+  //   · `calls === 1`（上面）证明它真的没重试、也没排重试队列；
+  //   · `action === 'settings'` 是用户唯一能做的下一步。
+  // 以前这里 grep「不要重试」—— 那是 2026-11-24 定稿前的写法（`replyParamInvalid` 现在是
+  // 「有地方填错啦 (｡•́︿•̀｡)」），钉文案用词会让门禁为一次纯文案改动变红。
+  assert.equal(notice?.text, zh.replyParamInvalid, '文案只有一个来源（i18n）')
+  assert.notEqual(notice?.text, zh.replyServerBusy, '参数错误不是「服务器忙」档（那档会引导人重试）')
   assert.equal(failureRecord.fields['billing.quota'], undefined)
   assert.equal(failureRecord.fields['ui.condition'], 'badRequest')
   // 上游短码进诊断，便于按 code 切片（#324 第 4 条）

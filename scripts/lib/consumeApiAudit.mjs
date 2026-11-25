@@ -65,6 +65,25 @@ export const PATH_WHITELIST = [
   '/v1/chat/completions',
   '/v1/embeddings',
   '/v1/tools',
+  /**
+   * §3.7 **第三方公开接口**（不是我们的网关）：官方 DeepSeek 分享会话的读取。
+   *
+   * 为什么不改代码而是进白名单：#484 §三 管的是「客户端消费**我们**的 consume / pay 后端」——
+   * 这条路径打的是 `https://chat.deepseek.com/api/v0/share/content?share_id=…`，即官方分享页
+   * 自己用的公开读接口（`src/services/chat/history/deepseekShare.ts` 的 `origin` 常量，
+   * 走 CapacitorHttp 原生网络栈）。它不经过 `config/endpoints.json`、不带我们的 JWT / `sk-` Key、
+   * 也不属于「新增能力先评审」的范围 —— 换句话说，判在白名单外属于**误判**：门禁拿
+   * 「消费我们网关」的尺子量了一个第三方只读接口。
+   *
+   * 反过来的代价才大：为了避开这条判据，只能给路径换常量 / 藏进变量，字面量规则一转身就全瞎了
+   * （门禁的判据是**字面量**，绕开等于把判据一起绕开）。所以正确做法是把它登记成白名单的一项，
+   * 并把「为什么它不属于我们后端」写在这里。
+   *
+   * 收窄口径（别把这条当通行证）：只有「`/api/v0/` 前缀 + 官方分享域」这一条；
+   * 同一个 handler 里若改成打 `consume.baseUrl + /api/v0/share/content`，R2（base 零字面量）与
+   * R4 仍会各自红一次 —— 白名单只免 R3 的路径表，不免「地址打哪」。
+   */
+  '/api/v0/share/content',
 ]
 
 /**

@@ -65,6 +65,16 @@
 > 但它们引用的承接单（`#408` / `#611`）在批次结案时被关掉了 —— 从那一刻起这三条豁免就没有承接人了，
 > 而此前没有任何检查能发现。处置见 `#892`（抽掉 / 换承接人），处置完把 `followUp` 改指过去的单。
 
+> **2026-11-26 处置：`tests/flaky-registry.json` 的 `tests` 段清空（2 条 → 0 条）。**
+> 删的是 `tests/unit/capabilities-docs-sync.test.mjs`（`cross-runner`）与
+> `tests/unit/domain10-release-gate-matrix.test.mjs`（`same-runner`）：两条的 `reason` 都不是人写的
+> —— 前者是 runner 自动拼的「红：<runner> / 绿：<runner>」，后者是一段原始失败 dump，两条都没有 `followUp`。
+> **一条没有「人写的理由 + 承接人」的豁免，不是豁免，是噪声。** 这两条的成因都已经在别处治掉：
+> 前者是 `LANG` 决定界面语言的环境红（`quota-exhausted` / `attachment-endpoint-303` 同一病根，
+> 已由 `tests/helpers/locale.mjs` 的 `pinLocale` 钉住中文）；后者是负载敏感。
+> 若它们真的还在抖，**它会自己回来** —— 那时走显式 `--record-flaky --reason "<人写>" --follow-up "<谁什么时候修>"`
+> 登记，缺字段直接 exit 2 拒绝。**让红重新可见，比留一条没人认领的豁免更符合「红 = 坏」。**
+
 ---
 
 ## 3. 「只增不减」：让它显形，**不设上限**

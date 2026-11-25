@@ -67,6 +67,9 @@ const REQUIRED_CI_GATES = [
   // 摘掉它，「又提交了一批没人引用的截图」就回到没人守：check:doc-refs 不认 png/jpg
   // （REF_EXT 里没有），check:hygiene 只管本机路径与大文本文件。
   'check:ui-shots',
+  // 门禁优化第 7 条（#892）：豁免登记契约 —— 摘掉它，六份「允许它先这样」的表就回到「注释纪律」：
+  // reason 可以空、承接单可以是已关闭的单、没有到期日、跑绿了也没人删。判据见 docs/testing/exemptions.md。
+  'check:exemptions',
 ]
 
 /**

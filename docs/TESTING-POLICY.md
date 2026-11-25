@@ -5,6 +5,9 @@
 - `tests/which.mjs` —— 改动文件 → 该跑的用例（含回落规则，`--self-test` 自证）
 - `tests/integration-baseline.json` —— 集成层基线失败清单（L2 只判「不新增失败」）
 - `tests/run-layer.mjs --baseline` —— 按基线清单比对并输出差异
+- [`docs/testing/exemptions.md`](testing/exemptions.md) —— **豁免登记契约**：六份「允许它先这样」的表
+  （集成基线 / flaky 隔离区 / 对抗基线 / 重复基线 / 重复白名单 / 快速子集排除）必须带
+  reason + 证据 + 承接单 + 到期日，且条件不成立时自己红（`pnpm run check:exemptions`，CI 每次跑）
 - `docs/testing.md` —— 集成层怎么跑、产物/端口/夹具要求
 - `tests/unit/gate-negative-controls.test.mjs` + `tests/gates/` —— 门禁自身的负向对照（见第 9 节）
 - [`docs/diagnostics-spec.md`](diagnostics-spec.md) —— 诊断日志的**最小字段集**（`stage` / `status` / `reason` /
@@ -168,6 +171,10 @@ npm run test:integration -- --baseline          # 集成全量与基线比对，
   - `NEW FAIL`：期望通过但失败 → 非零退出，**必须修或改基线并写理由**；
   - `FIXED?`：基线记为红但这次通过 → 非零退出提醒更新基线（防止基线永久腐烂）。
 - 发布前仍要跑一次 L2，并把「相对基线无新增失败」写进 Issue/CHANGELOG。
+- **上面这些判据由谁执行**：`FIXED?` 在 `tests/run-layer.mjs --baseline` 里；而「`known-red` 条目本身合不合格
+  （reason / 证据 / 承接单 / 到期日 / 是否已过期 / 承接单是否已关闭 / 是不是拿环境问题顶包）」由
+  `pnpm run check:exemptions` 判 —— 两者是同一个纪律的两端，缺一端就会退化成「一张可以随手加行的表」。
+  契约与逐字段要求见 [`docs/testing/exemptions.md`](testing/exemptions.md)。
 
 ## 5. 明确禁止
 
@@ -180,7 +187,8 @@ npm run test:integration -- --baseline          # 集成全量与基线比对，
    不需要模拟器），用来拦「gradle 脚本坏了 → 打不出包」，见第 9.6 节。
 4. **禁止为无关用例反复重建产物。** 改 `docs/`、改单测时重建 dist 属于浪费，L0/L1 不做。
 5. **禁止用 skip 掩盖失败。** 期望红的用例照常执行，只在基线清单里标注 `known-red` + 原因；
-   `known-red` 条目必须关联 Issue，修好后从清单删除。
+   `known-red` 条目必须关联 Issue，修好后从清单删除。**这条不再靠自觉**：`check:exemptions` 会因为
+   缺 reason/承接单/到期日、条目已过期、承接单已关闭、或者「因为缺产物/端口被占」登记成 known-red 而直接红。
 6. **禁止并发跑多个集成文件。** 内存有限，多个 Chromium + 多份静态服务会 OOM；串行。
 
 ## 6. 超时与中止规则
@@ -493,6 +501,11 @@ tsc 不读 `.gradle`、oxlint 只扫 `src`、单测不碰 Android、产物扫描
 | **D 功能下线/重复** | 功能已删，或该契约已有专用文件覆盖 | 删测试（段）、删基线条目，并在注释里写明覆盖去哪了 |
 
 **删条目的硬要求**：跑绿 ⇒ `--baseline` 会报 `FIXED?` 并要求删条目；反过来说，条目没删就等于没修好。
+
+> 本节的三条纪律（写 reason + 证据 + followUp、跑绿要删、禁止拿环境问题顶包）与其它五份豁免表
+> （flaky 隔离区 / 对抗基线 / 重复基线 / 重复白名单 / 快速子集排除）共用同一份契约：
+> [`docs/testing/exemptions.md`](testing/exemptions.md)。**豁免条目现在必须有到期日**（`reviewAfter`），
+> 并且到期 / 承接单被关闭 / 已经跑绿 / 对象文件不存在 / 长期没人实跑，`pnpm run check:exemptions` 都会红。
  (test: known-red 清零（7→1）+ flaky 自动登记 + 硬编码端口检查（#406）)
 
 ### 11.5 三种结论的定义与处置（三态，#456）

@@ -14,7 +14,10 @@
         "unit"
       ],
       "reason": "启动守卫的 vm 宿主工厂（box / listeners / clock / intervals + FakeDate + vm.createContext）在两个文件里逐字相同，但宿主本体并不完全一致：legacy-boot-guard 那份多一个 `pendingTimers` getter 与两段注释，两文件传给宿主的**能力集**也不同（remove 列表 / locale / userAgent / storedLocale）。抽成工厂要连「造宿主」与「按用例注入哪些能力」一起拆开，属启动守卫批次。抽掉后删本条。",
-      "issue": "#408"
+      "issue": "#408",
+      "addedAt": "2026-11-20",
+      "reviewAfter": "2027-02-18",
+      "followUp": "#892"
     },
     {
       "files": [
@@ -26,7 +29,23 @@
         "integration"
       ],
       "reason": "集成层导入导出的页面前置：`sessionCount`（读 IndexedDB 会话条数）+ `run()` 开头（chromium.launch → newContext → newPage → goto/清库/reload）。`sessionCount` 与 helpers/golden.mjs 里那份逐字相同，但 golden.mjs 是黄金回归的 Playwright 助手（依赖 runtime/env），直接 import 进集成层不合适；正确做法是先抽中立 helper 再让 golden.mjs re-export —— 这属于「集成层前置统一」批次，且验证同样要真 dist + chromium。本轮不硬迁。抽掉后删本条。",
-      "issue": "#408"
+      "issue": "#408",
+      "addedAt": "2026-11-20",
+      "reviewAfter": "2027-02-18",
+      "followUp": "#892"
     }
-  ]
+  ],
+  "exemptionContract": {
+    "enforcedBy": "pnpm run check:exemptions（scripts/check-test-exemptions.mjs，CI 每次跑）",
+    "why": "「这组重复先留着」是一次豁免：抽了 helper 之后没人回来删，基线就永久多一条「允许抄」。",
+    "requires": {
+      "reason": "为什么这组必须留着（抽不掉 / 现在抽不划算）",
+      "issue": "出处/批次（可选，**可以是已关闭的批次单**，例如 `#408`；它回答「这组重复是哪来的」，不承担「谁来修」）",
+      "addedAt": "登记日期 YYYY-MM-DD",
+      "reviewAfter": "最晚复审日期 YYYY-MM-DD",
+      "followUp": "承接单 `#N`（谁负责把它抽掉）。**必须未关闭** —— 关了就说明这件事应该结案：删条目或换未关的单"
+    },
+    "maxReviewDays": 365,
+    "fixOn": "那组已经不重复了 → check-test-duplication 报 stale（--strict 红）；条目里的文件没了 → dead-entry 红"
+  }
 }

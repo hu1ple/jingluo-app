@@ -10,6 +10,27 @@
     "same-runner": "同一台 runner 上第一次红、重跑绿（时序/首帧/端口竞态）。处置：自动重跑 + 登记；连续 3 次进 quarantine（每周提醒）。",
     "cross-runner": "同 commit + 同用例 + 结果不同 + runner 不同（机器快慢/负载差异）。处置：必须改成等终态（until 轮询），禁止加 sleep / 提高超时；不进 quarantine。"
   },
+  "contracts": {
+    "enforcedBy": "pnpm run check:exemptions（scripts/check-test-exemptions.mjs，CI 每次跑）",
+    "quarantine": {
+      "why": "quarantine = 「跳过这个用例」= 一次豁免。之前它只有「每周提醒」这一个软约束：提醒只是打印，没人删就一直在跳。",
+      "requires": {
+        "reason": "为什么它是 flake 而不是真红（自动生成的原始报错不算 —— 它说明「红了」，不说明「为什么可以放过」）",
+        "followUp": "承接单 `#N`",
+        "quarantinedAt": "进隔离区的日期（等价 addedAt）",
+        "reviewAfter": "最晚复审日期 YYYY-MM-DD；到期后门禁红（45 天上限）"
+      },
+      "fixOn": "跑绿（`lastGreen` 晚于 `quarantinedAt`）→ 机制自动解除隔离，条目应删"
+    },
+    "infraSignature": {
+      "why": "签名登记**不放行任何文件**（命中只重跑一次），所以它不算豁免；但它也会腐烂：签名不再出现时条目应删。",
+      "requires": {
+        "issue": "出处（可选，可以是已关闭的批次单）",
+        "reviewAfter": "最晚复审日期 YYYY-MM-DD",
+        "followUp": "承接单 `#N`（**必须未关闭**）：签名还要不要留，是这个单的回答"
+      }
+    }
+  },
   "infraSignatures": [
     {
       "id": "runner-ipc-deserialize-611",
@@ -21,6 +42,8 @@
       },
       "tests": [],
       "firstSeen": "2026-11-20",
+      "reviewAfter": "2027-05-24",
+      "followUp": "#892",
       "note": "登记的是「runner 自己崩了」的**证据串**（node --test 父进程在 FileTest.parseMessage 反序列化子进程 IPC 消息失败），不是某个文件的放行条：`tests` 恒为空。判定见 tests/helpers/merge-verdict.mjs（classifyInfraIpc / withInfraRetry）：命中 → 判 INFRA + 该文件单独重跑一次；重跑绿 → INFRA-RETRIED（不进本登记簿的 tests）；重跑仍是同一签名 → INFRA-FAIL，CI 照样红但结论写明「不是用例失败，属 runner IPC 崩」并指向 #611；重跑变成断言红 → 按 TEST_FAIL 上报。",
       "mustNotMask": "这是 runner 问题，不许用来掩盖断言失败：断言失败的 failureType 是 testCodeFailure、stack 在 tests/…，三条判据里的第二、三条必然不命中，所以真红永远进不了这条签名。任何人想把某个用例「加进这条登记」来换绿，都是把 #501/#611 的教训反过来用 —— 不许。"
     }

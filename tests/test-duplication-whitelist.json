@@ -10,25 +10,43 @@
           "tests/integration/example.test.mjs"
         ],
         "reason": "示例：条目的 files 必须全部落在同一组重复里（允许少列，不允许列不存在的文件）。",
-        "issue": "#366"
+        "issue": "#366",
+        "addedAt": "2026-11-25",
+        "reviewAfter": "2027-05-24"
       }
     ],
     "keywords": [
       {
         "topic": "copy-limit-512k",
         "reason": "示例：按主题放行 R2 关键词跨层告警，topic 取值见脚本 KEYWORD_TOPICS。",
-        "issue": "#366"
+        "issue": "#366",
+        "addedAt": "2026-11-25",
+        "reviewAfter": "2027-05-24"
       }
     ],
     "titles": [
       {
         "title": "示例：用例标题原文",
         "reason": "示例：按标题原文放行 R3，标题必须与报告里的原文逐字一致。",
-        "issue": "#366"
+        "issue": "#366",
+        "addedAt": "2026-11-25",
+        "reviewAfter": "2027-05-24"
       }
     ]
   },
   "groups": [],
   "keywords": [],
-  "titles": []
+  "titles": [],
+  "exemptionContract": {
+    "enforcedBy": "pnpm run check:exemptions（scripts/check-test-exemptions.mjs，CI 每次跑）",
+    "why": "白名单「必须有 reason」这条纪律早就在 check-test-duplication.mjs 里了，但 issue 可选、没有到期日 —— 于是它可以变成垃圾桶。",
+    "requires": {
+      "reason": "为什么这层重复必须长期存在（不是「暂时没空抽」）",
+      "issue": "承接单 `#N`（连长期存在的条目也要有人负责复审）",
+      "addedAt": "登记日期 YYYY-MM-DD",
+      "reviewAfter": "最晚复审日期 YYYY-MM-DD"
+    },
+    "maxReviewDays": 365,
+    "fixOn": "条目已经不再命中任何重复 → 应由人删（本文件为空时机制静默，不制造噪音）"
+  }
 }

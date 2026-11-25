@@ -141,12 +141,12 @@
 | `src/services/diagnostics/collector.ts:570` | localStorage 在无痕 / 配额满 / 分区存储受限时抛错，写入必须自带 try…catch | 3 | 低 | 已有兜底 |
 | `src/services/diagnostics/collector.ts:996` | Body.text/arrayBuffer 引入于 Chrome 76，83 必有 | 3 | 低 | 已有兜底 |
 | `src/services/diagnostics/collector.ts:996` | fetch 响应体 clone | 3 | 中 | 需探测 |
-| `src/services/diagnostics/collector.ts:1056` | 依赖 fetch 是本尊：页面把 window.fetch 换成包装后，任何「原生 fetch」假设（bind、clone、body 流）都不再成立 | 3 | 高 | 需探测 |
-| `src/services/diagnostics/collector.ts:1058` | 依赖 fetch 是本尊：页面把 window.fetch 换成包装后，任何「原生 fetch」假设（bind、clone、body 流）都不再成立 | 3 | 高 | 需探测 |
-| `src/services/diagnostics/collector.ts:1205` | 依赖 fetch 是本尊：页面把 window.fetch 换成包装后，任何「原生 fetch」假设（bind、clone、body 流）都不再成立 | 3 | 高 | 需探测 |
-| `src/services/diagnostics/collector.ts:1538` | localStorage 在无痕 / 配额满 / 分区存储受限时抛错，写入必须自带 try…catch | 3 | 低 | 已有兜底 |
-| `src/services/diagnostics/collector.ts:1548` | localStorage 在无痕 / 配额满 / 分区存储受限时抛错，写入必须自带 try…catch | 3 | 低 | 已有兜底 |
-| `src/services/diagnostics/collector.ts:1568` | registerPlugin 一定返回代理对象，但原生侧没注册时调用只会 reject；插件在不在要探测 | 3 | 中 | 需动态验证 |
+| `src/services/diagnostics/collector.ts:1065` | 依赖 fetch 是本尊：页面把 window.fetch 换成包装后，任何「原生 fetch」假设（bind、clone、body 流）都不再成立 | 3 | 高 | 需探测 |
+| `src/services/diagnostics/collector.ts:1067` | 依赖 fetch 是本尊：页面把 window.fetch 换成包装后，任何「原生 fetch」假设（bind、clone、body 流）都不再成立 | 3 | 高 | 需探测 |
+| `src/services/diagnostics/collector.ts:1214` | 依赖 fetch 是本尊：页面把 window.fetch 换成包装后，任何「原生 fetch」假设（bind、clone、body 流）都不再成立 | 3 | 高 | 需探测 |
+| `src/services/diagnostics/collector.ts:1547` | localStorage 在无痕 / 配额满 / 分区存储受限时抛错，写入必须自带 try…catch | 3 | 低 | 已有兜底 |
+| `src/services/diagnostics/collector.ts:1557` | localStorage 在无痕 / 配额满 / 分区存储受限时抛错，写入必须自带 try…catch | 3 | 低 | 已有兜底 |
+| `src/services/diagnostics/collector.ts:1577` | registerPlugin 一定返回代理对象，但原生侧没注册时调用只会 reject；插件在不在要探测 | 3 | 中 | 需动态验证 |
 | `src/services/diagnostics/transport.http.ts:60` | toDataURL 引入于 Chrome 2，83 必有 | 3 | 低 | 已有兜底 |
 | `src/services/diagnostics/transport.http.ts:66` | FileReader 引入于 Chrome 6，83 必有 | 3 | 低 | 已有兜底 |
 | `src/services/diagnostics/transport.http.ts:283` | @capacitor/core 随包发布，函数一定在；它回答的是「跑在壳里吗」不是「插件在吗」 | 3 | 低 | 已有兜底 |
@@ -220,7 +220,7 @@
 
 | 结论 | 位置 | 风险 | Issue |
 | --- | --- | --- | --- |
-| 页面级替换 `window.fetch`，并默认它是原生的 | `src/services/diagnostics/collector.ts:1108`（同族 `:975`、`:977` 的桥接常量、`src/utils/capabilities.ts:256` 的通道识别正则） | 高 | #210 |
+| 页面级替换 `window.fetch`，并默认它是原生的 | `src/services/diagnostics/collector.ts:1117 ⇒ const channel = detectFetchChannel(window.fetch)`（同族 `:975`、`:977` 的桥接常量、`src/utils/capabilities.ts:256` 的通道识别正则） | 高 | #210 |
 | `readBytesOf()` 的 `response.clone().text()` 兜底：`bytes` 恒为 0，且兜底分支会阻塞流式响应 | `src/services/diagnostics/collector.ts:915`（配合 `:1078`） | 中 | #211（已修） |
 
 两条都按类别 3 的规矩拆成独立 Issue 修复；#209 的 PR 只带扫描器、本文件与单测。
@@ -233,7 +233,7 @@
 
 - `Intl.DisplayNames`（2 处：`src/index.html:120`、`src/services/diagnostics/capabilityTruth.ts:80`）：Chrome 81 才有，落在 83 之内，但语言数据（ICU）齐不齐要看具体机型；`src/index.html` 启动守卫已把它列进 `REQUIRED`，探不到会画提示页。
   **口径留痕**：`src/index.html:120` 那一行是**注释**（注释里写着「不检查 Intl.DisplayNames」），扫描器只做字面量匹配，注释行也算命中——为保住「0 命中就是真的 0 命中」，这条不一致不改规则，在这里写明。
-- `Capacitor.registerPlugin`（6 处：`src/services/appUpdate.ts:42`、`src/services/diagnostics/collector.ts:504`、`src/services/diagnostics/collector.ts:1568`、`src/services/exportText.ts:19`、`src/services/invite/fingerprint.ts:232`、`src/components/settings/AppUpdateField.tsx:111` 的 `registerPlugin('Browser')`）：`registerPlugin` 永远返回代理对象，插件没注册时只会在调用时 reject。`isPluginAvailable` 全仓只有 2 处（`src/utils/capabilities.ts:218` / `:223` 的 `hasPlugin()`，`#212` 的统一探测口），也就是说**没有一处**把 `registerPlugin` 的注册结果做成正面探测——`hasPlugin()` 回答的是「这个插件能不能用」，不是「刚才那次注册成功了没有」。已人工核对：`android/app/src/main/java/com/example/deepseekchat/MainActivity.java:49-52` 注册了 4 个插件，Java 侧 `@PluginMethod` 名字与 JS 调用一一对应，**没有名字对不上的情况**；所有调用点也都有 `try…catch` 降级。但「插件注册失败 / 被裁剪 / 旧版本 APK 没有这个插件」这条路径仍无正面探测。本轮 #243 新增的 `DeviceFingerprint`（`invite/fingerprint.ts` 的 `registerPlugin`）也计入这几处；`CheckoutBrowser`（原 `ours/transport.ts:37`，`/buy` 收银台的原生桥）已随 #331 的旧支付链路停用一起删除，那条 `需动态验证` 命中不再存在。
+- `Capacitor.registerPlugin`（6 处：`src/services/appUpdate.ts:42`、`src/services/diagnostics/collector.ts:504`、`src/services/diagnostics/collector.ts:1577 ⇒ Capacitor.registerPlugin`、`src/services/exportText.ts:19`、`src/services/invite/fingerprint.ts:232`、`src/components/settings/AppUpdateField.tsx:111` 的 `registerPlugin('Browser')`）：`registerPlugin` 永远返回代理对象，插件没注册时只会在调用时 reject。`isPluginAvailable` 全仓只有 2 处（`src/utils/capabilities.ts:218` / `:223` 的 `hasPlugin()`，`#212` 的统一探测口），也就是说**没有一处**把 `registerPlugin` 的注册结果做成正面探测——`hasPlugin()` 回答的是「这个插件能不能用」，不是「刚才那次注册成功了没有」。已人工核对：`android/app/src/main/java/com/example/deepseekchat/MainActivity.java:49-52` 注册了 4 个插件，Java 侧 `@PluginMethod` 名字与 JS 调用一一对应，**没有名字对不上的情况**；所有调用点也都有 `try…catch` 降级。但「插件注册失败 / 被裁剪 / 旧版本 APK 没有这个插件」这条路径仍无正面探测。本轮 #243 新增的 `DeviceFingerprint`（`invite/fingerprint.ts` 的 `registerPlugin`）也计入这几处；`CheckoutBrowser`（原 `ours/transport.ts:37`，`/buy` 收银台的原生桥）已随 #331 的旧支付链路停用一起删除，那条 `需动态验证` 命中不再存在。
 - `canvas.toBlob`（1 处：`src/services/chat/appAssets.ts:60`）：回调可能拿到 `null`，个别 WebView 上不触发。
 - `new AudioContext({ sampleRate })`（1 处：`src/services/speech/readAloud.ts:92`）：采样率选项与自动播放策略在真机上表现不一致。
 - `visualViewport`：API 在（Chrome 61），键盘弹出后的 `resize` / `scroll` 时序与去抖仍需真机确认（这一条是人工补记，扫描器的结论本来就在 `已有兜底` 里）。

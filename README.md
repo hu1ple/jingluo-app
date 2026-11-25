@@ -42,6 +42,24 @@
 
 ## 使用
 
+### 导入 DeepSeek 分享会话
+
+在侧栏选择「导入会话」，粘贴 DeepSeek 官方生成的 HTTPS 分享链接。成功后会打开导入的会话；
+再次导入同一链接会打开本地已有版本，保留后续编辑。Android 使用原生网络访问官方分享接口。
+网页版通过同源的 `/api/deepseek-share/` 读取，`pnpm dev` 已内置该路由。
+
+部署网页版时，在静态站点服务器上用 Node.js 22 或更高版本运行
+`node deploy/share-import/relay.mjs`，默认监听本机 8091 端口，可通过 `PORT` 调整。
+在现有站点的 Caddy 配置中加入以下规则，并让 SPA 的静态回退只处理其余路径：
+
+```caddy
+handle /api/deepseek-share/* {
+    reverse_proxy 127.0.0.1:8091
+}
+```
+
+转发服务仅向 DeepSeek 官方接口请求指定分享编号，直接返回响应；无需配置模型 API Key。
+
 ```bash
 pnpm install
 pnpm dev            # 本地开发

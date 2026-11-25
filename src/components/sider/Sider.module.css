@@ -434,3 +434,16 @@
   margin-right: 2px;
 }
 /* #173-fallback:end */
+.shareLinkInput {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  padding: 10px 12px;
+  min-height: 44px;
+  font: inherit;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-3);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 10px;
+}

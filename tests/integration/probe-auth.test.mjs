@@ -15,6 +15,7 @@ import {
   FAKE_KEY,
   captureProbeRequests,
   clickTest,
+  fillApiKey,
   finish,
   openApp,
   openSettingsDataSection,
@@ -44,8 +45,11 @@ try {
   })
   await openSettingsDataSection(page)
 
-  // 只往输入框里打字，不点「确定」——store 里依旧是空的
-  await page.locator('input[type="password"]').first().fill(FAKE_KEY)
+  // 只往**当前展开的那一行**的 Key 输入框里打字，不点「确认使用」——store 里依旧是空的。
+  // 不能再用裸 `input[type="password"]`：来源页三行手风琴里第三方/官方两份面板各有一个 Key 输入框
+  // （`settings-source-draft-apiKey`），`.first()` 取到的是 DOM 里靠前、但当前 `hidden` 的那一个
+  // ——实测直接 30s 超时（element is not visible），红在「点不到」而不是「鉴权头不对」。
+  await fillApiKey(page, FAKE_KEY)
 
   const captured = captureProbeRequests(page)
   await clickTest(page)

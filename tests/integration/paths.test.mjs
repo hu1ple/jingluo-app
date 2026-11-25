@@ -14,6 +14,7 @@
 import {
   capturePaths,
   clickApiKeyConfirm,
+  clickTest,
   closeSettings,
   fillApiKey,
   finish,
@@ -49,6 +50,13 @@ try {
   await openSettingsDataSection(page)
   await fillApiKey(page, KEY)
   await clickApiKeyConfirm(page)
+  /**
+   * ⚠ 产品口径变更（#807 设置改版）：**「保存 Key 后自动 GET /models」已经没有了** ——
+   * 生效来源改成「草稿 + 确认使用」形态后，保存只落盘、不再顺带探测；探测只剩用户点
+   * 那一行草稿区里的「测试」（`settings-source-draft-test`）。所以这里要探测就**显式点一次**，
+   * 不能靠保存的副作用（原来的写法在改版后什么都等不到，红在「没捕获到 GET /models」）。
+   */
+  await clickTest(page)
   await waitFor(() => requests.some((r) => r.path.endsWith('/models')))
   await closeSettings(page)
 

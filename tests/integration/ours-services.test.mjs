@@ -21,14 +21,23 @@ import { chromium } from 'playwright'
 
 import {
   APP_URL,
+  clickApiKeyConfirm,
   finish,
+  fillApiKey,
   fillBaseUrl,
-  selectProviderKind,
+  fillModel,
+  openApiConfigSection,
+  openSettingsRoot,
 } from '../helpers/helpers.mjs'
+// #596：内置服务（ours）的 Key 只能由服务端下发 —— 种「已领取」形态（Key + 下发标记），
+// 否则点「内置服务」这一行会走领取链路（真出网 401），而本用例要的只是「切到哪一行」。
+import { claimedOursStorage } from '../helpers/ours-claim.mjs'
 import { verifyAppUrl } from '../helpers/env.mjs'
 import { payBaseUrl } from '../../scripts/lib/endpoints.mjs'
 
 const name = 'tests/integration/ours-services.test.mjs'
+/** 本用例不发消息，Key 只用来满足「确认使用」的非空校验与「已领取内置 Key」这一前提 */
+const FAKE_KEY = 'sk-ours-services-0123456789'
 
 const failures = []
 const ok = (message) => console.log(`  ok  ${message}`)
@@ -99,12 +108,23 @@ try {
   await wireMock(page)
 
   await page.goto(APP_URL, { waitUntil: 'domcontentloaded' })
-  await page.evaluate(() => {
+  /**
+   * 种「自有渠道 + 已领取内置 Key」的形态。
+   *
+   * 为什么不能再像以前那样只写 `provider-kind`：那条注释说「应用会自己弹出设置」，
+   * 而「没有 Key 就自动弹设置层」这个行为**已经被产品删掉了**（主线 0b22d4fa / d17e2a92），
+   * 于是下面自己点「设置」→ 390 视口下侧栏是抽屉、`设置` 按钮不在可视区 → 实测 30s 超时。
+   * 现在改成：设置层由共享 helper 显式打开（先「打开边栏」），渠道切换走
+   * 「模型来源 → 展开那一行 → 确认使用」的真实路径；内置服务的 Key 用「已领取」形态种入，
+   * 免得夹具去跑一次真实领取（#596：只写 Key 没有下发标记会被判 unclaimed）。
+   */
+  await page.evaluate((storage) => {
     window.localStorage.clear()
-    // 本用例不发消息，只要渠道门禁：保持「没有 Key」的形态 —— 应用会自己弹出设置并选中「数据管理」
-    // （390 视口下侧栏是抽屉，`设置` 按钮不在可视区，靠共享 helper 点它本就会超时）
+    for (const [key, value] of Object.entries(storage)) {
+      window.localStorage.setItem(key, value)
+    }
     window.localStorage.setItem('chat-demo:provider-kind', 'ours')
-  })
+  }, await claimedOursStorage(FAKE_KEY))
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(900)
 
@@ -112,41 +132,60 @@ try {
   const oldRow = () => page.getByTestId('ours-services-row').count()
   const oldDialog = () => page.getByTestId('ours-services-dialog').count()
 
+  /** 390 视口下侧栏是抽屉：先「打开边栏」（宽屏没有这个按钮，就不用点），再走共享 helper 进设置 */
+  const ensureSettingsRoot = async () => {
+    if ((await page.getByRole('dialog').count()) === 0) {
+      const drawer = page.getByRole('button', { name: /^打开边栏$|^Open sidebar$/ })
+      if ((await drawer.count()) > 0) {
+        await drawer.first().click()
+        await page.waitForTimeout(250)
+      }
+    }
+    await openSettingsRoot(page)
+  }
+
+  /**
+   * 切到某一行的生效来源（#807：展开 ≠ 生效）。
+   *
+   * 落点全部走「设置 → 账户与消费 → 模型来源」，切完回一级列表 —— 因为「账户与消费」入口
+   * 挂在一级列表上，在二级页里数是 0 个（改版前那套 `selectProviderKind` + 下拉即生效已经不成立）。
+   */
+  const useSource = async (row, fill = {}) => {
+    await openApiConfigSection(page, { row })
+    if (row === 'third') {
+      await fillBaseUrl(page, fill.baseUrl)
+      await fillModel(page, fill.model)
+    }
+    if (row === 'builtin') {
+      // 内置服务是「行即动作」：点行头就选中（已领取形态下不发任何请求）
+    } else {
+      await fillApiKey(page, FAKE_KEY)
+      await clickApiKeyConfirm(page)
+    }
+    await openSettingsRoot(page)
+  }
+
   // ---------- [A] 入口只在自有渠道出现（#166） ----------
   console.log('\n[A] 渠道门禁')
-  // 2026-11-24 设置改版：分组从「顶栏 tab」变成「分组列表 + 二级页」，
-  // 「账户与消费」入口挂在**一级列表**上（`openSettingsDataSection` 会进到「数据管理」二级页，
-  // 那一屏看不到它）。所以这里只需要把设置弹层开在一级：若当前已在某个二级页，先点「返回」。
-  if ((await page.getByRole('dialog').count()) === 0) {
-    await page.getByRole('button', { name: /设置|Settings/ }).last().click()
-    await page.waitForTimeout(600)
-  }
-  const backBtn = page.getByTestId('settings-back')
-  if ((await backBtn.count()) > 0) {
-    await backBtn.first().click()
-    await page.waitForTimeout(600)
-  }
+  // 「账户与消费」入口挂在设置**一级列表**上（`openSettingsDataSection` 会进到二级页，那里数不到），
+  // 所以先把设置开在一级列表；若当前已在某个二级页，`openSettingsRoot` 会自己逐级退回。
+  await ensureSettingsRoot()
   eq(await openRow(), 1, '自有渠道下有「账户与消费」入口')
   eq(await oldRow(), 0, '旧 `ours-services-row` 已退役（一处分都不留）')
   eq(await oldDialog(), 0, '旧 `ours-services-dialog` 已退役')
 
-  await selectProviderKind(page, /DeepSeek 官方|DeepSeek Official/)
-  await page.waitForTimeout(300)
+  await useSource('official')
   eq(await openRow(), 0, 'DeepSeek 官方下没有「账户与消费」入口')
   const officialText = await page.getByRole('dialog').first().innerText()
   truthy(!/设备码|邀请码|卡密/.test(officialText), 'DeepSeek 官方设置页没有自有渠道文案')
 
-  await selectProviderKind(page, /我们的渠道|Our Channel/)
-  await page.waitForTimeout(300)
+  await useSource('builtin')
   eq(await openRow(), 1, '切回自有渠道后入口恢复')
 
-  await selectProviderKind(page, /Anthropic 协议|Anthropic-compatible/)
-  await fillBaseUrl(page, 'https://relay.example.com')
-  await page.waitForTimeout(300)
+  await useSource('third', { baseUrl: 'https://relay.example.com', model: 'gpt-4o-mini' })
   eq(await openRow(), 0, '第三方 baseUrl 下没有入口（#166）')
 
-  await selectProviderKind(page, /我们的渠道|Our Channel/)
-  await page.waitForTimeout(300)
+  await useSource('builtin')
   eq(await openRow(), 1, '会话内切回自有渠道后入口恢复（store 订阅，不用刷新）')
 
   // ---------- [B] 点开就是「账户与消费」四 tab 新页面 ----------
@@ -163,8 +202,10 @@ try {
     eq(await page.getByTestId(`account-consume-tab-${tab}`).count(), 1, `入口「${tab}」存在`)
   }
   // 默认落在「我的卡密」：付款回跳（openAccountConsume() 的缺省 tab）就是为了让用户看到卡密
+  // （先判存在再读属性：节点不在时 getAttribute 会挂 30s，红在超时而不是「没有这个 tab」）
+  const cardsTab = page.getByTestId('account-consume-tab-cards')
   eq(
-    (await page.getByTestId('account-consume-tab-cards').getAttribute('aria-selected')) === 'true',
+    (await cardsTab.count()) > 0 && (await cardsTab.getAttribute('aria-selected')) === 'true',
     true,
     '默认落在「我的卡密」tab（付款回跳的目标）'
   )
@@ -185,6 +226,10 @@ try {
 
   truthy(consoleErrors.length === 0, `没有 console / pageerror：${consoleErrors.slice(0, 3).join(' | ')}`)
   await context.close()
+} catch (error) {
+  // 原来只有 try/finally：中途抛异常（选择器点不到 / 那一屏的结构变了）时 finally 会先打印 PASS
+  // 再让异常冒泡，日志上像通过、runner 仍判 FAIL，后面的小节也一起消失。补 catch，让失败如实报。
+  bad(`用例异常：${error instanceof Error ? error.message.split('\n')[0] : String(error)}`)
 } finally {
   await finish(browser, name, failures)
 }

@@ -27,7 +27,19 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { defaultDist, verifyAppUrl } from '../helpers/env.mjs'
-import { assertNoEgress, installEgressGate, providerKindTrigger } from '../helpers/helpers.mjs'
+import {
+  assertNoEgress,
+  clickApiKeyConfirm,
+  clickTest,
+  fillApiKey,
+  fillBaseUrl,
+  fillModel,
+  installEgressGate,
+  openApiConfigSection,
+  providerKindTrigger,
+  selectProviderKind,
+  waitForProviderKind,
+} from '../helpers/helpers.mjs'
 import { BUILTIN_KEY_CLAIM_STUB } from '../fixtures/consume-gateway-stubs/builtin-key-claim.mjs'
 
 // 证据目录：原来写死 /root/deepseek-app/...（Linux 一次性机器），在任何别的机器上都 ENOENT
@@ -135,8 +147,17 @@ const CORS = {
     'content-type,authorization,x-api-key,anthropic-version,anthropic-beta,accept,accept-encoding,x-session-id',
 }
 
-/** 极简 mock 上游：html=true 时所有 POST messages 都返回网页（模拟路径打错/网关报错页） */
-const startMock = ({ html = false } = {}) =>
+/**
+ * 极简 mock 上游：html=true 时所有 POST messages 都返回网页（模拟路径打错/网关报错页）。
+ *
+ * `modelsAuth`：`GET /v1/models` 只认一种鉴权头（另一种回 401）。为什么需要它 ——
+ * #794 之后「协议」不再是用户在下拉里选的，而是 `services/api/protocolDetect.ts` 按
+ * 地址主机 / 模型名 / 上次探测结论判定，三条本地判据都说不清时才**探一次** `GET {base}/v1/models`，
+ * 而且**只有两种鉴权头给出不同答案时才定论**（Bearer 通 → openai；x-api-key 通 → anthropic）。
+ * 所以「这条中转到底是哪种协议」在用例里只能靠**上游真的只认一种头**来表达，
+ * 否则宽松网关两种都回 200 → 产品按设计「没有结论」→ 落到既有协议（这正是 #794 的口径，不是缺陷）。
+ */
+const startMock = ({ html = false, modelsAuth = 'both' } = {}) =>
   new Promise((resolve) => {
     const log = []
     const server = http.createServer((req, res) => {
@@ -160,7 +181,16 @@ const startMock = ({ html = false } = {}) =>
           res.end(JSON.stringify(value))
         }
         if (pathname === '/models' || pathname === '/v1/models') {
-          return json({ data: [{ id: DEEPSEEK_MODEL }, { id: ANTHROPIC_MODEL }] })
+          const hasBearer = Boolean(req.headers.authorization)
+          const hasApiKey = Boolean(req.headers['x-api-key'])
+          const rejected =
+            (modelsAuth === 'bearer' && !hasBearer) || (modelsAuth === 'x-api-key' && !hasApiKey)
+          if (rejected) {
+            res.writeHead(401, { 'content-type': 'application/json' })
+            res.end(JSON.stringify({ error: { type: 'authentication_error', message: 'invalid api key' } }))
+            return
+          }
+          return json({ data: [{ id: DEEPSEEK_MODEL }, { id: ANTHROPIC_MODEL }, { id: OPENAI_MODEL }] })
         }
         // 附件挂在 messages 前缀下：/anthropic/v1/messages/files、/v1/messages/files
         if (pathname.endsWith('/files')) {
@@ -221,7 +251,10 @@ const jsonBody = (entry) => {
   }
 }
 
-const mockOk = await startMock()
+// 两个「中转」：同一个地址在 #794 之后只能被判成**一种**协议（判定结论按 baseUrl 缓存），
+// 所以「anthropic 协议」和「openai 兼容」两段必须各用一条地址，而不是像改版前那样在下拉里来回切。
+const mockOk = await startMock({ modelsAuth: 'x-api-key' }) // Anthropic 风格中转（只认 x-api-key）
+const mockOa = await startMock({ modelsAuth: 'bearer' }) // OpenAI 兼容中转（只认 Bearer）
 
 const browser = await chromium.launch({
   args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'],
@@ -240,7 +273,7 @@ const page = await context.newPage()
 await installEgressGate(page, {
   stubs: [BUILTIN_KEY_CLAIM_STUB],
   appUrl: APP_URL,
-  allowHosts: [new URL(APP_URL).host, new URL(mockOk.base).host],
+  allowHosts: [new URL(APP_URL).host, new URL(mockOk.base).host, new URL(mockOa.base).host],
 })
 const consoleErrors = []
 page.on('console', (message) => {
@@ -278,12 +311,14 @@ const seed = async ({ kind, baseUrl, model }) => {
   await page.waitForTimeout(900)
 }
 
+/**
+ * 打开「设置 → 账户与消费 → 模型来源」，并展开**当前生效来源**那一行（#727 / #807）。
+ *
+ * 改前这里点的是「数据管理」二级页 —— 2026-11-24 改版后那一页只剩导入/导出/反馈/删除，
+ * 渠道、服务地址、Key 全搬到了「模型来源」，所以落点必须跟着搬（否则后面每一步都点不到）。
+ */
 const openSettings = async () => {
-  if ((await page.getByRole('dialog').count()) === 0) {
-    await page.getByRole('button', { name: /设置|Settings/ }).last().click()
-  }
-  await page.getByTestId('settings-row-data').first().click()
-  await page.waitForTimeout(250)
+  await openApiConfigSection(page)
 }
 const closeSettings = async () => {
   const dialog = page.getByRole('dialog').first()
@@ -293,21 +328,33 @@ const closeSettings = async () => {
   }
 }
 const selectKind = async (nameRe) => {
-  // 选择器必须落在设置弹窗里、且是**渠道行**本身：`/渠道|Channel/` 这类宽松名字会命中附件入口
-  // 按钮的 aria-label（2026-11-24 定稿：「这个渠道不能传文件呢…」，原句「当前渠道不支持文件上传，
-  // 附件入口已不可用」），点它必超时（#406 复核）。
-  // #555：文案换成「当前渠道不支持文档附件…」之后同一个坑又出现过一次，所以选择器不再本地重写，
-  // 一律走 helpers.mjs 的 `providerKindTrigger`（整串锚定，是同一个判定口）。
-  await providerKindTrigger(page.getByRole('dialog').first()).first().click()
-  await page.getByRole('option', { name: nameRe }).first().click()
-  await page.waitForTimeout(250)
+  // #794 / #807：**没有「渠道」下拉了**。三个来源 = 「模型来源」页上的三行手风琴
+  // （内置服务 / 第三方服务 / DeepSeek 官方服务），点行头只是展开「正在查看」，
+  // 真正切换要嘛点行底「确认使用」（applySource），要嘛由发送链路按地址/模型自动适配。
+  // 名字 → 行的映射收在 helpers.selectProviderKind 里，这里不再本地重写选择器
+  // （历史上 `/渠道|Channel/` 那种宽松名字会命中聊天页的禁用态附件入口，一路超时）。
+  await selectProviderKind(page, nameRe)
 }
-const setField = async (labelRe, value) => {
-  const input = page.getByLabel(labelRe).first()
-  await input.fill(value)
-  await input.press('Enter')
-  await page.waitForTimeout(150)
+
+/**
+ * 点草稿区「确认使用」把三格落盘，然后**离开再回来展开一次**，让产品把协议适配成 `kind`。
+ *
+ * 为什么不是「确认完就好了」：#794 起协议不是用户选的，`confirmSourceRow()` 只把草稿写进
+ * 「第三方服务」这一个槽位；协议判定发生在**展开第三方行**的那一刻
+ * （`protocolDetect.detectThirdPartyProtocol`：主机 → 模型名 → 上次探测结论 → 兜底探测）。
+ * 所以这里按用户真实顺序走一遍：确认 → 关掉设置 → 再打开看一眼 → 等生效来源真的变成 `kind`。
+ *
+ * 等不到就抛错（不再往下跑）：helpers 的 `waitForProviderKind` 会把「期望 / 存储里的实际值 /
+ * 三行的 data-status」一起抛出来，红在哪一步、为什么，一眼可归因。
+ */
+const applySource = async (kind) => {
+  await clickApiKeyConfirm(page)
+  await closeSettings(page)
+  await openSettings()
+  await waitForProviderKind(page, kind)
 }
+
+
 const send = async (text) => {
   const textarea = page.locator('textarea').last()
   await textarea.click()
@@ -480,12 +527,30 @@ try {
   } else {
     ok(`默认服务类型 = ${kindText}`)
   }
-  if ((await page.getByLabel(/服务地址|Service URL/).count()) > 0) {
-    bad('7a) deepseek 模式不该显示「服务地址」输入框（fields 只有 apiKey）')
+  /**
+   * #727 / #807 口径：官方（deepseek）那一行**没有可编辑的服务地址/模型**，只有
+   * 「地址固定」的只读行（`settings-source-base-url-fixed`）+ 模型只读值 + API Key 一格。
+   *
+   * 为什么不再用全局 `getByLabel(/服务地址|Service URL/)`：来源页是**三行手风琴**，第三方那一行
+   * 的草稿面板**始终挂在 DOM 上**（收起着带 `hidden`），它的输入框 aria-label 也叫「服务地址」
+   * —— 全局数必然 > 0，改版后就成了假红。判据按产品的身份收进「当前展开的那一行」。
+   */
+  const openSourcePanel = page.locator(
+    '[data-testid="settings-source-accordion"] [data-testid$="-panel"]:not([hidden])'
+  )
+  const editableBaseUrl = await openSourcePanel.getByTestId('settings-source-draft-baseUrl').count()
+  const editableModel = await openSourcePanel.getByTestId('settings-source-draft-model').count()
+  const fixedBaseUrl = await openSourcePanel.getByTestId('settings-source-base-url-fixed').count()
+  if (editableBaseUrl > 0 || editableModel > 0) {
+    bad(
+      `7a) deepseek 模式不该渲染可编辑的「服务地址 / 模型」（fields 只有 apiKey）：baseUrl=${editableBaseUrl} model=${editableModel}`
+    )
+  } else if (fixedBaseUrl !== 1) {
+    bad(`7a) 官方那一行应给一行**只读**服务地址（settings-source-base-url-fixed ×1），实际 ${fixedBaseUrl} 个`)
   } else {
-    ok('deepseek 模式只渲染 API Key 行（服务地址/模型按 spec 隐藏）')
+    ok('deepseek 模式 = API Key 可填 + 地址/模型只读（#807「地址固定，只填 Key」）')
   }
-  await page.getByRole('button', { name: /^测试$|^Test$/ }).first().click()
+  await clickTest(page)
   await waitFor(async () => mockOk.log.some((entry) => entry.path === '/models'))
   await closeSettings()
 
@@ -523,15 +588,21 @@ try {
     ok('附件没有上传到 /anthropic/v1/files（#480/#538：DeepSeek 渠道不走 files API）')
     note('deepseek 附件：files API 请求数 = 0（改前断言上传拿 file_id，#538 后语义反转）')
   }
-  // ② 反向：文档入口必须是禁用态（不给「能点但没用」的假承诺）
-  const docEntry = page.getByRole('button', { name: /文档附件/ })
-  const docEntryDisabled =
-    (await docEntry.count()) > 0 &&
-    (await docEntry.first().evaluate((node) => node.getAttribute('aria-disabled') === 'true'))
-  if (!docEntryDisabled) {
-    bad('7a) DeepSeek 渠道的文档入口应当是禁用态（aria-disabled=true），不给假承诺')
+  /**
+   * ② 反向：官方渠道的文档入口**一个节点都不渲染**。
+   *
+   * 口径变更（#813 精简工具栏）：改前这一条要求「入口在、但 aria-disabled=true（不给假承诺）」；
+   * #813 之后官方渠道的右侧工具栏只留最右边的文件上传回形针 —— 文档入口连「不可用占位」都不渲染
+   * （见 `ChatInput` 里 `compactToolbar ? null : ...` 那一段），所以「禁用态」这个中间态在官方渠道
+   * 已经不存在。断言改成与产品现状同源（`attach-document` 计数为 0），按 testid 取而不是文案。
+   * 「入口没了也不能静默」这条**仍然被下面 ③ 守着**（选文档时必须给「当前渠道不支持文档附件」）；
+   * 而「不可用占位分支」本身的覆盖在 `compact-toolbar-813.test.mjs`（[1]/[1b]）与 `mode-switch-plain`。
+   */
+  const docEntryNodes = await page.locator('[data-testid="attach-document"]').count()
+  if (docEntryNodes !== 0) {
+    bad(`7a) DeepSeek 渠道（精简工具栏）不该渲染文档入口，实际 attach-document ×${docEntryNodes}`)
   } else {
-    ok('DeepSeek 渠道的文档入口是禁用态（aria-disabled=true）')
+    ok('DeepSeek 渠道不渲染文档入口（#813 精简工具栏；提示由下面 ③ 守）')
   }
   // ③ 反向：界面必须说清「这个渠道收不了文档」，而不是静默忽略
   const toastShown = await waitFor(async () =>
@@ -656,9 +727,12 @@ try {
   const anLogStart = mockOk.log.length
   await openSettings()
   await selectKind(/Anthropic 协议|Anthropic-compatible/)
-  await setField(/服务地址|Service URL/, mockOk.base)
-  await setField(/^模型$|^Model$/, ANTHROPIC_MODEL)
-  await page.getByRole('button', { name: /^测试$|^Test$/ }).first().click()
+  await fillBaseUrl(page, mockOk.base)
+  await fillModel(page, ANTHROPIC_MODEL)
+  await fillApiKey(page, KEY)
+  // 确认使用 → 回来展开 → 期待产品按「这条中转只认 x-api-key」探出 anthropic 协议
+  await applySource('anthropic')
+  await clickTest(page)
   await waitFor(async () => mockOk.log.some((entry) => entry.path === '/v1/models'))
   await closeSettings()
   note(`anthropic 探测 path = ${mockOk.log.filter((e) => e.path === '/v1/models').length} 次 /v1/models`)
@@ -793,19 +867,19 @@ try {
   // ============ 1/2. openai 模式：路径、鉴权头、请求体 ============
   console.log('\n[1] openai 模式：路径与鉴权头')
   await openSettings()
-  await setField(/服务地址|Service URL/, mockOk.base)
   await selectKind(/OpenAI 兼容|OpenAI-compatible/)
-  await setField(/服务地址|Service URL/, mockOk.base)
-  await setField(/^模型$|^Model$/, OPENAI_MODEL)
-  // 窗口必须在**切到 openai 之后**才开：上面那句服务地址是先给 anthropic 渠道填的，
-  // 它自己会触发一次 anthropic 探测（GET /v1/models + x-api-key），把这句请求算进来
-  // 就会把「上一个渠道的正常探测」误判成「openai 探测缺 Authorization」（Issue #56）。
-  await page.waitForTimeout(600)
-  const openaiLogStart = mockOk.log.length
-  await page.getByRole('button', { name: /^测试$|^Test$/ }).first().click()
-  await waitFor(async () => mockOk.log.slice(openaiLogStart).some((e) => e.path === '/v1/models'))
+  // 换到**另一条地址**（mockOa，只认 Bearer）：#794 之后同一个 baseUrl 的协议判定结论会被缓存，
+  // 一条地址只可能是一种协议 —— 所以「anthropic 段」和「openai 段」必须各用一条中转，
+  // 这也正是真实用户的形态（两个不同网关），不是把旧「下拉来回切」硬塞进新 IA。
+  await fillBaseUrl(page, mockOa.base)
+  await fillModel(page, OPENAI_MODEL)
+  await fillApiKey(page, KEY)
+  await applySource('openai')
+  const openaiLogStart = mockOa.log.length
+  await clickTest(page)
+  await waitFor(async () => mockOa.log.slice(openaiLogStart).some((e) => e.path === '/v1/models'))
   await closeSettings()
-  const openaiModelEntry = mockOk.log
+  const openaiModelEntry = mockOa.log
     .slice(openaiLogStart)
     .find((entry) => entry.method === 'GET' && entry.path === '/v1/models')
   if (!openaiModelEntry) {
@@ -820,9 +894,9 @@ try {
 
   const errorNoticeBefore = await page.getByText(/上游返回网页|网络异常|服务器繁忙|API Key 无效/).count()
   await send('你好 openai')
-  const openaiHit = await waitFor(async () => posts(mockOk.log, '/v1/chat/completions').length > 0)
+  const openaiHit = await waitFor(async () => posts(mockOa.log, '/v1/chat/completions').length > 0)
   await page.screenshot({ path: SHOT_DIR + '/1.3.0-openai-streaming.png' })
-  const openaiEntry = posts(mockOk.log, '/v1/chat/completions')[0]
+  const openaiEntry = posts(mockOa.log, '/v1/chat/completions')[0]
   if (!openaiHit || !openaiEntry) {
     bad('1) 没有打到 /v1/chat/completions')
   } else {
@@ -836,7 +910,7 @@ try {
     }
     const paths = [
       ...new Set(
-        mockOk.log
+        mockOa.log
           .slice(openaiLogStart)
           .filter((e) => e.path.startsWith('/v1/'))
           .map((e) => e.path)
@@ -997,20 +1071,30 @@ try {
   // ============ 6b. 切回 deepseek：能力恢复 ============
   console.log('\n[6] 切回 deepseek 模式')
   await openSettings()
-  // 上一组换过服务地址，这里先指回正常运行的上游，再切回 deepseek
-  await setField(/服务地址|Service URL/, mockOk.base)
+  // 切回 DeepSeek 官方：官方那一行地址/模型都是内置的（只有 Key 可填，且 seed 时已经存过），
+  // 所以「确认使用」一按就生效，不涉及协议判定。
   await selectKind(/DeepSeek 官方|DeepSeek Official/)
+  await clickApiKeyConfirm(page)
   await closeSettings()
   for (const [label, re] of [
     ['智能搜索', /^智能搜索$|^Search$/],
     ['上传文件', /^上传文件$|^Upload files$/],
-    ['语音输入', /^语音输入$|^Voice input$/],
   ]) {
     if (await usable(re)) {
       ok(`「${label}」入口恢复可用`)
     } else {
       bad(`6) 切回 deepseek 后「${label}」入口没有恢复`)
     }
+  }
+  /**
+   * 语音入口**不再要求恢复**：#813 之后官方渠道的精简工具栏连语音入口都不渲染
+   * （`caps.asr` 本身没变，是工具栏精简把它拿掉的；本文件 [7a] 的 evidence 也已经这么记）。
+   * 所以这里按产品现状断言「不渲染」，而不是继续要求它回来 —— 否则红的是 #813 已发布的决定。
+   */
+  if ((await page.getByRole('button', { name: /^语音输入$|^Voice input$/ }).count()) !== 0) {
+    bad('6) 官方渠道（#813 精简工具栏）不该渲染语音入口')
+  } else {
+    ok('官方渠道不渲染语音入口（#813）')
   }
   const beforeSwitch = posts(mockOk.log, '/anthropic/v1/messages').length
   await send('切回后的消息')
@@ -1067,7 +1151,10 @@ try {
   // #686：收尾断言「漏出 = 0」（未登记的出站请求一条都不许有）—— 先断言再关浏览器
   assertNoEgress(failures)
   await browser.close()
+  // 两个 mock 都要关：只关一个的话它仍在 listen，Node 事件循环不空 → 进程不退出，
+  // runner 那边就是一个假 TIMEOUT（实测 420s 超时，而日志里已经打出了 PASS）。
   mockOk.server.close()
+  mockOa.server.close()
 
   console.log('\n=== 证据汇总 ===')
   for (const line of evidence) {

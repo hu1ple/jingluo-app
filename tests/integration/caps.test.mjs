@@ -15,12 +15,17 @@
 //
 // 跑法：APP_URL=http://127.0.0.1:5181 node tests/integration/caps.test.mjs
 import {
+  clickApiKeyConfirm,
   closeSettings,
   fillApiKey,
+  fillBaseUrl,
+  fillModel,
   finish,
+  openApiConfigSection,
   openApp,
   openSettingsDataSection,
   selectProviderKind,
+  waitForProviderKind,
 } from '../helpers/helpers.mjs'
 
 const name = 'tests/integration/caps.test.mjs'
@@ -65,8 +70,31 @@ const expectDegraded = async (label, nameRe) => {
 
 try {
   await openSettingsDataSection(page)
+  /**
+   * 走到「Anthropic 协议」这条真实路径（#794 / #807，改版前的「渠道下拉」已经不存在）：
+   *
+   *   展开「第三方服务」那一行 → 填草稿（地址 / 模型 / Key）→ 点行底「确认使用」才切换生效来源。
+   *
+   * 两个坑都在这里钉住，别退回：
+   *  1. **只填 Key 不确认 = 还停在 DeepSeek 官方**（改前就是这样：`selectProviderKind` + `fillApiKey`
+   *     之后直接断言，测的其实是官方渠道的能力位，红在「智能搜索仍然可用」）；
+   *  2. 协议不再是用户选的：`services/api/protocolDetect.ts` 按**地址主机**（含 `anthropic`）
+   *     或**模型名**（`claude` 前缀）判定，所以这里必须把这两格填成 Anthropic 的形状。
+   */
   await selectProviderKind(page, /Anthropic 协议|Anthropic-compatible/)
+  await fillBaseUrl(page, 'https://api.anthropic.com')
+  await fillModel(page, 'claude-3-5-sonnet-20241022')
   await fillApiKey(page, 'sk-testkey-caps')
+  await clickApiKeyConfirm(page)
+  /**
+   * 「确认使用」只落盘草稿（生效来源变成**第三方槽位**），协议判定发生在两个时刻：
+   * 展开第三方行时（本页的 `detectThirdPartyProtocol` effect）与发送消息前（`syncThirdPartyProtocol`）。
+   * 所以点完确认要**离开再回来展开这一行**，让产品把协议从兜底的 openai 适配成 anthropic ——
+   * 这条也是真实用户路径（配好之后回来看看，界面上就是 Anthropic 了）。
+   */
+  await closeSettings(page)
+  await openApiConfigSection(page, { row: 'third' })
+  await waitForProviderKind(page, 'anthropic')
   await closeSettings(page)
 
   await expectDegraded('智能搜索', /^智能搜索$|^Search$/)

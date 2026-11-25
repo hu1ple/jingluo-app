@@ -422,6 +422,7 @@ export type RequestBudgetOptions = {
    * `contextBuilder.buildWithDocuments()` 从出参里剥掉（原样上行会被上游当未知字段）。
    */
   attachmentRefs?: boolean
+  personaChars?: number
   /**
    * 本渠道的图片通路（#551：`providerCapability.visionFor()` 的返回值）。
    *
@@ -478,7 +479,7 @@ export const toRequestMessages = (
   })
   const sizes = units.map(({ params }) => estimateChars(params))
   // 本轮提问与系统快照永远保留，但占预算
-  const fixedChars = estimateChars(questionParam) + (latestReminder?.length ?? 0)
+  const fixedChars = estimateChars(questionParam) + (latestReminder?.length ?? 0) + (options?.personaChars ?? 0)
   /**
    * 上一轮定下的裁剪边界（#345）：按「第一个被保留的轮次」的提问 id 找回它的下标。
    * 找不到（会话被改过 / 预算变了）就当没有锚点，重新算一次。

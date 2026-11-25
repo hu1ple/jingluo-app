@@ -137,6 +137,11 @@ export const normalizeSession = (session: Session, onDamage?: SessionDamageRepor
   if (damage.length > 0) {
     onDamage?.(damage)
   }
+  if (typeof repaired.userIdentity === 'string') {
+    const { userIdentity, ...rest } = repaired
+    const prompt = typeof rest.customSystemPrompt === 'string' ? rest.customSystemPrompt : ''
+    return { ...rest, customSystemPrompt: [prompt, userIdentity && '用户身份：' + userIdentity].filter(Boolean).join('\n\n') }
+  }
   return repaired
 }
 

@@ -165,6 +165,9 @@ export type SessionBranchOrigin = {
 }
 
 export type Session = {
+  customSystemPrompt?: string
+  /** 旧版双栏数据，读取会话时并入自定义提示词。 */
+  userIdentity?: string
   id: string
   title: string
   createdAt: number

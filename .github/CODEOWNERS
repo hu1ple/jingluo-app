@@ -9,6 +9,11 @@
 # 注意：CODEOWNERS 的 owner 必须是**有写权限**的账号或团队。换 owner 请改这里。
 
 /.github/workflows/            @zzy-repo
+# 复合 action 与 workflow 是同一类东西：里面也是「可执行的 CI 代码」。抽出来的动作
+# （`.github/actions/**`）一旦被 `build-apk.yml` 这类带签名 Secret 的 job 引用，
+# 能改它的人就等价于能读 Secret —— 所以它必须和 workflows 同一条 owner 规则，
+# 否则「抽成 action」就成了绕过 CODEOWNERS 的后门（本轮新增 playwright 自检动作时补上）。
+/.github/actions/              @zzy-repo
 /.github/CODEOWNERS            @zzy-repo
 
 # 签名与版本身份：证书指纹、包名、版本号的单一来源，改动会导致「用户无法覆盖升级」

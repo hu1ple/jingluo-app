@@ -2,7 +2,6 @@ import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from '@rspack/cli'
-import { shareRelay } from './deploy/share-import/relay.mjs'
 import { rspack, type Configuration } from '@rspack/core'
 import { assertBrowserslist } from './scripts/lib/compatBaseline.mjs'
 import {
@@ -587,14 +586,7 @@ export const createConfig = ({
     }),
   ],
   performance: { hints: false },
-  devServer: {
-    port: 8090,
-    setupMiddlewares(middlewares) {
-      middlewares.unshift({ name: 'deepseek-share', middleware: shareRelay })
-      return middlewares
-    },
-    ...devServer,
-  },
+  devServer: { port: 8090, ...devServer },
 })
 
 // eslint-disable-next-line import/no-default-export

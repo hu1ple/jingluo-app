@@ -94,32 +94,22 @@ export async function readDeepSeekShare(input: string) {
   let status: number
   let body: unknown
   try {
-    if (Capacitor.isNativePlatform()) {
-      const response = await CapacitorHttp.get({
-        url: origin + '/api/v0/share/content?share_id=' + id,
-        headers: { Accept: 'application/json' },
-        responseType: 'json',
-        connectTimeout: 10000,
-        readTimeout: 20000,
-        disableRedirects: true,
-      })
-      status = response.status
-      body = response.data
-    } else {
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), 25000)
-      try {
-        const response = await fetch('/api/deepseek-share/' + id, {
-          credentials: 'omit',
-          redirect: 'error',
-          signal: controller.signal,
-        })
-        status = response.status
-        if (response.ok) {body = await response.json()}
-      } finally {
-        clearTimeout(timer)
-      }
+    // 只有原生端会走到这里（网页端入口已隐藏）：CapacitorHttp 走系统网络栈，不受 CORS 限制。
+    // 曾经为网页端留过一条 `/api/deepseek-share/<id>` 同源转发分支，但它要求线上多跑一个
+    // 中转进程 —— 产品决定不为一个低频功能加运维，网页端直接不提供入口，分支随之删除。
+    if (!Capacitor.isNativePlatform()) {
+      return fail('shareUnavailable')
     }
+    const response = await CapacitorHttp.get({
+      url: origin + '/api/v0/share/content?share_id=' + id,
+      headers: { Accept: 'application/json' },
+      responseType: 'json',
+      connectTimeout: 10000,
+      readTimeout: 20000,
+      disableRedirects: true,
+    })
+    status = response.status
+    body = response.data
   } catch {
     return fail('shareFetchFailed')
   }

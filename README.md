@@ -45,48 +45,10 @@
 ### 导入 DeepSeek 分享会话
 
 在侧栏选择「导入会话」，粘贴 DeepSeek 官方生成的 HTTPS 分享链接。成功后会打开导入的会话；
-再次导入同一链接会打开本地已有版本，保留后续编辑。Android 使用原生网络访问官方分享接口。
-网页版通过同源的 `/api/deepseek-share/` 读取，`pnpm dev` 已内置该路由。
+再次导入同一链接会打开本地已有版本，保留后续编辑。
 
-部署网页版时，在静态站点服务器上用 Node.js 22 或更高版本运行
-`node deploy/share-import/relay.mjs`，默认监听本机 8091 端口，可通过 `PORT` 调整。
-在现有站点的 Caddy 配置中加入以下规则，并让 SPA 的静态回退只处理其余路径：
-
-```caddy
-handle /api/deepseek-share/* {
-    reverse_proxy 127.0.0.1:8091
-}
-```
-
-转发服务仅向 DeepSeek 官方接口请求指定分享编号，直接返回响应；无需配置模型 API Key。
-
-```bash
-pnpm install
-pnpm dev            # 本地开发
-./build-apk.sh      # 构建 debug APK
-./build-apk.sh release   # 构建 release APK
-# 发布：按 docs/RELEASE-CHECKLIST.md 逐步执行（无一键脚本；可脚本化的三段是 pnpm run release:check / release:upload / release:verify）
-```
-
-设置页填写：
-
-| 配置项 | 说明 |
-| --- | --- |
-| Service URL | 兼容 OpenAI 协议的 API 根地址，例如 `https://api.deepseek.com` |
-| Model | 模型名，例如 `deepseek-chat` |
-| API Key | 你的密钥，仅保存在本机 |
-
-### 配置存储位置
-
-配置仅保存在浏览器 / WebView 的 `localStorage`（三个 key），不上传任何服务器：
-
-- `chat-demo:base-url` — 服务地址（Service URL）
-- `chat-demo:model` — 模型名
-- `chat-demo:api-key` — API Key
-
-> 键名沿用上游 `chat-demo:` 前缀，以便与旧版本数据兼容，因此升级后无需重新填写配置。
-
-清除应用数据或卸载应用会一并清除，需重新填写。
+**仅 Android 端提供该入口**：网页端读 `chat.deepseek.com` 的分享接口会被 CORS 挡住，需要一个
+服务端代转；产品决定不为这个低频功能增加中转服务，所以网页端**不显示该入口**（不是提示不支持）。
 
 ## 目录结构
 

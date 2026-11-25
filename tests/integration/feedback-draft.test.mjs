@@ -11,7 +11,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { serveDist } from '../helpers/runtime.mjs'
-import { assertNoEgress, installEgressGate } from '../helpers/helpers.mjs'
+import { assertNoEgress, installEgressGate, openSettingsRoot } from '../helpers/helpers.mjs'
 import { BUILTIN_KEY_CLAIM_STUB } from '../fixtures/consume-gateway-stubs/builtin-key-claim.mjs'
 
 
@@ -20,7 +20,13 @@ const SETTINGS_LAYER = '[data-testid="settings-list"], [data-testid^="settings-p
 const settingsLayer = (scope) => scope.locator(SETTINGS_LAYER)
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
-const out = path.join(root, 'docs/ui/feedback-draft')
+/**
+ * 截图落点：默认落到**不跟踪**的 `.flaky-runs/evidence/feedback-draft/`（见 .gitignore）。
+ * 改前落 `docs/ui/feedback-draft`，跑一次就把入库证据图改脏。要入库就 `EVIDENCE_OUT=<目录>`。
+ */
+const out = process.env.EVIDENCE_OUT
+  ? path.resolve(process.env.EVIDENCE_OUT)
+  : path.join(root, '.flaky-runs/evidence/feedback-draft')
 // 端口不写死 5399：撞到无关服务时页面能打开但 __diagnostics 不存在，表现成「等 30s 超时」的假红
 let port = Number(process.env.PORT || 0)
 const DESCRIPTION = '草稿保留回归：输入后点取消'
@@ -51,6 +57,15 @@ const openFeedback = async (page) => {
     await page.getByRole('button', { name: /^设置$|^Settings$/ }).first().click()
   }
   await settingsLayer(page).first().waitFor({ state: 'visible', timeout: 10000 })
+  /**
+   * 先回**一级列表**再点「数据管理」那一行。
+   *
+   * 为什么不能直接点 `settings-row-data`：本用例每轮要开三次反馈表单，第二次之后设置层
+   * **还停在「数据管理」二级页**（取消反馈只关反馈弹窗，设置层不退页）—— 二级页里没有一级
+   * 列表的 `settings-row-data`，直接点就是 30s 超时（红在「点不到」，不是「草稿没保留」）。
+   * `openSettingsRoot()` 是共享 helper 里那条「逐级退回一级列表」的路（已经开着就只退回）。
+   */
+  await openSettingsRoot(page)
   await page.getByTestId('settings-row-data').first().click()
   await page.getByRole('button', { name: /写反馈/ }).first().click()
   // 设置弹窗也在 DOM 里，按「含反馈描述框」锁定反馈这一个对话框，别用 .last()

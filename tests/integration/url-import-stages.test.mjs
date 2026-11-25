@@ -319,26 +319,20 @@ const dbCounts = (page) =>
   )
 
 /**
- * 「从链接导入」那一行里的「导入」按钮。
+ * 「从链接导入」那一行里的「导入」按钮 —— **按产品给的 testid 取**。
  *
- * 为什么不能直接 `getByRole('button', { name: '导入', exact: true })`：数据管理页现在是**两行导入**
+ * 为什么不能直接 `getByRole('button', { name: '导入', exact: true })`：数据管理页是**两行导入**
  * （「从链接导入」/「导入分享会话」，后者原生端才渲染），两行的按钮可访问名都叫「导入」——
  * 实测直接 `strict mode violation: resolved to 2 elements`，用例连第一步都过不去。
  *
  * 为什么不用 `.first()`：那只是把「有两个」蒙过去；两行的 DOM 顺序一变就静默点到分享导入上，
  * 于是「导入没反应」这种红会指向完全无关的代码。
  *
- * 现在按**关系**取：从「从链接导入」输入框往上找**最近的一层**同时装着「导入」按钮的容器
- * （就是那一行的操作区），再在这个容器里取按钮。身份稳定、与 DOM 顺序无关。
- *
- * ⚠ 需要产品侧补 testid：`data-testid="history-import-url-start"` / `"share-import-start"`。
- * 补上之后这里应该直接换成 `getByTestId(...)`，不必再靠祖先关系推。
+ * 产品侧已补 testid（`SettingsDialog.tsx` 的 `ImportHistoryUrl` / `ImportShare`）：
+ * `history-import-url-start` / `share-import-start`。本用例只需要前者；写死 testid 之后
+ * 与 DOM 顺序、按钮文案都无关，也不必再靠祖先关系推。
  */
-const urlImportButton = (page) =>
-  page
-    .getByLabel('从链接导入')
-    .locator('xpath=ancestor::div[.//button[normalize-space()="导入"]][1]')
-    .getByRole('button', { name: '导入', exact: true })
+const urlImportButton = (page) => page.getByTestId('history-import-url-start')
 
 /** 填链接 → 点「导入」→ 确认弹窗点「确认导入」。 */
 const startUrlImport = async (page, { url = ZIP_URL, confirm = true } = {}) => {

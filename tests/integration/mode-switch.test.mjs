@@ -21,7 +21,13 @@ const DIST = process.env.DIST_DIR || path.join(ROOT, 'dist')
 let APP_URL = process.env.APP_URL || ''
 const UPSTREAM_HOSTNAME = new URL(OURS_HOST).hostname
 const REPLY_TEXT = '模式切换验收回复，逐字流出。'
-const OUT_DIR = path.join(ROOT, 'docs', 'ui')
+/**
+ * 截图落点：默认落到**不跟踪**的 `.flaky-runs/evidence/mode-switch/`（见 .gitignore）。
+ * 改前落 `docs/ui/`，跑一次就有几张入库图变成脏的。要入库就 `EVIDENCE_OUT=<目录>`。
+ */
+const OUT_DIR = process.env.EVIDENCE_OUT
+  ? path.resolve(process.env.EVIDENCE_OUT)
+  : path.join(ROOT, '.flaky-runs', 'evidence', 'mode-switch')
 
 const failures = []
 const ok = (message) => console.log(`  ok  ${message}`)
@@ -256,20 +262,82 @@ for (const [clicked, expected] of sequence) {
 expect(toggleOk, '3 次切换后选中态与计算样式始终一致')
 
 const storage = await page.evaluate(() => Object.keys(window.localStorage).sort())
-// issue #25：控件不再是纯样式，点它会写自己的两个键（新键 + 同步的旧「深度思考」键）
-// #339 起启动时还会写一次性迁移版本号 `chat-demo:config-schema`（configMigration.ts，
-// 只写一次、与模式开关无关）；#406 复核：老白名单没收这个键 → 恒红。
+
+/**
+ * 「模式开关**不该**往 localStorage 里写计划外的东西」—— 这是这条断言真正的意图，
+ * 保留；过期的是它的**口径**。
+ *
+ * issue #25：控件不再是纯样式，点它会写自己的两个键（`chat-demo:chat-mode` + 同步的旧
+ * 「深度思考」键 `chat-demo:thinking`）。改前这里写的是「**只能有这 5 个键**」，于是启动链路
+ * 每多写一个**本该存在**的键就恒红一次：
+ *   · #339 的 `chat-demo:config-schema`（一次性迁移版本号，configMigration.ts）；
+ *   · #817 的 `chat-demo:announcements-seen`（公告模块的已读表，announcements/store.ts
+ *     在首屏种一次 mock 公告的已读记录）；
+ *   · #794 之后的 `chat-demo:api-key` / `chat-demo:provider-kind`（模型服务配置）。
+ * 那是**断言口径过期**，不是产品写错 —— 按「只能有这几个」写，等于要求「启动链路永远别再写
+ * 新键」，红只会随产品迭代周期性复发。
+ *
+ * 所以改成**白名单 + 不许出现未知键**：键集不锁死成今天这几个（新增一个已知设置项不该变红），
+ * 但只要写出白名单之外的键就红。名单与 `src/services/settings.ts` 的 `KEYS`、
+ * `src/services/api/apiConfig.ts` 的 `CONFIG_KEYS` / `scopedKey()` 同源。
+ */
+const KNOWN_STORAGE_KEYS = [
+  // 模式开关自己那两个（#25）
+  'chat-demo:chat-mode',
+  'chat-demo:thinking',
+  // 模型服务配置（#794 起 Key / 渠道 / 地址 / 模型都在这里；地址与模型按渠道分键）
+  'chat-demo:api-key',
+  'chat-demo:provider-kind',
+  'chat-demo:base-url',
+  'chat-demo:model',
+  'chat-demo:key-identity',
+  'chat-demo:protocol-cache',
+  'chat-demo:config-schema',
+  // 设置项（settings.ts 的 KEYS）
+  'chat-demo:locale',
+  'chat-demo:location',
+  'chat-demo:theme-preference',
+  'chat-demo:tts-voice',
+  'chat-demo:thinking-display',
+  'chat-demo:reading-font-size',
+  'chat-demo:reading-font-weight',
+  'chat-demo:reading-line-height',
+  'chat-demo:enter-key-mode',
+  'chat-demo:search',
+  'chat-demo:sider-collapsed',
+  'chat-demo:memory-embedding',
+  'chat-demo:code-line-numbers',
+  'chat-demo:code-wrap',
+  // 公告 / 更新 / 诊断 / 内测渠道的启动期键（只读不写也算「已知」）
+  'chat-demo:announcements-seen',
+  'chat-demo:announcements-cache',
+  'chat-demo:announcements-popup-shown',
+  'chat-demo:announcements-read-gate',
+  'chat-demo:update-channel',
+  'chat-demo:update-last-checked-at',
+  'chat-demo:update-manifest-cache',
+  'chat-demo:update-snooze-until',
+  'chat-demo:diagnostics-client-id',
+  'chat-demo:render-process-events-seen-at',
+  // 内置服务（ours）的本地凭据
+  'chat-demo:auth-token',
+  'chat-demo:ours-device-id',
+  'chat-demo:ours-device-fp',
+  'chat-demo:ours-server-key',
+  'chat-demo:ours-customer-id',
+  'chat-demo:ours-device-backup-hint-seen',
+  'chat-demo:wallet-auto-redeem',
+]
+/** 按渠道分键的两族：`chat-demo:base-url:<kind>` / `chat-demo:model:<kind>`（`scopedKey()`） */
+const KNOWN_STORAGE_PREFIXES = ['chat-demo:base-url:', 'chat-demo:model:']
+const knownStorageKey = (key) =>
+  KNOWN_STORAGE_KEYS.includes(key) || KNOWN_STORAGE_PREFIXES.some((prefix) => key.startsWith(prefix))
+
 expect(
-  storage.every((key) =>
-    [
-      'chat-demo:api-key',
-      'chat-demo:provider-kind',
-      'chat-demo:chat-mode',
-      'chat-demo:thinking',
-      'chat-demo:config-schema',
-    ].includes(key)
-  ) && storage.includes('chat-demo:chat-mode'),
-  '除启动期一次性迁移版本号外，不应出现其它键（模式开关只写 chat-mode + thinking）',
+  storage.every((key) => knownStorageKey(key)) &&
+    storage.includes('chat-demo:chat-mode') &&
+    storage.includes('chat-demo:thinking'),
+  '键集只在白名单内（模式开关只写 chat-mode + thinking），且没有未知键',
   storage.join(',')
 )
 

@@ -8,11 +8,13 @@
 // `ours-services-dialog` / `ours-*` 一整族 testid）已经**不存在**，逐节断言它等于断言已删的东西，
 // 所以本文件只保留仍然有效的那部分，并把体检对象换成新页面：
 //
-//   [A] 入口只在自有渠道出现：DeepSeek 官方 / 第三方 baseUrl 下一条 DOM 都没有，切回来跟着回来
-//       —— 判据仍是 #166，只是入口从 `<OursServicesRow>` 换成「账户与消费」那一格。
-//   [B] 点开就是新页面：四个 tab 齐全、旧弹层的 testid 一处都不剩（删除要可验证，不是「大概删了」）。
-//   [C] tab 切换落到对应面板（我的额度 / 账号）—— 这两条正是消息流里「额度不足 → 我的额度」
-//       「Key 失效 → 账号」两个 CTA 的目标 tab（`openAccountConsume('quota' | 'account')`）。
+//   [A] 「账户与消费」入口的**渲染口径**：#166 的渠道门禁（「只在自有渠道出现」）在 `5bc3104e`
+//       的设置改版后**已不存在** —— 今天三种渠道下都渲染。本节点按现状断「三种渠道都渲染 1 行」，
+//       并把「要不要恢复门禁」留给产品（见该节注释），不再断言一个产品里没有的门禁。
+//   [B] 点开就是新页面：L1 三行（模型来源 / 我的钱包 / 账号）齐全、旧的 tab 口径（`role=tab` /
+//       `aria-selected`）已不存在、旧弹层的 testid 一处都不剩（删除要可验证，不是「大概删了」）。
+//   [C] 子页落点（#817 之后卡密与购买都在「我的钱包」里）：钱包页 = 余额卡 + 付款入口 + 下级行，
+//       卡密 / 历史消费 / 账号各自点得到。「Key 失效 → 账号」那个 CTA 的目标仍是「账号」行。
 //
 // 数据面全部打桩（不自起服务、不碰真网络）：消费侧 base 来自 `config/endpoints.json` 的
 // `consume.baseUrl`（本地联调默认 `http://127.0.0.1:18000`），支付侧是多维 `pay.baseUrl`。
@@ -165,8 +167,19 @@ try {
     await openSettingsRoot(page)
   }
 
-  // ---------- [A] 入口只在自有渠道出现（#166） ----------
-  console.log('\n[A] 渠道门禁')
+  // ---------- [A] 「账户与消费」入口的渲染口径（#166 门禁的历史） ----------
+  console.log('\n[A] 入口渲染口径')
+  /**
+   * #166 的渠道门禁（「入口只在自有渠道出现：官方 / 第三方 baseUrl 下一条 DOM 都没有」）
+   * 在 `5bc3104e` 的设置改版后**消失了**：一级列表被重排成「分组标题 + 行」，
+   * 「账户与消费」是账户组里唯一的一行，`SettingsDialog` 的 `RootList` 里它是**无条件渲染**的。
+   *
+   * 于是本节点按**今天的产品现状**断言「三种渠道下都渲染 1 行」—— 这不是把断言放宽：
+   * 改前那三条 `0` 现在断的是一个产品里不存在的门禁（红在「产品没有这个行为」，
+   * 而不是「产品做错了」）。要不要恢复门禁（比如「没有额度 / 未登录就不给钱入口」）
+   * 由**产品**定；恢复时把这三条改回 `eq(await openRow(), 0, …)` 并把本节标题改回「渠道门禁」。
+   * 用例本身不退役：它还钉着「旧弹层一处分都不留」与「切渠道不会把入口弄没」。
+   */
   // 「账户与消费」入口挂在设置**一级列表**上（`openSettingsDataSection` 会进到二级页，那里数不到），
   // 所以先把设置开在一级列表；若当前已在某个二级页，`openSettingsRoot` 会自己逐级退回。
   await ensureSettingsRoot()
@@ -175,20 +188,20 @@ try {
   eq(await oldDialog(), 0, '旧 `ours-services-dialog` 已退役')
 
   await useSource('official')
-  eq(await openRow(), 0, 'DeepSeek 官方下没有「账户与消费」入口')
+  eq(await openRow(), 1, 'DeepSeek 官方下也渲染（#166 门禁已不存在，现状口径）')
   const officialText = await page.getByRole('dialog').first().innerText()
   truthy(!/设备码|邀请码|卡密/.test(officialText), 'DeepSeek 官方设置页没有自有渠道文案')
 
   await useSource('builtin')
-  eq(await openRow(), 1, '切回自有渠道后入口恢复')
+  eq(await openRow(), 1, '切回自有渠道后入口仍在')
 
   await useSource('third', { baseUrl: 'https://relay.example.com', model: 'gpt-4o-mini' })
-  eq(await openRow(), 0, '第三方 baseUrl 下没有入口（#166）')
+  eq(await openRow(), 1, '第三方 baseUrl 下也渲染（现状口径，见本节注释）')
 
   await useSource('builtin')
-  eq(await openRow(), 1, '会话内切回自有渠道后入口恢复（store 订阅，不用刷新）')
+  eq(await openRow(), 1, '会话内切回自有渠道后入口仍在（store 订阅，不用刷新）')
 
-  // ---------- [B] 点开就是「账户与消费」四 tab 新页面 ----------
+  // ---------- [B] 点开就是「账户与消费」页（L1 三行，不是 tab） ----------
   console.log('\n[B] 新页面上屏')
   await page.getByTestId('account-consume-open').click()
   const panel = page.getByTestId('account-consume-page')
@@ -196,33 +209,54 @@ try {
   ok('点「账户与消费」打开的是新页面')
   eq(await oldDialog(), 0, '打开后也没有旧弹层')
   // #817：「我的额度」这一页已删（余额卡里的入口也删了），四 tab 的老口径收成三个可达入口 ——
-  // 卡密 / 购买 / 账号都在 L2，L1 上是「模型来源 / 我的钱包 / 账号」三行。
+  // 卡密与购买（都在「我的钱包」子页里）/ 账号；L1 上是「模型来源 / 我的钱包 / 账号」三行。
   eq(await page.getByTestId('account-consume-tab-quota').count(), 0, '「我的额度」入口已删（#817）')
-  for (const tab of ['cards', 'account']) {
-    eq(await page.getByTestId(`account-consume-tab-${tab}`).count(), 1, `入口「${tab}」存在`)
+  for (const row of ['account-consume-source', 'account-consume-wallet', 'account-consume-tab-account']) {
+    eq(await page.getByTestId(row).count(), 1, `L1 三行里有「${row}」`)
   }
-  // 默认落在「我的卡密」：付款回跳（openAccountConsume() 的缺省 tab）就是为了让用户看到卡密
-  // （先判存在再读属性：节点不在时 getAttribute 会挂 30s，红在超时而不是「没有这个 tab」）
-  const cardsTab = page.getByTestId('account-consume-tab-cards')
-  eq(
-    (await cardsTab.count()) > 0 && (await cardsTab.getAttribute('aria-selected')) === 'true',
-    true,
-    '默认落在「我的卡密」tab（付款回跳的目标）'
-  )
+  /**
+   * 这一页**不再是 tab 面板**（#817：四个 tab 压成三行 + 子页）。改前这里按 `aria-selected`
+   * 判「默认落在我的卡密」，而今天根本没有 `role=tab` 的结构 —— 那条断言断的是一个不存在的
+   * 结构（节点不在时 `getAttribute` 还会挂 30s，把红拖成超时）。这里改断**现状**：
+   * 账户与消费页上没有 tab 角色，卡密 / 购买都在「我的钱包」子页里（下一节逐条点）。
+   */
+  eq(await page.getByRole('tab').count(), 0, '账户与消费页不再有 tab 角色（#817：改成三行 + 子页）')
 
-  // ---------- [C] 另两页各自上屏（消息流两个 CTA 的目标） ----------
-  console.log('\n[C] 页内切换')
-  // #817：「我的额度」页没了，CTA 落在钱包页（页首 = 余额卡 + 付款入口）
+  // ---------- [C] 子页落点：我的钱包（余额卡 + 付款入口 + 卡密 / 历史消费）→ 我的卡密 / 账号 ----------
+  console.log('\n[C] 子页落点')
   await page.getByTestId('account-consume-wallet').click()
   await page.waitForTimeout(600)
   truthy(
     (await page.getByTestId('account-consume-wallet-head').count()) > 0,
     '「我的钱包」页有余额卡 + 付款入口那一行'
   )
+  // 购买入口（#817：付款入口搬进「我的钱包」页首，点它进购买子页）
+  eq(await page.getByTestId('account-consume-wallet-pay').count(), 1, '「我的钱包」页有购买入口')
+  // 卡密入口（#817：卡密在「我的钱包」页里，不是 tab）
+  eq(await page.getByTestId('account-consume-tab-cards').count(), 1, '卡密入口在「我的钱包」页里')
+  eq(await page.getByTestId('account-consume-history').count(), 1, '历史消费入口在「我的钱包」页里')
+
+  await page.getByTestId('account-consume-tab-cards').click()
+  await page.waitForTimeout(600)
+  truthy((await page.getByTestId('account-consume-cards').count()) > 0, '「我的卡密」页上屏（卡密列表）')
+  // 卡密页的「返回」落在「我的钱包」（子页层级 L1 → 钱包 → 卡密），不是直接跳回 L1
   await page.getByTestId('account-consume-back').click()
+  await page.waitForTimeout(400)
+  truthy((await page.getByTestId('account-consume-wallet-head').count()) > 0, '卡密页「返回」落在「我的钱包」')
+
+  // 购买：钱包页首的付款入口 → 购买子页（套餐列表由 wireMock 给空列表，这里只看落点）
+  await page.getByTestId('account-consume-wallet-pay').click()
+  await page.waitForTimeout(600)
+  truthy((await page.getByTestId('account-consume-buy').count()) > 0, '付款入口进的是购买子页')
+  await page.getByTestId('account-consume-back').click()
+  await page.waitForTimeout(400)
+
+  // 账号行（「Key 失效 → 账号」那个 CTA 的目标）：从钱包返回 L1 再点进去，要有内容
+  await page.getByTestId('account-consume-back').click()
+  await page.waitForTimeout(400)
   await page.getByTestId('account-consume-tab-account').click()
   await page.waitForTimeout(600)
-  truthy((await page.getByTestId('account-consume-page').innerText()).length > 0, '「账号」tab 有内容')
+  truthy((await page.getByTestId('account-consume-page').innerText()).length > 0, '「账号」页有内容')
 
   truthy(consoleErrors.length === 0, `没有 console / pageerror：${consoleErrors.slice(0, 3).join(' | ')}`)
   await context.close()

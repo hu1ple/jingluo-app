@@ -13,6 +13,21 @@
 // 图片入口的可访问名就是「上传文件」，按文案数节点会把「图片」和「文档」搅成一件东西；
 // 而按文案前缀数「能用的那个 picker」又数不出禁用态占位在不在 —— 那正是 #538 能力门的守卫。
 //
+// ## 协议判定的**时机**（lead 裁决：保持产品现状，断言按真实的两段式写）
+//
+// 「确认使用」**只落槽位**，不判协议：`confirmSourceRow()` 写的是草稿那三格 + 生效来源
+// （`chat-demo:provider-kind`），协议（`openai` / `anthropic`）此刻仍是**兜底的 openai**。
+// 真正的判定发生在两个「判定点」上（`services/api/protocolDetect.ts` 的
+// `detectThirdPartyProtocol`：主机 → 模型名 → 上次探测结论 → 兜底探测）：
+//
+//   1. **展开第三方那一行**时（本页的 effect）；
+//   2. **发送消息前**（`syncThirdPartyProtocol`）。
+//
+// 所以本用例的顺序是「确认 → 触发判定点（离开再展开这一行）→ 断言最终 kind」，
+// 而不是「点完确认就断言 kind=anthropic」——后者断的是一个产品里没有的时机（会红在产品没错的地方）。
+// **这是当前真实行为**：产品若改成「确认即判」（确认那一刻就定协议），改这里的顺序即可，
+// 那时「确认后立刻是 anthropic」才是有意义的断言。
+//
 // 跑法：APP_URL=http://127.0.0.1:5181 node tests/integration/caps.test.mjs
 import {
   clickApiKeyConfirm,
@@ -91,7 +106,11 @@ try {
    * 展开第三方行时（本页的 `detectThirdPartyProtocol` effect）与发送消息前（`syncThirdPartyProtocol`）。
    * 所以点完确认要**离开再回来展开这一行**，让产品把协议从兜底的 openai 适配成 anthropic ——
    * 这条也是真实用户路径（配好之后回来看看，界面上就是 Anthropic 了）。
+   *
+   * 顺手把「确认那一刻的 kind」记成证据（**不断言**）：它是兜底值 openai。这里只留档，
+   * 是因为「兜底值长什么样」属于产品可以改的实现细节（见文件头「协议判定的时机」）。
    */
+  console.log(`  ·   确认后（未触发判定点）的 kind = ${JSON.stringify(await page.evaluate(() => window.localStorage.getItem('chat-demo:provider-kind')))}`)
   await closeSettings(page)
   await openApiConfigSection(page, { row: 'third' })
   await waitForProviderKind(page, 'anthropic')

@@ -7,7 +7,8 @@
  * #836 把产物文件名从 `deepseek-chat-<version>.apk` 改成 `jingluo-chat-<version>.apk`。
  * 这类改名的失败方式**不是构建红**，而是「改了 3/5 处」：
  *
- *   - CI（`.github/workflows/release.yml`）按新名字产出 GitHub 资产；
+ *   - CI（当时是 ~~`.github/workflows/release.yml`~~，该文件已于 `ce7968e3` / 2026-11-24 整条删除，
+ *     仓库里不再有自动发布路径）按新名字产出 GitHub 资产；
  *   - 私有发布脚本还在写老名字；
  *   - 分发接口 `deploy/dl-release/server.mjs` 落盘用老名字；
  *   - 文档/清单示例还是老名字。
@@ -37,10 +38,14 @@
  *
  * ## 负向对照（`--selftest`，CI 也跑它）
  *
- *   ① 配置里把 `artifactPrefix` 改回 `deepseek-chat` → P1 必须红；
- *   ② 往 `release.yml` 的文本里塞回 `apk="deepseek-chat-${version}.apk"` → P2 必须红；
- *   ③ 往发布脚本文本里塞 `FILE_PREFIX = 'jingluo-chat'` → P2 必须红；
- *   ④ 正本（磁盘上的真文件 + 真配置）必须**绿** —— 恒红的门禁等于没有门禁。
+ *   ① 正本（磁盘上的真文件 + 真配置）必须**绿** —— 恒红的门禁等于没有门禁；
+ *   ② 配置里把 `artifactPrefix` 改回 `deepseek-chat` → P1 必须红；
+ *   ③ 往**现存** workflow 的文本里塞回 `apk="deepseek-chat-${version}.apk"` → P2 必须红
+ *      （注入目标运行期从扫到的 `.github/workflows/*` 里挑，且必须不在 `LEGACY_LITERAL_ALLOWED` 里；
+ *      挑不出注入点 = 这条对照没有证伪能力，按**失败**处理，不许悄悄变成「永远绿」）；
+ *   ④ 往发布脚本文本里塞 `FILE_PREFIX = 'jingluo-chat'` → P2 必须红。
+ *
+ *   编号与 `--selftest` 打印出来的 `[①]…[④]` 一一对应（改一处要改两处，别让文档里的 ② 指到输出的 ③）。
  *
  * ## 用法
  *
@@ -357,6 +362,28 @@ export const runGate = async (root = ROOT) => {
 };
 
 /**
+ * 负向对照 ③ 的注入目标：**必须是从磁盘上真扫到的、且不在 `LEGACY_LITERAL_ALLOWED` 里的 workflow 文件**。
+ *
+ * 为什么「挑」而不是写死：
+ *   · 写死一个已被删除的文件（原来的 `.github/workflows/release.yml`，2026-11-24 `ce7968e3` 整条删）
+ *     → 注入落空 → 判「对照失败」→ 这条负向对照**恒红**，CI 里 `--selftest` 那一步跟着一直红；
+ *   · 反过来挑一个被豁免的文件（`ci.yml` 就在 LEGACY_LITERAL_ALLOWED 里）→ 注入进去也判不出来 →
+ *     变成「永远绿」，比红更坏。
+ * 两头都是假信号，所以：优先 `build-apk.yml`（今天唯一产出 APK 的 workflow），否则取扫到的第一个非豁免
+ * workflow（排序保证确定性）；**一个都挑不出来就返回 null**，由 `selftest()` 记一条可归因的失败
+ * ——「没有注入点」不等于「对照通过」。
+ */
+const pickInjectionTarget = (files) => {
+  const candidates = files
+    .map((file) => file.rel)
+    .filter((rel) => rel.startsWith('.github/workflows/'))
+    .filter((rel) => !LEGACY_LITERAL_ALLOWED.some((re) => re.test(rel)))
+    .sort();
+  if (candidates.includes('.github/workflows/build-apk.yml')) return '.github/workflows/build-apk.yml';
+  return candidates.length ? candidates[0] : null;
+};
+
+/**
  * 负向对照：把「改坏的样子」喂给纯函数，逐个确认门禁会红；
  * 同时确认正本（磁盘上的真配置 + 真代码）是绿的。
  * @returns {{ok:boolean, failures:string[], rows:Array<{id:string, why:string}>}}
@@ -372,8 +399,10 @@ export const selftest = async (root = ROOT) => {
   const positive = analyzeConfig(config).concat(scanProducerLiterals(files, prefix));
   if (positive.length) {
     failures.push(`正本（真实配置 + 真实代码）应当判绿，实际 ${positive.length} 条：${positive[0].message}`);
+  } else {
+    // 只在真绿的时候打这一行 —— 上面已经判失败还打「✓ 正本」，就是在同一次运行里又给了个假绿
+    rows.push({ id: '正本', why: `当前 ${APP_IDENTITY_REL_PATH} 的 artifactPrefix=${prefix}，生产者代码零字面量` });
   }
-  rows.push({ id: '正本', why: `当前 ${APP_IDENTITY_REL_PATH} 的 artifactPrefix=${prefix}，生产者代码零字面量` });
 
   // ② 配置改回历史前缀 → P1 必须红
   const legacyBack = analyzeConfig({ ...config, artifactPrefix: LEGACY_ARTIFACT_PREFIXES[0] });
@@ -383,17 +412,27 @@ export const selftest = async (root = ROOT) => {
     rows.push({ id: '②', why: `artifactPrefix 改回 ${LEGACY_ARTIFACT_PREFIXES[0]} → P1 红：${legacyBack[0].message.slice(0, 60)}…` });
   }
 
-  // ③ CI 里塞回老字面量 → P2 必须红
-  const injectedCi = files.map((f) =>
-    f.rel === '.github/workflows/release.yml'
-      ? { rel: f.rel, text: `${f.text}\n          apk="deepseek-chat-\${version}.apk"\n` }
-      : f,
-  );
-  const ciHit = scanProducerLiterals(injectedCi, prefix).filter((v) => v.code === 'P2');
-  if (!ciHit.length) {
-    failures.push('负向对照失败：release.yml 里塞回 old-prefix 字面量后门禁仍然通过');
+  // ③ 现存 workflow 里塞回老字面量 → P2 必须红
+  //    注入目标见 pickInjectionTarget()：必须真存在 + 不在豁免名单里，否则这条对照没有证伪能力
+  const injectTarget = pickInjectionTarget(files);
+  if (!injectTarget) {
+    failures.push(
+      '负向对照失败：找不到可注入的 workflow 文件 —— `.github/workflows/` 下扫到的文件全在 ' +
+        'LEGACY_LITERAL_ALLOWED 里（或一个都没有）。没有注入点的对照等于没对照，按失败处理',
+    );
   } else {
-    rows.push({ id: '③', why: `${ciHit[0].file}:${ciHit[0].line} 被点到（历史前缀字面量）` });
+    const injectedCi = files.map((f) =>
+      f.rel === injectTarget ? { rel: f.rel, text: `${f.text}\n          apk="deepseek-chat-\${version}.apk"\n` } : f,
+    );
+    // 只认「注入目标这个文件」上的命中：别处早就存在的 P2 不许替注入顶包（那样注入落空也看不出来）
+    const ciHit = scanProducerLiterals(injectedCi, prefix).filter(
+      (v) => v.code === 'P2' && v.file === injectTarget,
+    );
+    if (!ciHit.length) {
+      failures.push(`负向对照失败：${injectTarget} 里塞回历史前缀字面量后门禁仍然通过（注入点没被咬住）`);
+    } else {
+      rows.push({ id: '③', why: `${ciHit[0].file}:${ciHit[0].line} 被点到（历史前缀字面量）` });
+    }
   }
 
   // ④ 发布脚本里塞回「当前前缀常量」 → 也要红（防「这次改完了，下次再抄一份」）

@@ -83,6 +83,16 @@
   color: var(--dsw-alias-label-secondary);
 }
 .meta span:last-child { white-space: nowrap; margin-left: 12px; font-variant-numeric: tabular-nums; }
+/* #890：接近上限 / 已超长的计数变色。只改颜色，行不外扩（计数在窄屏仍是 nowrap 的一行） */
+.countWarn { color: var(--dsw-static-amber-500); }
+.countOver { color: var(--dsw-alias-state-error-primary); }
+/* 存量超长时的行内提示：贴在计数下面，不挤压输入框 */
+.tooLong {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-state-error-primary);
+}
 
 @media (max-width: 767px) {
   .editor { padding: 20px 16px 16px; }

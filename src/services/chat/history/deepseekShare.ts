@@ -1,4 +1,5 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core'
+import { importedPrompt } from '../promptLimit.js'
 import { fail } from './errors.js'
 import { readSessionFile } from './schema.js'
 import { toLocalSessionResult } from './toLocal.js'
@@ -258,7 +259,27 @@ export function sessionFromShare(id: string, body: unknown) {
     if (!local.ok) {
       return fail('shareUnreadable')
     }
-    return local.session.session
+    const session = local.session.session
+    /**
+     * 会话级自定义提示词的上限校验（#890）：超长**整段丢弃**并打 `promptDropped` 标记，**绝不截断**。
+     *
+     * 为什么在这儿：这里的 `data` 是**上游 / 别人**给的形状，schema 只认自己认识的那几个字段，
+     * 靠「不认识的字段自己会掉」不牢靠 —— 一旦哪天把提示词纳入归档形状，超长内容就会以
+     * 「砍在最中间」的形式落进本机会话，用户看着像一段正常的提示词，其实语义已经断了。
+     *
+     * 现状说明（别误读）：今天官方分享接口的 `biz_data` 里**不带**这个字段，本文件的
+     * `custom_system_prompt` / `customSystemPrompt` 读的是**防御性**入口；真机上它取不到值，
+     * 走不到这一支。真正写这个字段的仍是抽屉（`PersonaDrawer` → `saveSessionPrompt`）。
+     */
+    const prompt = importedPrompt(data.custom_system_prompt ?? data.customSystemPrompt)
+    if (prompt.prompt !== undefined) {
+      session.customSystemPrompt = prompt.prompt
+    }
+    if (prompt.dropped) {
+      // 标注留给导入结果的消费方（设置页的导入状态行）；只标「这个字段没进来」，不阻断整段导入
+      return Object.assign(session, { promptDropped: true })
+    }
+    return session
   } catch {
     return fail('shareUnreadable')
   }

@@ -345,7 +345,12 @@ test('store 接线：阶段流转 + 5/30/60 三档在同一 startedAt 上升级'
         chunk({ id: 'chatcmpl-328', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })
       )
     )
-    bodyController.enqueue('data: [DONE]\n\n')
+    // 必须 encode 成字节：ReadableStream 收到字符串时，读取侧（SSE 解码器）会抛
+    // 「input argument must be an instance of ...」并被请求层归成 `interrupted`，
+    // 于是这一轮其实**从来没收尾成功**过（改前只断言「streaming 撤下」，所以没暴露）。
+    // 2026-11-25 断流新口径（首字节后有内容补 1 次）把这个隐患放大成真红：
+    // 假时钟不会自己走，退避等不到，本轮就永远挂着。
+    bodyController.enqueue(encoder.encode('data: [DONE]\n\n'))
     bodyController.close()
     for (
       let i = 0;

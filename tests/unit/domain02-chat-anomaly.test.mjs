@@ -40,10 +40,15 @@ setupDom()
 
 const realSetTimeout = globalThis.setTimeout
 /**
- * 退避等待压缩到 1ms：只压 `retryBaseDelay × 2^attempt` 的 1000 / 2000 两档。
+ * 退避等待压缩到 1ms：压 `retryBaseDelay × 2^attempt`（1000 / 2000）与断流档的
+ * 1s/2s/4s/8s 序列（`chat/streamBreakout.ts` 的 `STREAM_BREAK_RETRY_DELAYS_MS`）。
+ *
+ * 2026-11-25 起「首字节前断开」最多静默重试 5 次，退避 1+2+4+8+8 = 23s —— 不压缩的话
+ * 单是一轮就要真等 23s，先撞 `awaitIdle` 的 20s 上限（那是用例失败，不是实现失败），
+ * 而这条用例要断言的是**请求次数**，与「等多久」无关。
  * 其余定时器（首字分级提示、请求超时预算）原样不动 —— 压它们会改变被测语义。
  */
-const RETRY_BACKOFF_MS = new Set([1000, 2000])
+const RETRY_BACKOFF_MS = new Set([1000, 2000, 4000, 8000])
 globalThis.setTimeout = (fn, ms, ...args) =>
   realSetTimeout(fn, RETRY_BACKOFF_MS.has(ms) ? 1 : ms, ...args)
 

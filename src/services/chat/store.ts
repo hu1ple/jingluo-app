@@ -1863,8 +1863,19 @@ export const decideStreamRetry = ({
   return isRetryableApiError(error) || fileRecovered ? 'retry' : 'final'
 }
 
-/** 重传前的退避等待；停止生成时立即返回，由调用方按已停止收尾 */
-const waitForRetry = (attempt: number, signal: AbortSignal) =>
+/** #105 通用档的退避：`基值 × 2^attempt`（断流档**不用**这个，见下面的 waitForRetry） */
+const genericRetryDelayMs = (attempt: number) => RETRY_BASE_DELAY * 2 ** attempt
+
+/**
+ * 重传前的退避等待；停止生成时立即返回，由调用方按已停止收尾。
+ *
+ * 等多久由**调用方**给（`delayMs`），本函数只负责「等」与「可被停止打断」：
+ * - 断流两档的退避是 1s / 2s / 4s / 8s 封顶，由 `chat/streamBreakout.ts` 的
+ *   `retryDelayMs` 算（那一档最多 5 次，一路翻倍会把用户晾半分钟）；
+ * - 其余档仍是 `genericRetryDelayMs(attempt)`（#105 的 1s / 2s）。
+ * 把档位算法收在判定里，这里就不再复制一份 `2 ** attempt`。
+ */
+const waitForRetry = (delayMs: number, signal: AbortSignal) =>
   new Promise<void>((resolve) => {
     function onAbort() {
       clearTimeout(timer)
@@ -1875,7 +1886,7 @@ const waitForRetry = (attempt: number, signal: AbortSignal) =>
         signal.removeEventListener('abort', onAbort)
         resolve()
       },
-      RETRY_BASE_DELAY * 2 ** attempt
+      delayMs
     )
     signal.addEventListener('abort', onAbort, { once: true })
   })
@@ -1992,6 +2003,26 @@ const withRequestDocuments = async (
 }
 
 /**
+ * 把一条回复**已经展示给用户的内容**清空，回到「还没出字」的待生成态。
+ *
+ * 只服务于断流的 `discardPartial`（首字节后断开、内容不足 150 字）：那一档要求「丢弃重来」，
+ * 旧内容必须跟着一起消失 —— 否则同一条回复里会同时出现前一版和新一版的正文（用户看到两份、
+ * 上游重复计费）。清的是**这一条回复本身**：不新建回复、不动 `id` / 分支结构、不调
+ * `regenerateReply`，所以 `updateReply`（按 `message.id` 整条替换）与 `persist`
+ * 写进 IndexedDB 的仍是同一个 `session.messages` 项，库里不会多出一份。
+ *
+ * 思考块一起清：`receivedCharsOf` 把思考也算作「用户已看到的内容」，留着思考而清正文
+ * 一样是「两份」。
+ */
+const discardReplyContent = (reply: AssistantMessage): AssistantMessage => ({
+  ...reply,
+  status: 'pending',
+  blocks: [],
+  stopReason: undefined,
+  stopDetails: undefined,
+})
+
+/**
  * 请求并消费流：先补齐附件的 serverId，再发请求；流式增量按动画帧刷新内存，完成、失败或停止后落盘。
  * 补传失败时回复记为 upload 错误，可重试。
  * 服务端判定 file_id 失效时重新补传后重发，退避重试且次数有上限，超过则按原始报错收尾。
@@ -2011,6 +2042,14 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
   const meter = createStreamMeter()
   /** 本轮是第几次尝试（重试会递增）：第一次就慢 与 重试后才成 必须分得开 */
   let attemptNo = 1
+  /**
+   * 断流两档**自己**已经重试过几次（`chat/streamBreakout.ts` 的 `retriedCount`）。
+   *
+   * 为什么不用 `attempt`：那个计数器把 #105 通用档（弱网 / 5xx / 附件失效补传）的重试
+   * 也算进去了，而两档的**上限不同**（断流 5 次 / 1 次，通用 2 次）。混算会让
+   * 「先 5xx 重试过一次、再断流」的轮次提前判成预算用完 —— 用户无感的那几次补救就白丢了。
+   */
+  let breakoutRetries = 0
   /** 端点键（只写 config/endpoints.json 的键，不写完整 URL） */
   const endpointKey = () => endpointKeyFromUrl(getBaseUrl())
   /** 是否已记过第一个 token（只记一次） */
@@ -2384,19 +2423,25 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           reuploadInvalidatedFiles(sessionId, request, error)
         /**
          * 断流两档（interrupted / idle）走**自己那套口径**（`chat/streamBreakout.ts`）：
-         * - 首字节前断开 → 静默重试 1 次（上限是 `STREAM_BREAK_RETRY_LIMIT`，不是 #105 的 2 次）；
-         * - 首字节后断开 / idle → 一次都不重发（重发会重复输出、重复计费）。
+         * - 首字节前断开 → 静默重试 **5** 次（1s/2s/4s/8s 封顶，60s 总预算优先于次数）；
+         * - 首字节后有内容且 **< 150 字** → 补 1 次，且**丢弃已收到内容重来**（`discardPartial`）；
+         * - 首字节后有内容且 **>= 150 字** → 0 次，软提示 + 「重新生成」，内容保留。
          *
          * `decideStreamRetry` 的口径**不动**：它服务的是弱网 / 5xx / 连接超时 / 首字超时、
          * 以及附件失效补传，那些档位有自己的上限与提示。这里只是在断流两档上做一次收口，
          * 两者不重叠（`isStreamBreakoutKind` 只认 interrupted / idle）。
          */
+        const errorKind = error instanceof ApiError ? error.kind : undefined
+        const breakoutKind = isStreamBreakoutKind(errorKind) ? errorKind : undefined
         const breakout = decideStreamBreakout({
           receivedChars,
-          retried: attempt > 0,
-          kind: error instanceof ApiError ? error.kind : undefined,
+          // 只数断流档自己的重试（见 breakoutRetries 的注释：不能和 #105 通用档混算）
+          retriedCount: breakoutRetries,
+          // 总预算从点发送算起（含附件补齐与前面几次退避的等待）：超了立刻停，不再重发
+          elapsedMs: Date.now() - startedAt,
+          kind: errorKind,
         })
-        const decision = isStreamBreakoutKind(error instanceof ApiError ? error.kind : undefined)
+        const decision = breakoutKind
           ? controller.signal.aborted
             ? 'aborted'
             : breakout.retry
@@ -2410,13 +2455,42 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
               fileRecovered,
             })
         if (decision === 'retry') {
+          if (breakoutKind) {
+            breakoutRetries += 1
+          }
+          /**
+           * 丢弃半截内容重来（`discardPartial`）：首字节后断开、内容不足 150 字时，
+           * 判定要求「重发前把已收到内容清干净」，否则同一条回复里会同时有前一版和新一版
+           * 的正文 —— 用户看到两遍、上游重复计费，这就是「绝不出现两份」的执行点。
+           *
+           * 三件事一起做，缺一不可：
+           * 1. `reply` 置空（正文 / 思考块全清、状态回到 pending）—— 内存里只剩这一份；
+           * 2. `updateReply` 立刻把清空后的回复写回会话（不等 rAF，避免一帧的旧内容回闪）；
+           * 3. `persist` 落盘：库里存的也是同一个 `session.messages` 项（按 `message.id`
+           *    整条替换），**不新增版本、不调 regenerateReply**，所以持久化层面不会有两份。
+           */
+          if (breakout.discardPartial) {
+            reply = discardReplyContent(reply)
+            updateReply(sessionId, reply)
+            void persist(sessionId)
+            /**
+             * 首字到达时 `clearWaitHints` 已经把 `waitStates` 删掉了，这时候 `setWaitStage`
+             * 是 no-op —— 「正在重新生成」这条既有提示（`chatRetrying`）根本不会出现。
+             * 丢弃重来等于重新开始一次等待，所以在这里重新挂表（秒数仍从点发送累计，不归零）。
+             */
+            armWaitHints(sessionId, startedAt)
+          }
           // 让用户看见「正在第 N 次重试」，而不是静默卡住；秒数从点发送累计，不因重试归零（#328 G6）
-          // 断流这一档的上限是 1 次，所以文案里的「共 N 次」要用这一档自己的预算，不能照抄 #105 的 2
+          // 「共 N 次」用这一档自己的预算（断流 5 次 / 1 次），不能照抄 #105 的 2
           setWaitStage(sessionId, 'retrying', {
-            attempt: attempt + 1,
+            attempt: breakoutKind ? breakoutRetries : attempt + 1,
             limit: breakout.maxRetries > 0 ? breakout.maxRetries : STREAM_RETRY_LIMIT,
           })
-          await waitForRetry(attempt, controller.signal)
+          // 退避时长也由判定给：断流档 1s/2s/4s/8s 封顶，其余档仍是 #105 的 base × 2^attempt
+          await waitForRetry(
+            breakoutKind ? breakout.retryDelayMs : genericRetryDelayMs(attempt),
+            controller.signal
+          )
           if (controller.signal.aborted) {
             reply = settleReply(reply, 'stopped', Date.now())
             break

@@ -753,6 +753,17 @@ await runTitleScenario({
   if (!reachable) {
     note(`[11] 跳过：${DEPLOY_URL} 不可达`)
   } else {
+    /**
+     * 环境守卫（本块原来只看「可达不可达」，漏了「可达但不是这份产物」）：
+     * 5181 是**固定端口**，本机常被别的 worktree / 别的分支的 `python3 -m http.server` 占着。
+     * 那种情况下页面照样能打开，但撞的是另一份构建 —— 实测它带「公告」启动弹层，
+     * 于是所有点击都被 `overlay` 吃掉，报成「[11] 部署版没有自动标题」这种看着像产品坏的假红。
+     *
+     * 本仓库的口径是「端口上 serve 的不是本地 dist / 产物陈旧 → SKIP(env)，不算失败」
+     * （tests/helpers/env.mjs 的 verifyAppUrl，与其余 20 个自起服务用例同一个守卫）。
+     * 所以这里补上同一道守卫：撞车 → SKIP(env) 并说清是谁占了端口，而不是红在「弹层挡住点击」。
+     */
+    await verifyAppUrl(DEPLOY_URL, STANDARD_DIST, { variant: 'standard' })
     const { context, page, consoleErrors } = await openPage({
       kind: 'anthropic',
       baseUrl: 'https://anthropic.example.com',

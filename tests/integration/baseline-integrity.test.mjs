@@ -18,7 +18,12 @@
 //   1. **登记完整**：目录里每个 `*.test.mjs` 都在 `files` 里 —— 漏登记 = 这一层有文件没被问过；
 //   2. **没有幽灵条目**：`files` 里每条都能在目录里找到文件 —— 改名/删文件后留下的条目会让
 //      「红/绿」判定挂在空气上（`known-red` 条目尤其危险：删了文件永远等不到它跑绿）；
-//   3. **单一真相**：不许再有 `knownRed` 这类并列注册表 —— 一条豁免只能有**一个**住处；
+//   3. **单一真相**：不许再有 `knownRed` 这类并列注册表 —— 一条豁免只能有**一个**住处。
+//      注意口径（2026-11-26 收窄）：判的是「**有没有第二份注册表**」，不是「有没有多余顶层键」。
+//      `gate/exempt` 往基线里加的 `exemptionContract` 是**说明性元数据块**（谁批的豁免、契约原文），
+//      它不承载「每个文件应该是什么状态」，因此合法；真正违规的是**值里长着 `*.test.mjs → expected`
+//      这种并行登记表**的键（改前那种「除了这 5 个键一律红」的写法，会把合法元数据也判红，
+//      逼着人把门禁改宽 —— 那才是基线腐烂的入口）；
 //   4. **豁免必须可归因**（intent：known-red 必须能回答「为什么红、谁在跟、什么证据」）：
 //      `expected === 'known-red'` 的条目必须有非空 `reason` + `evidence` + `followUp`，
 //      且 `followUp` 要指向一个跟单（`#数字` 或 URL）；`evidence` 里必须有日期（`YYYY-MM-DD`），
@@ -79,11 +84,49 @@ const registered = Object.keys(files).sort()
 }
 
 // ---------- 3. 单一真相：没有第二个豁免注册表 ----------
+/**
+ * **允许**的顶层键：既包括结构键，也包括闸门自己写的元数据块（`exemptionContract` 等）。
+ * 合法元数据不承载「每个文件应该是什么状态」，所以不构成第二份注册表。
+ */
+const METADATA_KEYS = ['schemaVersion', 'baseline', 'howToRun', 'guards', 'files', 'exemptionContract']
+/**
+ * 一个顶层值是不是**第二份注册表**：它的第一层（或再深一层）里出现
+ * 「`*.test.mjs` 键 + `expected` 字段」这种并行登记表就算。
+ *
+ * 为什么按形状判而不是按键名判：键名可以随便起（`knownRed` / `exemptions` /
+ * `waiverRegistry`…），而「用例文件名 → expected」这个形状是注册表无法回避的。
+ */
+const looksLikeRegistry = (value, depth = 0) => {
+  if (value === null || typeof value !== 'object' || depth > 2) {
+    return false
+  }
+  return Object.entries(value).some(([key, inner]) => {
+    if (key.endsWith('.test.mjs')) {
+      return inner !== null && typeof inner === 'object' && 'expected' in inner
+    }
+    return looksLikeRegistry(inner, depth + 1)
+  })
+}
 {
-  const extras = Object.keys(baseline).filter((key) => !['schemaVersion', 'baseline', 'howToRun', 'guards', 'files'].includes(key))
+  const secondRegistries = Object.entries(baseline)
+    .filter(([key, value]) => !METADATA_KEYS.includes(key) && looksLikeRegistry(value))
+    .map(([key]) => key)
   check(
-    extras.length === 0,
-    `基线文件里没有并列的第二份注册表（真相只有 files[*].expected）${extras.length > 0 ? `：多余键 ${extras.join(' / ')}` : ''}`,
+    secondRegistries.length === 0,
+    `基线文件里没有并列的第二份注册表（真相只有 files[*].expected；元数据块合法）${
+      secondRegistries.length > 0 ? `：第二份注册表 ${secondRegistries.join(' / ')}` : ''
+    }`,
+  )
+  /**
+   * 反例自证（这条判据真的能红）：把一份真的第二注册表喂给同一个判据，
+   * 必须被判成「是注册表」；而纯说明性元数据必须被判成「不是」。
+   * 没有这一条，「判据写松了」与「仓库真的干净」在输出上长得一模一样。
+   */
+  const secondRegistrySample = { knownRed: { 'a.test.mjs': { expected: 'known-red' } } }
+  const metadataSample = { note: '闸门批的豁免契约', owner: '#1234', since: '2026-11-26' }
+  check(
+    looksLikeRegistry(secondRegistrySample) === true && looksLikeRegistry(metadataSample) === false,
+    '反例自证：`{ knownRed: { "a.test.mjs": { expected } } }` 判成第二份注册表、纯元数据判成合法',
   )
 }
 

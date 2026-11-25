@@ -10,6 +10,20 @@
 //   · 没下发策略的清单**不弹**策略弹窗（老服务端零回归），结果仍在设置面板里；
 //   · 长更新说明能滚、底部按钮常驻、390 / 360 与深浅色两套主题都看得清。
 //
+// ## ⚠ 通道：本用例走**安卓通道的登录接缝**（`d22009fa` 之后网页产物里整块更新界面不渲染）
+//
+// `d22009fa` 起 `SettingsDialog` 按 `isAndroidUpdate()` 二选一：网页构建只有 `AppVersionField`
+// （版本号 + 一句说明），**「检查更新」按钮与策略弹窗都不渲染**。策略弹窗本来也只对安卓通道有意义
+// （网页没有安装器，弹窗里的主按钮在网页是 `<a>下载 APK</a>` 降级），所以本用例改成在接缝下跑：
+//
+//   `context.addInitScript(() => { window.androidBridge = {} })`
+//
+// `androidBridge` 是 Capacitor 判定平台的真实依据（`@capacitor/core` 的 `getPlatformId()`：
+// 有 `win.androidBridge` → `'android'`），安卓 WebView 里由原生注入 —— 因此这不是"假装入口存在"，
+// 而是让产品走它在 APK 里的原路。随之底部主按钮是**「确认下载」**（原生通道），不再是网页通道的
+// `<a>下载 APK</a>`；那套网页降级分支今天不可达（见文件头说明），要不要退役 / 恢复 Web 端入口
+// 由产品定。
+//
 // 返回键怎么模拟：Android 硬件返回在 Capacitor 里最终落到 `WebView.goBack()`，也就是浏览器 back。
 // 所以这里用 `history.back()`（真浏览器同文档历史回退）压 `popstate`，比派发一个假 keydown 更接近真机。
 //
@@ -27,16 +41,35 @@ import { chromium } from 'playwright'
 import { CURRENT, CHANNEL_BUILD_TYPE, NEWEST_INSTALLABLE } from '../helpers/current-version.mjs'
 import { readBuildInfo, serveDir, skipEnv, ROOT } from '../helpers/env.mjs'
 import { assertNoEgress, installEgressGate } from '../helpers/helpers.mjs'
+import { downloadFallbackBase, downloadPrimaryBase } from '../../scripts/lib/endpoints.mjs'
+// 安卓通道的原生桥替身（`d22009fa` 之后更新链路只在安卓通道渲染，见文件头）
+import { installNativeUpdateBridge } from '../fixtures/domain10/native-update-bridge.mjs'
 
 const require = createRequire(import.meta.url)
-/** 截图落点：与仓库既有 UI 取证一致（docs/ui/ 是入库的实拍目录，PR 里直接给路径） */
-const SHOTS = path.join(ROOT, 'docs', 'ui')
+/**
+ * 截图落点：默认落到**不被 git 跟踪**的 `.flaky-runs/evidence/`（该目录已在 .gitignore 里）。
+ *
+ * 改前是 `docs/ui/`（入库的实拍目录）：于是**每跑一次 L1 就往工作区里丢 20 多张改动过的 png**，
+ * `git status` 全是 `M docs/ui/*.png` —— 跑测试会弄脏仓库，提交时还容易把运行产物混进 PR。
+ * 需要入库的取证图请显式 `EVIDENCE_OUT=<目录>` 指到 `docs/ui` 再跑（有意为之才进库）。
+ */
+const SHOTS = process.env.EVIDENCE_OUT
+  ? path.resolve(process.env.EVIDENCE_OUT)
+  : path.join(ROOT, '.flaky-runs', 'evidence', 'update-dialog-517')
 
-/** 两台分发机（与 src/services/updateManifest.ts 的 RELEASE_BASES 同源） */
-const PRIMARY = 'http://62.106.70.167:8888'
-const FALLBACK = 'https://dl.rose7.cn'
+/**
+ * 两台分发机 —— 从 `config/endpoints.json` 读（`RELEASE_BASES` 的唯一来源），不在这里写地址字面量。
+ *
+ * 改前硬编码 `http://62.106.70.167:8888`；分发机换到 `https://jingluo.nekoai.com.cn` 之后，
+ * `releaseUrl()` 的白名单不再认旧地址 → 原生通道一按「确认下载」就抛 `INVALID_APK_URL`，
+ * 界面停在失败态、后面的点击全变 30s 超时。地址过期不是断言红，所以这里与产品同源。
+ */
+const PRIMARY = downloadPrimaryBase
+const FALLBACK = downloadFallbackBase
 
 const NEW_VERSION = NEWEST_INSTALLABLE.version
+/** 原生桥回的「设备上装的是哪一版」：清单里那条 versionCode 更高 → 一定有可装的新版本 */
+const INSTALLED = { version: CURRENT.version, versionCode: CURRENT.versionCode, artifactVariant: 'standard' }
 const RELEASE_FILE = `apk/deepseek-chat-${NEW_VERSION}.apk`
 /** snooze 的存储键（与 src/services/settings.ts 的 KEYS.updateSnoozeUntil 同源） */
 const SNOOZE_KEY = 'chat-demo:update-snooze-until'
@@ -65,8 +98,24 @@ const manifestBody = (releases) => JSON.stringify({ releases })
  * 装了全量通配路由，page 路由优先于 context 路由，两处各拦一半会让清单请求先被总闸判成「漏出」而 abort。
  * 桩的应答内容与原 route.fulfill 一字不差；没登记过的 host 仍然记录 + abort + 收尾点名。
  */
-const manifestStubs = (releases) =>
-  [PRIMARY, FALLBACK].map((base) => ({
+const manifestStubs = (releases) => [
+  /**
+   * 两台分发机上的 `announcements.json` 也一并登记：这是**首屏的公告链**，与更新无关，
+   * 但打的是同一批分发机（`services/announcements/remote.ts` 与清单共用 `RELEASE_BASES`）。
+   * 不登记的话总闸会记成「未登记出站」，红在一条跟本用例无关的启动链路上。
+   */
+  ...[PRIMARY, FALLBACK].map((base) => ({
+    name: `${new URL(base).host}/announcements.json`,
+    host: new URL(base).host,
+    path: '/announcements.json',
+    method: 'GET',
+    respond: () => ({
+      status: 200,
+      headers: { 'access-control-allow-origin': '*', 'content-type': 'application/json' },
+      body: JSON.stringify({ announcements: [] }),
+    }),
+  })),
+  ...[PRIMARY, FALLBACK].map((base) => ({
     name: `${new URL(base).host}/releases.json`,
     host: new URL(base).host,
     path: '/releases.json',
@@ -81,9 +130,15 @@ const manifestStubs = (releases) =>
       },
       body: manifestBody(releases),
     }),
-  }))
+  })),
+]
 
-/** 打开 设置 → 应用更新（不点检查：进入设置面板本身不触发检查） */
+/**
+ * 打开 设置 → 应用更新（不点检查：进入设置面板本身不触发检查）。
+ *
+ * `5bc3104e` 之后「检查更新」是「应用更新」二级页里的按钮，一级列表上是
+ * `settings-row-update` 那一行（右侧值 = 当前版本号），所以先点行再等按钮。
+ */
 const openSettings = async (page) => {
   const entry = page.getByRole('button', { name: '检查更新', exact: true })
   if (!(await entry.isVisible().catch(() => false))) {
@@ -93,6 +148,9 @@ const openSettings = async (page) => {
       await page.waitForTimeout(320)
     }
     await page.getByRole('button', { name: '设置', exact: true }).last().tap()
+    // 「应用更新」在「关于」组，窄屏要滚到可视区才点得到（`tap()` 不会自动滚，会 30s 超时）
+    await page.getByTestId('settings-row-update').scrollIntoViewIfNeeded()
+    await page.getByTestId('settings-row-update').click()
   }
   await entry.waitFor({ state: 'visible', timeout: 15000 })
 }
@@ -219,8 +277,8 @@ const SCENARIOS = [
       assert.equal(p.mode, 'forced', `弹窗应标成 forced，实际 ${p.mode}`)
       assert.deepEqual(
         p.footerButtons,
-        ['下载 APK'],
-        `forced 底部只该有下载出口，实际 ${JSON.stringify(p.footerButtons)}`
+        ['确认下载'],
+        `forced 底部只该有下载出口（安卓通道是「确认下载」按钮），实际 ${JSON.stringify(p.footerButtons)}`
       )
       assert.equal(p.changes.length, 2, '更新说明应逐条渲染')
       assert.equal(p.title, NEW_VERSION, `弹窗应显示新版本号，实际 ${p.title}`)
@@ -269,7 +327,7 @@ const SCENARIOS = [
       assert.equal(p.mode, 'forced', `下限优先于 mode：应判 forced，实际 ${p.mode}`)
       assert.deepEqual(
         p.footerButtons,
-        ['下载 APK'],
+        ['确认下载'],
         `forced 底部不该有「稍后提醒 / 关闭」，实际 ${JSON.stringify(p.footerButtons)}`
       )
       const after = await tryDismiss(page, 'esc')
@@ -289,7 +347,7 @@ const SCENARIOS = [
       assert.equal(before.mode, 'soft', `弹窗应标成 soft，实际 ${before.mode}`)
       assert.deepEqual(
         before.footerButtons,
-        ['稍后提醒', '下载 APK'],
+        ['稍后提醒', '确认下载'],
         `soft 底部应是「稍后提醒 + 下载」，实际 ${JSON.stringify(before.footerButtons)}`
       )
       assert.ok(before.notice.includes('24'), `soft 说明要带上暂缓时长：${before.notice}`)
@@ -358,7 +416,7 @@ const SCENARIOS = [
       assert.equal(p.mode, 'normal', `弹窗应标成 normal，实际 ${p.mode}`)
       assert.deepEqual(
         p.footerButtons,
-        ['关闭', '下载 APK'],
+        ['关闭', '确认下载'],
         `normal 底部应是「关闭 + 下载」，实际 ${JSON.stringify(p.footerButtons)}`
       )
 
@@ -391,10 +449,11 @@ const SCENARIOS = [
       const p = await read()
       assert.equal(p.open, false, '没下发 updatePolicy 时不该出现策略弹窗')
       assert.match(p.status, /发现新版本/, `面板结论必须还在：${p.status}`)
-      // 面板里的旧出口一个没少：有「确认下载 / 下载 APK」的降级链接，也有诊断区
+      // 面板里的旧出口一个没少：安卓通道是「确认下载」按钮（网页通道才是 `<a>下载 APK</a>`，
+      // 而那一段今天不可达，见文件头），诊断区也还在
       assert.ok(
-        p.pageButtons.includes('下载 APK'),
-        `面板的「下载 APK」降级链接必须还在：${JSON.stringify(p.pageButtons)}`
+        p.pageButtons.includes('确认下载'),
+        `面板的「确认下载」出口必须还在：${JSON.stringify(p.pageButtons)}`
       )
     },
   },
@@ -508,6 +567,16 @@ try {
         reducedMotion: 'reduce',
         ...(scenario.dark ? { colorScheme: 'dark' } : {}),
       })
+      /**
+       * 安卓通道 + 原生更新桥替身（见文件头）：
+       *   · `androidBridge` 让 `isAndroidUpdate()` 为真 → 「检查更新」与策略弹窗才渲染；
+       *   · `PluginHeaders` / `nativePromise` 让 `nativeUpdate.manifest()` 这条原生调用有回音，
+       *     剧本就是本行的 `releases`（清单成功；本文件不测失败分类，那是 N4 的活）。
+       */
+      await installNativeUpdateBridge(context, {
+        installed: INSTALLED,
+        manifest: { body: manifestBody(scenario.releases), base: PRIMARY },
+      })
       // 首屏前预置 localStorage：主题与 snooze 现场都要在模块初始化时就读到
       await context.addInitScript(
         (seed) => {
@@ -522,6 +591,15 @@ try {
           'chat-demo:provider-kind': 'deepseek',
           ...(scenario.dark ? { 'chat-demo:theme-preference': 'dark' } : {}),
           ...(scenario.preseed ? scenario.preseed(Date.now()) : {}),
+          /**
+           * 首屏的**更新门禁**（`services/updateGate.ts`）也看这份清单：forced / soft 会在
+           * **应用启动时就弹一次**、盖住整个界面（那时还没有设置面板，`设置` 按钮点不到 → 30s 超时）。
+           * 本用例测的是「设置 → 应用更新 → 检查更新」那一次，所以用产品自己的 6 小时节流
+           * （`chat-demo:update-last-checked-at` = 现在）把启动那一次挡回去 —— 这是真实开关，
+           * 不是把门禁关掉：节流命中时门禁改读本地清单快照，而这里没有快照，于是它判 `none`。
+           * 设置页里的「检查更新」不受这条节流影响（它就该随时能查）。
+           */
+          'chat-demo:update-last-checked-at': String(Date.now()),
         }
       )
       const page = await context.newPage()

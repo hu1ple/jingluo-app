@@ -37,10 +37,22 @@ import { chromium } from 'playwright'
 import { CURRENT, CHANNEL_BUILD_TYPE, PREVIOUS } from '../helpers/current-version.mjs'
 import { serveDir, ROOT } from '../helpers/env.mjs'
 import { assertNoEgress, installEgressGate } from '../helpers/helpers.mjs'
+import { downloadFallbackBase, downloadPrimaryBase } from '../../scripts/lib/endpoints.mjs'
 
 const require = createRequire(import.meta.url)
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const HARNESS = path.join(ROOT, 'tests/fixtures/domain10')
+/**
+ * 剧本里那个 `base` 是**原生侧回传的分发机**，必须落在产品的 `RELEASE_BASES` 白名单里
+ * （`releaseUrl()` 只认那两个 base，别的一律 `INVALID_APK_URL`）。
+ *
+ * 改前这里写死 `http://62.106.70.167:8888`。分发机换成 `https://jingluo.nekoai.com.cn` 之后，
+ * 那个旧地址一按「确认下载」就被白名单拒掉 → 下载根本没下发，界面停在失败态，P2~P5 的后续点击
+ * 全部变成 30s 超时（看起来像用例坏了，其实是地址过期）。所以从 `config/endpoints.json` 读，
+ * 与 `src/services/updateManifest.ts` 同源。
+ */
+const PRIMARY_BASE = downloadPrimaryBase
+const FALLBACK_BASE = downloadFallbackBase
 const PREFIX = process.env.UPDATE_SHOT_PREFIX || 'domain10'
 
 /**
@@ -200,7 +212,7 @@ const SCENARIOS = [
     plan: {
       manifest: MANIFEST,
       // 原生回退到了旧机：file 必须拼在这个 base 上，拼新机域名就是 404（F10-02）
-      base: 'https://dl.rose7.cn',
+      base: FALLBACK_BASE,
       progress: [0.15, 0.5, 0.85, 1],
       outcome: 'resolve',
       expectCheckMessage: '发现新版本，确认后再下载。',
@@ -218,7 +230,7 @@ const SCENARIOS = [
       assert.equal(probe.progress.value, probe.progress.max, '下载成功时进度应到满格')
       // F10-02：相对 file 必须拼在「真的回了清单」的 base 上
       assert.ok(
-        probe.downloadUrl?.startsWith(`https://dl.rose7.cn/${RELEASE.file}`),
+        probe.downloadUrl?.startsWith(`${FALLBACK_BASE}/${RELEASE.file}`),
         `下载 URL 应拼在原生回传的 base 上，实际 ${probe.downloadUrl}`
       )
       assert.match(probe.status, /下载及校验完成/)
@@ -230,7 +242,7 @@ const SCENARIOS = [
     name: '下载中取消：进度清空、文案说明、原生 cancel 被调用',
     plan: {
       manifest: MANIFEST,
-      base: 'http://62.106.70.167:8888',
+      base: PRIMARY_BASE,
       progress: [0.3, 0.6],
       outcome: 'hang',
       cancelEffect: 'reject',
@@ -256,7 +268,7 @@ const SCENARIOS = [
     name: '缓存复用：已校验缓存 → 「已复用并校验缓存」（不必再下 5.2MB）',
     plan: {
       manifest: MANIFEST,
-      base: 'http://62.106.70.167:8888',
+      base: PRIMARY_BASE,
       progress: [],
       outcome: 'resolve',
       cached: true,
@@ -279,7 +291,7 @@ const SCENARIOS = [
     name: '安装：系统缺「未知来源」权限 → 引导去授权，回来还要再点一次',
     plan: {
       manifest: MANIFEST,
-      base: 'http://62.106.70.167:8888',
+      base: PRIMARY_BASE,
       progress: [1],
       outcome: 'resolve',
       installStatus: 'permission-required',
@@ -304,7 +316,7 @@ const SCENARIOS = [
     name: '安装阶段校验失败 → 分原因文案 + 回到可再点（不留满格进度）',
     plan: {
       manifest: MANIFEST,
-      base: 'http://62.106.70.167:8888',
+      base: PRIMARY_BASE,
       progress: [0.5, 1],
       outcome: 'resolve',
       installReject: 'VERSION_MISMATCH',
@@ -330,7 +342,7 @@ const SCENARIOS = [
     plan: {
       // 脏清单（buildType 写了 Gradle 的 "release"）：web 通道会继续试下一台并把脏清单丢掉
       manifest: DIRTY_MANIFEST,
-      base: 'http://62.106.70.167:8888',
+      base: PRIMARY_BASE,
       progress: [],
       outcome: 'resolve',
       expectCheckMessage: undefined,
@@ -361,7 +373,7 @@ const SCENARIOS = [
     name: '原生侧证件不全（无渠道标记）→ 不贸然下载，说清「信息缺失」',
     plan: {
       manifest: MANIFEST,
-      base: 'http://62.106.70.167:8888',
+      base: PRIMARY_BASE,
       variant: 'unknown',
       progress: [],
       outcome: 'resolve',

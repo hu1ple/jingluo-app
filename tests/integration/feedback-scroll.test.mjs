@@ -9,7 +9,14 @@ import { chromium } from 'playwright'
 import { assertNoEgress, installEgressGate } from '../helpers/helpers.mjs'
 // 路径一律走 fileURLToPath：Windows 下 pathname 是 /D:/... （前导斜杠 + 盘符），拼出来会变成 D:\D:\...
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
-const out = fileURLToPath(new URL('../../docs/ui/feedback-scroll/', import.meta.url))
+/**
+ * 截图 / 采样落点：默认**不跟踪**的 `.flaky-runs/evidence/feedback-scroll/`（见 .gitignore）。
+ * 改前落到 `docs/ui/feedback-scroll/`，于是每跑一次就把一批 png + after.json 改成脏的。
+ * 要入库取证就 `EVIDENCE_OUT=<目录>` 指到 docs/ui。
+ */
+const out = process.env.EVIDENCE_OUT
+  ? path.resolve(process.env.EVIDENCE_OUT) + path.sep
+  : fileURLToPath(new URL('../../.flaky-runs/evidence/feedback-scroll/', import.meta.url))
 await mkdir(out, { recursive: true })
 // 产物目录与端口都可覆盖（默认保持 dist-scroll / 5418）；端口被占用时自动挑空闲端口。
 const DIST_DIR = path.resolve(ROOT, process.env.SCROLL_DIST_DIR || 'dist-scroll')
@@ -157,7 +164,24 @@ try {
   if(!baseline) {
    await closeDialog(form.getByRole('button',{name:'关闭',exact:true}),1)
    assert.equal(await page.getByRole('dialog').count(),1,'nested close keeps settings')
-   const panel=page.getByRole('tabpanel'); const pb=await panel.evaluate(e=>e.scrollTop); await swipe(false,panel); assert((await panel.evaluate(e=>e.scrollTop))<pb,'parent settings touch restored')
+   /**
+    * 父级设置面板还吃得下触控吗？（弹出层关掉之后手势没被吃掉）
+    *
+    * 改前这里取的是 `page.getByRole('tabpanel')`，断言「滑一下父级 tab 面板，scrollTop 变小」。
+    * `5bc3104e` 的改版把设置从「三个 tab」换成「分组标题 + 行 + 二级页」，**全仓已经没有
+    * `role=tab` / `role=tabpanel`** —— 旧断言必然 30s 超时（红在「等不到这个角色」）。
+    *
+    * 而且今天**没有**那个「父级可滚容器」：实测 360×640 下设置弹层自身 `overflow-y: visible`
+    * （内容一屏放得下，scrollHeight === clientHeight），一级列表与二级页都不滚。也就是说
+    * 「滑父级面板、比 scrollTop」这条断言**已经没有主语**了（不是变弱，是没有可滑的东西）。
+    *
+    * 所以改成断**同一件事的真实可观测面**：弹出层关掉之后，父级设置层仍然接收触控 ——
+    * 点一下「返回」必须真的回到一级列表（手势被残留锁吃掉时这一下不会生效）。
+    * 「Modal 关闭后不得残留滚动锁」仍由下面两条 body overflow / `data-scroll-lock` 断言把守。
+    */
+   await page.getByTestId('settings-back').tap()
+   await page.waitForTimeout(300)
+   assert.equal(await page.getByTestId('settings-list').count(),1,'parent settings touch alive（返回 生效，回到一级列表）')
    await closeDialog(page.getByRole('dialog').getByRole('button',{name:'关闭',exact:true}),0); assert.equal(await page.getByRole('dialog').count(),0)
    // A tall local message exercises the app's actual main scroller, not document.body.
    if(!keyboard && !legacy) {

@@ -16,7 +16,7 @@
 // 被测页面：DIST_DIR 内测产物与 STANDARD_DIST_DIR 标准产物；只读复用，默认随机 loopback 端口。
 import { serveDist, requireDist } from '../helpers/runtime.mjs'
 import { verifyAppUrl } from '../helpers/env.mjs'
-import { providerKindTrigger } from '../helpers/helpers.mjs'
+import { fillApiKey, fillBaseUrl, openApiConfigSection, selectProviderKind } from '../helpers/helpers.mjs'
 import { OURS_CHAT_PATH } from '../fixtures/domain03-04/ours-upstream.mjs'
 // #596：内测构建默认渠道是 ours，Key 只能由服务端下发 —— 种「已领取」形态（Key + 下发标记）
 import { oursServerKeyMark } from '../helpers/ours-claim.mjs'
@@ -274,17 +274,23 @@ try {
   console.log('\n[E] 配置保存失败 → config_change + result 字段')
   {
     const { context, page } = await openApp({ appUrl: STANDARD_URL, apiKey: false })
-    await openDataSection(page)
-    // 标准构建默认是 DeepSeek 官方（只需 Key）：切到「Anthropic 协议」才有可编辑的服务地址
-    // #555：走共享的 `providerKindTrigger`（整串锚定）并限定在设置弹窗内。宽松的
-    // `/渠道|Channel|服务类型|Service type/` 会命中聊天页那个禁用态文档入口
-    // （aria-label「当前渠道不支持文档附件…」），点它一路不 enabled → 30s 超时。
-    await providerKindTrigger(page.getByRole('dialog').first()).first().click()
-    await page.getByRole('option', { name: /Anthropic/ }).first().click()
-    await page.waitForTimeout(300)
-    const baseUrl = page.getByLabel(/服务地址|Service URL/).first()
-    await baseUrl.fill('not-a-valid-url')
-    await baseUrl.press('Enter')
+    /**
+     * 落点按 #807 的新 IA 取：设置 → 账户与消费 → 模型来源 → 展开「第三方服务」那一行。
+     *
+     * 改前面的写法（`providerKindTrigger` + `getByRole('option')`）在改版后**点不到任何东西**：
+     * 全仓已经没有「渠道」下拉（来源页 `hideProviderKind`），3 个选项变成一个三行手风琴，
+     * 于是这条 walk 到 `locator.click` 30s 超时 —— 红在「点不到」，不是「配置保存没留痕」。
+     *
+     * 标准构建的默认生效来源是 DeepSeek 官方（只需 Key，地址是内置只读行），要**可编辑的服务地址**
+     * 必须切到第三方那一行；地址 / 模型 / Key 是草稿，点行底「确认使用」才落盘（#807）。
+     */
+    await openApiConfigSection(page, { row: 'third' })
+    await fillApiKey(page, API_KEY)
+    // 注入点不变：把服务地址填成非法值，点「确认使用」→ 产品校验不过 = 一次真实的「配置保存失败」
+    await fillBaseUrl(page, 'not-a-valid-url')
+    // 这里不走 helpers 的 `clickApiKeyConfirm`：它检测到行内红字会主动抛错（那是给「应该成功」的用例用的），
+    // 而本用例要的正是那次失败。所以按产品身份直接点行底的确认按钮。
+    await page.getByTestId('settings-source-third-confirm').click()
     await page.waitForTimeout(600)
 
     const logs = await readLogs(page)

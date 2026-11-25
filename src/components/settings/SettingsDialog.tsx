@@ -1587,10 +1587,14 @@ const ImportHistoryUrl = ({
             {t('retry')}
           </Button>
         ) : null}
+        {/* 两行导入（「从链接导入」/「导入分享会话」）的按钮可访问名都叫「导入」，
+            用例按身份取就必须有 testid —— 否则只能靠 `.first()` 或祖先关系推，DOM 顺序一变
+            就静默点到另一行（#608 的 `testId` 翻译成 `data-testid`）。 */}
         <Button
           variant="outlined"
           size="m"
           className={clsx(styles.cellButton, styles.uploadButton)}
+          testId="history-import-url-start"
           disabled={blocked || running}
           onClick={() => historyImport.selectUrl()}
         >
@@ -1683,6 +1687,7 @@ const ImportShare = ({ disabled }: { disabled: boolean }) => {
           variant="outlined"
           size="m"
           className={clsx(styles.cellButton, styles.uploadButton)}
+          testId="share-import-start"
           disabled={blocked}
           onClick={() => void submit()}
         >

@@ -9,7 +9,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { buildArchive, textPayload } from '../fixtures/domain05/archive-fixture.mjs'
-import { assertNoEgress, installEgressGate } from '../helpers/helpers.mjs'
+import { assertNoEgress, installEgressGate, openSettingsRoot } from '../helpers/helpers.mjs'
 import { BUILTIN_KEY_CLAIM_STUB } from '../fixtures/consume-gateway-stubs/builtin-key-claim.mjs'
 
 
@@ -89,6 +89,26 @@ const obsError = (code, message) =>
  *   rejectAfter —— 已发出的请求数超过该值时改为 reject（模拟断网/超时）
  *   rejectMessage —— reject 的错误原文
  */
+/**
+ * 打开「设置 → 数据管理」二级页（三行导入都在这页；`openSettingsRoot` 只负责到一级列表）。
+ *
+ * 为什么不再自己写「点 设置」：窄屏（360 / 390）侧栏是抽屉，`设置` 按钮不在可视区，
+ * `.last()` 的写法实测一路 30s 超时（case 11 就红在「点不到」上，跟它要验的「文案不裁切」无关）。
+ * 现在先按产品的可访问名「打开边栏 / Open sidebar」把抽屉展开，再走共享 helper 进设置
+ * （它按整串可访问名锚定 `^设置$`，并负责「已在某个二级页就先退回一级列表」）。
+ */
+const openDataPage = async (page) => {
+  if ((await page.getByRole('dialog').count()) === 0) {
+    const drawer = page.getByRole('button', { name: /^打开边栏$|^Open sidebar$/ })
+    if ((await drawer.count()) > 0) {
+      await drawer.first().click()
+      await page.waitForTimeout(250)
+    }
+  }
+  await openSettingsRoot(page)
+  await page.getByTestId('settings-row-data').first().click()
+}
+
 const openApp = async (plan, { viewport = { width: 1280, height: 800 } } = {}) => {
   await assertFreshBuild()
 const browser = await chromium.launch()
@@ -267,16 +287,7 @@ const browser = await chromium.launch()
   await page.evaluate(() => window.localStorage.clear())
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(600)
-  if ((await page.getByRole('dialog').count()) === 0) {
-    await page
-      .getByRole('button', { name: /设置|Settings/ })
-      .last()
-      .click()
-  }
-  await page
-    .getByTestId('settings-row-data')
-    .first()
-    .click()
+  await openDataPage(page)
   return { browser, page, consoleErrors }
 }
 
@@ -307,10 +318,26 @@ const dbCounts = (page) =>
       })
   )
 
+/**
+ * 「从链接导入」那一行里的「导入」按钮 —— **按产品给的 testid 取**。
+ *
+ * 为什么不能直接 `getByRole('button', { name: '导入', exact: true })`：数据管理页是**两行导入**
+ * （「从链接导入」/「导入分享会话」，后者原生端才渲染），两行的按钮可访问名都叫「导入」——
+ * 实测直接 `strict mode violation: resolved to 2 elements`，用例连第一步都过不去。
+ *
+ * 为什么不用 `.first()`：那只是把「有两个」蒙过去；两行的 DOM 顺序一变就静默点到分享导入上，
+ * 于是「导入没反应」这种红会指向完全无关的代码。
+ *
+ * 产品侧已补 testid（`SettingsDialog.tsx` 的 `ImportHistoryUrl` / `ImportShare`）：
+ * `history-import-url-start` / `share-import-start`。本用例只需要前者；写死 testid 之后
+ * 与 DOM 顺序、按钮文案都无关，也不必再靠祖先关系推。
+ */
+const urlImportButton = (page) => page.getByTestId('history-import-url-start')
+
 /** 填链接 → 点「导入」→ 确认弹窗点「确认导入」。 */
 const startUrlImport = async (page, { url = ZIP_URL, confirm = true } = {}) => {
   await page.getByLabel('从链接导入').fill(url)
-  await page.getByRole('button', { name: '导入', exact: true }).click()
+  await urlImportButton(page).click()
   const dialog = page.getByRole('dialog', { name: /确认导入历史对话/ })
   await dialog.waitFor({ timeout: 5000 })
   if (confirm) {
@@ -548,7 +575,7 @@ const run = async () => {
     await dialog.waitFor({ timeout: 5000 })
     check('重试打开确认弹窗（重新走流程）', (await dialog.count()) === 1)
     await dialog.getByRole('button', { name: '取消', exact: true }).click()
-    check('取消后按钮恢复可用', await page.getByRole('button', { name: '导入', exact: true }).isEnabled())
+    check('取消后按钮恢复可用', await urlImportButton(page).isEnabled())
     check('console error = 0', consoleErrors.length === 0, consoleErrors.join(' | '))
     await browser.close()
   }
@@ -561,7 +588,7 @@ const run = async () => {
     await page.waitForTimeout(300)
     await dialog.getByRole('button', { name: '取消', exact: true }).click()
     check('确认弹窗关闭', (await page.getByRole('dialog', { name: /确认导入历史对话/ }).count()) === 0)
-    check('「导入」按钮恢复可用', await page.getByRole('button', { name: '导入', exact: true }).isEnabled())
+    check('「导入」按钮恢复可用', await urlImportButton(page).isEnabled())
     await page.evaluate(() => window.__capMock.resolve?.())
     await page.waitForTimeout(2000)
     const counts = await dbCounts(page)

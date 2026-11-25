@@ -6,6 +6,7 @@
 import {
   captureProbeRequests,
   clickTest,
+  fillApiKey,
   finish,
   openApp,
   openSettingsDataSection,
@@ -17,8 +18,10 @@ const failures = []
 try {
   await openSettingsDataSection(page)
 
-  // 输入框留空（store 里也没有已保存的 Key）
-  await page.locator('input[type="password"]').first().fill('')
+  // 输入框留空（store 里也没有已保存的 Key）。按「当前展开那一行」面板取，见 helpers.fillApiKey：
+  // 来源页第三方/官方两份面板各有一个 `settings-source-draft-apiKey`，裸 `input[type="password"]`
+  // 会先命中当前 `hidden` 的那一个（实测 30s `element is not visible`）。
+  await fillApiKey(page, '')
 
   const captured = captureProbeRequests(page)
   await clickTest(page)
@@ -36,6 +39,10 @@ try {
   } else {
     console.log(`ok: 提示文案 = ${JSON.stringify((await hint.first().innerText()).trim())}`)
   }
+} catch (error) {
+  // 这个文件原来只有 try/finally：中途抛异常（选择器点不到、面板没展开）时 finally 会**先打印 PASS**
+  // 再让异常冒泡，日志上像通过、runner 仍判 FAIL。补 catch，让失败如实落在断言列表里。
+  failures.push(`用例异常：${error instanceof Error ? error.message : String(error)}`)
 } finally {
   await finish(browser, name, failures)
 }

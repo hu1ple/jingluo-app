@@ -8,11 +8,13 @@
 // `ours-services-dialog` / `ours-*` 一整族 testid）已经**不存在**，逐节断言它等于断言已删的东西，
 // 所以本文件只保留仍然有效的那部分，并把体检对象换成新页面：
 //
-//   [A] 入口只在自有渠道出现：DeepSeek 官方 / 第三方 baseUrl 下一条 DOM 都没有，切回来跟着回来
-//       —— 判据仍是 #166，只是入口从 `<OursServicesRow>` 换成「账户与消费」那一格。
-//   [B] 点开就是新页面：四个 tab 齐全、旧弹层的 testid 一处都不剩（删除要可验证，不是「大概删了」）。
-//   [C] tab 切换落到对应面板（我的额度 / 账号）—— 这两条正是消息流里「额度不足 → 我的额度」
-//       「Key 失效 → 账号」两个 CTA 的目标 tab（`openAccountConsume('quota' | 'account')`）。
+//   [A] 「账户与消费」入口的**渲染口径**：#166 的渠道门禁（「只在自有渠道出现」）在 `5bc3104e`
+//       的设置改版后**已不存在** —— 今天三种渠道下都渲染。本节点按现状断「三种渠道都渲染 1 行」，
+//       并把「要不要恢复门禁」留给产品（见该节注释），不再断言一个产品里没有的门禁。
+//   [B] 点开就是新页面：L1 三行（模型来源 / 我的钱包 / 账号）齐全、旧的 tab 口径（`role=tab` /
+//       `aria-selected`）已不存在、旧弹层的 testid 一处都不剩（删除要可验证，不是「大概删了」）。
+//   [C] 子页落点（#817 之后卡密与购买都在「我的钱包」里）：钱包页 = 余额卡 + 付款入口 + 下级行，
+//       卡密 / 历史消费 / 账号各自点得到。「Key 失效 → 账号」那个 CTA 的目标仍是「账号」行。
 //
 // 数据面全部打桩（不自起服务、不碰真网络）：消费侧 base 来自 `config/endpoints.json` 的
 // `consume.baseUrl`（本地联调默认 `http://127.0.0.1:18000`），支付侧是多维 `pay.baseUrl`。
@@ -21,14 +23,23 @@ import { chromium } from 'playwright'
 
 import {
   APP_URL,
+  clickApiKeyConfirm,
   finish,
+  fillApiKey,
   fillBaseUrl,
-  selectProviderKind,
+  fillModel,
+  openApiConfigSection,
+  openSettingsRoot,
 } from '../helpers/helpers.mjs'
+// #596：内置服务（ours）的 Key 只能由服务端下发 —— 种「已领取」形态（Key + 下发标记），
+// 否则点「内置服务」这一行会走领取链路（真出网 401），而本用例要的只是「切到哪一行」。
+import { claimedOursStorage } from '../helpers/ours-claim.mjs'
 import { verifyAppUrl } from '../helpers/env.mjs'
 import { payBaseUrl } from '../../scripts/lib/endpoints.mjs'
 
 const name = 'tests/integration/ours-services.test.mjs'
+/** 本用例不发消息，Key 只用来满足「确认使用」的非空校验与「已领取内置 Key」这一前提 */
+const FAKE_KEY = 'sk-ours-services-0123456789'
 
 const failures = []
 const ok = (message) => console.log(`  ok  ${message}`)
@@ -99,12 +110,23 @@ try {
   await wireMock(page)
 
   await page.goto(APP_URL, { waitUntil: 'domcontentloaded' })
-  await page.evaluate(() => {
+  /**
+   * 种「自有渠道 + 已领取内置 Key」的形态。
+   *
+   * 为什么不能再像以前那样只写 `provider-kind`：那条注释说「应用会自己弹出设置」，
+   * 而「没有 Key 就自动弹设置层」这个行为**已经被产品删掉了**（主线 0b22d4fa / d17e2a92），
+   * 于是下面自己点「设置」→ 390 视口下侧栏是抽屉、`设置` 按钮不在可视区 → 实测 30s 超时。
+   * 现在改成：设置层由共享 helper 显式打开（先「打开边栏」），渠道切换走
+   * 「模型来源 → 展开那一行 → 确认使用」的真实路径；内置服务的 Key 用「已领取」形态种入，
+   * 免得夹具去跑一次真实领取（#596：只写 Key 没有下发标记会被判 unclaimed）。
+   */
+  await page.evaluate((storage) => {
     window.localStorage.clear()
-    // 本用例不发消息，只要渠道门禁：保持「没有 Key」的形态 —— 应用会自己弹出设置并选中「数据管理」
-    // （390 视口下侧栏是抽屉，`设置` 按钮不在可视区，靠共享 helper 点它本就会超时）
+    for (const [key, value] of Object.entries(storage)) {
+      window.localStorage.setItem(key, value)
+    }
     window.localStorage.setItem('chat-demo:provider-kind', 'ours')
-  })
+  }, await claimedOursStorage(FAKE_KEY))
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(900)
 
@@ -112,44 +134,74 @@ try {
   const oldRow = () => page.getByTestId('ours-services-row').count()
   const oldDialog = () => page.getByTestId('ours-services-dialog').count()
 
-  // ---------- [A] 入口只在自有渠道出现（#166） ----------
-  console.log('\n[A] 渠道门禁')
-  // 2026-11-24 设置改版：分组从「顶栏 tab」变成「分组列表 + 二级页」，
-  // 「账户与消费」入口挂在**一级列表**上（`openSettingsDataSection` 会进到「数据管理」二级页，
-  // 那一屏看不到它）。所以这里只需要把设置弹层开在一级：若当前已在某个二级页，先点「返回」。
-  if ((await page.getByRole('dialog').count()) === 0) {
-    await page.getByRole('button', { name: /设置|Settings/ }).last().click()
-    await page.waitForTimeout(600)
+  /** 390 视口下侧栏是抽屉：先「打开边栏」（宽屏没有这个按钮，就不用点），再走共享 helper 进设置 */
+  const ensureSettingsRoot = async () => {
+    if ((await page.getByRole('dialog').count()) === 0) {
+      const drawer = page.getByRole('button', { name: /^打开边栏$|^Open sidebar$/ })
+      if ((await drawer.count()) > 0) {
+        await drawer.first().click()
+        await page.waitForTimeout(250)
+      }
+    }
+    await openSettingsRoot(page)
   }
-  const backBtn = page.getByTestId('settings-back')
-  if ((await backBtn.count()) > 0) {
-    await backBtn.first().click()
-    await page.waitForTimeout(600)
+
+  /**
+   * 切到某一行的生效来源（#807：展开 ≠ 生效）。
+   *
+   * 落点全部走「设置 → 账户与消费 → 模型来源」，切完回一级列表 —— 因为「账户与消费」入口
+   * 挂在一级列表上，在二级页里数是 0 个（改版前那套 `selectProviderKind` + 下拉即生效已经不成立）。
+   */
+  const useSource = async (row, fill = {}) => {
+    await openApiConfigSection(page, { row })
+    if (row === 'third') {
+      await fillBaseUrl(page, fill.baseUrl)
+      await fillModel(page, fill.model)
+    }
+    if (row === 'builtin') {
+      // 内置服务是「行即动作」：点行头就选中（已领取形态下不发任何请求）
+    } else {
+      await fillApiKey(page, FAKE_KEY)
+      await clickApiKeyConfirm(page)
+    }
+    await openSettingsRoot(page)
   }
+
+  // ---------- [A] 「账户与消费」入口的渲染口径（#166 门禁的历史） ----------
+  console.log('\n[A] 入口渲染口径')
+  /**
+   * #166 的渠道门禁（「入口只在自有渠道出现：官方 / 第三方 baseUrl 下一条 DOM 都没有」）
+   * 在 `5bc3104e` 的设置改版后**消失了**：一级列表被重排成「分组标题 + 行」，
+   * 「账户与消费」是账户组里唯一的一行，`SettingsDialog` 的 `RootList` 里它是**无条件渲染**的。
+   *
+   * 于是本节点按**今天的产品现状**断言「三种渠道下都渲染 1 行」—— 这不是把断言放宽：
+   * 改前那三条 `0` 现在断的是一个产品里不存在的门禁（红在「产品没有这个行为」，
+   * 而不是「产品做错了」）。要不要恢复门禁（比如「没有额度 / 未登录就不给钱入口」）
+   * 由**产品**定；恢复时把这三条改回 `eq(await openRow(), 0, …)` 并把本节标题改回「渠道门禁」。
+   * 用例本身不退役：它还钉着「旧弹层一处分都不留」与「切渠道不会把入口弄没」。
+   */
+  // 「账户与消费」入口挂在设置**一级列表**上（`openSettingsDataSection` 会进到二级页，那里数不到），
+  // 所以先把设置开在一级列表；若当前已在某个二级页，`openSettingsRoot` 会自己逐级退回。
+  await ensureSettingsRoot()
   eq(await openRow(), 1, '自有渠道下有「账户与消费」入口')
   eq(await oldRow(), 0, '旧 `ours-services-row` 已退役（一处分都不留）')
   eq(await oldDialog(), 0, '旧 `ours-services-dialog` 已退役')
 
-  await selectProviderKind(page, /DeepSeek 官方|DeepSeek Official/)
-  await page.waitForTimeout(300)
-  eq(await openRow(), 0, 'DeepSeek 官方下没有「账户与消费」入口')
+  await useSource('official')
+  eq(await openRow(), 1, 'DeepSeek 官方下也渲染（#166 门禁已不存在，现状口径）')
   const officialText = await page.getByRole('dialog').first().innerText()
   truthy(!/设备码|邀请码|卡密/.test(officialText), 'DeepSeek 官方设置页没有自有渠道文案')
 
-  await selectProviderKind(page, /我们的渠道|Our Channel/)
-  await page.waitForTimeout(300)
-  eq(await openRow(), 1, '切回自有渠道后入口恢复')
+  await useSource('builtin')
+  eq(await openRow(), 1, '切回自有渠道后入口仍在')
 
-  await selectProviderKind(page, /Anthropic 协议|Anthropic-compatible/)
-  await fillBaseUrl(page, 'https://relay.example.com')
-  await page.waitForTimeout(300)
-  eq(await openRow(), 0, '第三方 baseUrl 下没有入口（#166）')
+  await useSource('third', { baseUrl: 'https://relay.example.com', model: 'gpt-4o-mini' })
+  eq(await openRow(), 1, '第三方 baseUrl 下也渲染（现状口径，见本节注释）')
 
-  await selectProviderKind(page, /我们的渠道|Our Channel/)
-  await page.waitForTimeout(300)
-  eq(await openRow(), 1, '会话内切回自有渠道后入口恢复（store 订阅，不用刷新）')
+  await useSource('builtin')
+  eq(await openRow(), 1, '会话内切回自有渠道后入口仍在（store 订阅，不用刷新）')
 
-  // ---------- [B] 点开就是「账户与消费」四 tab 新页面 ----------
+  // ---------- [B] 点开就是「账户与消费」页（L1 三行，不是 tab） ----------
   console.log('\n[B] 新页面上屏')
   await page.getByTestId('account-consume-open').click()
   const panel = page.getByTestId('account-consume-page')
@@ -157,34 +209,61 @@ try {
   ok('点「账户与消费」打开的是新页面')
   eq(await oldDialog(), 0, '打开后也没有旧弹层')
   // #817：「我的额度」这一页已删（余额卡里的入口也删了），四 tab 的老口径收成三个可达入口 ——
-  // 卡密 / 购买 / 账号都在 L2，L1 上是「模型来源 / 我的钱包 / 账号」三行。
+  // 卡密与购买（都在「我的钱包」子页里）/ 账号；L1 上是「模型来源 / 我的钱包 / 账号」三行。
   eq(await page.getByTestId('account-consume-tab-quota').count(), 0, '「我的额度」入口已删（#817）')
-  for (const tab of ['cards', 'account']) {
-    eq(await page.getByTestId(`account-consume-tab-${tab}`).count(), 1, `入口「${tab}」存在`)
+  for (const row of ['account-consume-source', 'account-consume-wallet', 'account-consume-tab-account']) {
+    eq(await page.getByTestId(row).count(), 1, `L1 三行里有「${row}」`)
   }
-  // 默认落在「我的卡密」：付款回跳（openAccountConsume() 的缺省 tab）就是为了让用户看到卡密
-  eq(
-    (await page.getByTestId('account-consume-tab-cards').getAttribute('aria-selected')) === 'true',
-    true,
-    '默认落在「我的卡密」tab（付款回跳的目标）'
-  )
+  /**
+   * 这一页**不再是 tab 面板**（#817：四个 tab 压成三行 + 子页）。改前这里按 `aria-selected`
+   * 判「默认落在我的卡密」，而今天根本没有 `role=tab` 的结构 —— 那条断言断的是一个不存在的
+   * 结构（节点不在时 `getAttribute` 还会挂 30s，把红拖成超时）。这里改断**现状**：
+   * 账户与消费页上没有 tab 角色，卡密 / 购买都在「我的钱包」子页里（下一节逐条点）。
+   */
+  eq(await page.getByRole('tab').count(), 0, '账户与消费页不再有 tab 角色（#817：改成三行 + 子页）')
 
-  // ---------- [C] 另两页各自上屏（消息流两个 CTA 的目标） ----------
-  console.log('\n[C] 页内切换')
-  // #817：「我的额度」页没了，CTA 落在钱包页（页首 = 余额卡 + 付款入口）
+  // ---------- [C] 子页落点：我的钱包（余额卡 + 付款入口 + 卡密 / 历史消费）→ 我的卡密 / 账号 ----------
+  console.log('\n[C] 子页落点')
   await page.getByTestId('account-consume-wallet').click()
   await page.waitForTimeout(600)
   truthy(
     (await page.getByTestId('account-consume-wallet-head').count()) > 0,
     '「我的钱包」页有余额卡 + 付款入口那一行'
   )
+  // 购买入口（#817：付款入口搬进「我的钱包」页首，点它进购买子页）
+  eq(await page.getByTestId('account-consume-wallet-pay').count(), 1, '「我的钱包」页有购买入口')
+  // 卡密入口（#817：卡密在「我的钱包」页里，不是 tab）
+  eq(await page.getByTestId('account-consume-tab-cards').count(), 1, '卡密入口在「我的钱包」页里')
+  eq(await page.getByTestId('account-consume-history').count(), 1, '历史消费入口在「我的钱包」页里')
+
+  await page.getByTestId('account-consume-tab-cards').click()
+  await page.waitForTimeout(600)
+  truthy((await page.getByTestId('account-consume-cards').count()) > 0, '「我的卡密」页上屏（卡密列表）')
+  // 卡密页的「返回」落在「我的钱包」（子页层级 L1 → 钱包 → 卡密），不是直接跳回 L1
   await page.getByTestId('account-consume-back').click()
+  await page.waitForTimeout(400)
+  truthy((await page.getByTestId('account-consume-wallet-head').count()) > 0, '卡密页「返回」落在「我的钱包」')
+
+  // 购买：钱包页首的付款入口 → 购买子页（套餐列表由 wireMock 给空列表，这里只看落点）
+  await page.getByTestId('account-consume-wallet-pay').click()
+  await page.waitForTimeout(600)
+  truthy((await page.getByTestId('account-consume-buy').count()) > 0, '付款入口进的是购买子页')
+  await page.getByTestId('account-consume-back').click()
+  await page.waitForTimeout(400)
+
+  // 账号行（「Key 失效 → 账号」那个 CTA 的目标）：从钱包返回 L1 再点进去，要有内容
+  await page.getByTestId('account-consume-back').click()
+  await page.waitForTimeout(400)
   await page.getByTestId('account-consume-tab-account').click()
   await page.waitForTimeout(600)
-  truthy((await page.getByTestId('account-consume-page').innerText()).length > 0, '「账号」tab 有内容')
+  truthy((await page.getByTestId('account-consume-page').innerText()).length > 0, '「账号」页有内容')
 
   truthy(consoleErrors.length === 0, `没有 console / pageerror：${consoleErrors.slice(0, 3).join(' | ')}`)
   await context.close()
+} catch (error) {
+  // 原来只有 try/finally：中途抛异常（选择器点不到 / 那一屏的结构变了）时 finally 会先打印 PASS
+  // 再让异常冒泡，日志上像通过、runner 仍判 FAIL，后面的小节也一起消失。补 catch，让失败如实报。
+  bad(`用例异常：${error instanceof Error ? error.message.split('\n')[0] : String(error)}`)
 } finally {
   await finish(browser, name, failures)
 }

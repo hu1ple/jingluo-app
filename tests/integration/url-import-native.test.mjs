@@ -11,7 +11,7 @@
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright'
 import { buildArchiveZip, textPayload } from '../fixtures/domain05/archive-fixture.mjs'
-import { assertNoEgress, installEgressGate } from '../helpers/helpers.mjs'
+import { assertNoEgress, installEgressGate, openSettingsRoot } from '../helpers/helpers.mjs'
 import { BUILTIN_KEY_CLAIM_STUB } from '../fixtures/consume-gateway-stubs/builtin-key-claim.mjs'
 
 
@@ -35,6 +35,26 @@ const check = (name, ok, detail = '') => {
 }
 
 /** 打开应用并进入「设置 → 数据管理」；mock 的原生桥已经装好。 */
+/**
+ * 打开「设置 → 数据管理」二级页（三行导入都在这页；`openSettingsRoot` 只负责到一级列表）。
+ *
+ * 为什么不再自己写「点 设置」：窄屏（360 / 390）侧栏是抽屉，`设置` 按钮不在可视区，
+ * `.last()` 的写法实测一路 30s 超时（case 11 就红在「点不到」上，跟它要验的「文案不裁切」无关）。
+ * 现在先按产品的可访问名「打开边栏 / Open sidebar」把抽屉展开，再走共享 helper 进设置
+ * （它按整串可访问名锚定 `^设置$`，并负责「已在某个二级页就先退回一级列表」）。
+ */
+const openDataPage = async (page) => {
+  if ((await page.getByRole('dialog').count()) === 0) {
+    const drawer = page.getByRole('button', { name: /^打开边栏$|^Open sidebar$/ })
+    if ((await drawer.count()) > 0) {
+      await drawer.first().click()
+      await page.waitForTimeout(250)
+    }
+  }
+  await openSettingsRoot(page)
+  await page.getByTestId('settings-row-data').first().click()
+}
+
 const openApp = async ({ payload, deferred = false }) => {
   const browser = await chromium.launch()
   const context = await browser.newContext({
@@ -101,16 +121,7 @@ const openApp = async ({ payload, deferred = false }) => {
   await page.evaluate(() => window.localStorage.clear())
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(600)
-  if ((await page.getByRole('dialog').count()) === 0) {
-    await page
-      .getByRole('button', { name: /设置|Settings/ })
-      .last()
-      .click()
-  }
-  await page
-    .getByTestId('settings-row-data')
-    .first()
-    .click()
+  await openDataPage(page)
   return { browser, page, consoleErrors }
 }
 
@@ -142,10 +153,26 @@ const dbCounts = (page) =>
       })
   )
 
+/**
+ * 「从链接导入」那一行里的「导入」按钮 —— **按产品给的 testid 取**。
+ *
+ * 为什么不能直接 `getByRole('button', { name: '导入', exact: true })`：数据管理页是**两行导入**
+ * （「从链接导入」/「导入分享会话」，后者原生端才渲染），两行的按钮可访问名都叫「导入」——
+ * 实测直接 `strict mode violation: resolved to 2 elements`，用例连第一步都过不去。
+ *
+ * 为什么不用 `.first()`：那只是把「有两个」蒙过去；两行的 DOM 顺序一变就静默点到分享导入上，
+ * 于是「导入没反应」这种红会指向完全无关的代码。
+ *
+ * 产品侧已补 testid（`SettingsDialog.tsx` 的 `ImportHistoryUrl` / `ImportShare`）：
+ * `history-import-url-start` / `share-import-start`。本用例只需要前者；写死 testid 之后
+ * 与 DOM 顺序、按钮文案都无关，也不必再靠祖先关系推。
+ */
+const urlImportButton = (page) => page.getByTestId('history-import-url-start')
+
 /** 填链接 → 点「导入」→ 在确认弹窗点「确认导入」（cancel=true 时改为点「取消」） */
 const startUrlImport = async (page, { url = ZIP_URL, cancel = false } = {}) => {
   await page.getByLabel('从链接导入').fill(url)
-  await page.getByRole('button', { name: '导入', exact: true }).click()
+  await urlImportButton(page).click()
   const confirmDialog = page.getByRole('dialog', { name: /确认导入历史对话/ })
   await confirmDialog.waitFor({ timeout: 5000 })
   if (cancel) {
@@ -285,7 +312,7 @@ const run = async () => {
     check('确认弹窗已关闭', dialogGone)
     check(
       '「导入」按钮恢复可用',
-      await page.getByRole('button', { name: '导入', exact: true }).isEnabled()
+      await urlImportButton(page).isEnabled()
     )
     // 模拟下载此刻才返回：结果必须被丢弃
     await page.evaluate(() => window.__capMock.resolve?.())

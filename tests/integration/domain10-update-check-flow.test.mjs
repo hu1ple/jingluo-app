@@ -12,8 +12,34 @@
 //   · 网页预览（非 Android）把「确认下载」降级成 `<a href>`，且 href 拼在**真的回了清单**的 base 上（F10-13 / F10-02）
 //   · 更新说明很长时内容区独立滚动、最后一条可达、底部按钮不被挤出（F10-14，390 与 360 两档）
 //
-// 与 N5 的分工：N4 只走 web 通道（原生桥不参与），N5 才打桩原生桥。混在一起会让
-// 「网页预览降级成 <a>」这条断言失效 —— 原生通道下那个位置是「确认下载」按钮。
+// ## ⚠ 通道变了（`d22009fa` + `5bc3104e` 之后）：本用例走**安卓通道的登录接缝**，不再是网页通道
+//
+// `d22009fa`（「Web 端只显示版本，不渲染检查更新（内置更新仅 APK）」）之后，`SettingsDialog`
+// 按 `isAndroidUpdate()` 二选一：**网页构建里整块 `AppUpdateField` 都不渲染**（只有一行
+// `AppVersionField` = 版本号 + 一句说明）。也就是说「检查更新 → 清单 → 结论 → 下载」这一整条链路
+// 在网页产物上**没有落点**，仍然留在产品里的是**安卓通道**。
+//
+// 改前的写法直接点「检查更新」，在网页产物上必红 —— 而且红的是「入口不在」这个事实，
+// 不是更新逻辑坏了。按「红=坏」的口径，正确的修法只有两条：按「网页端不渲染」重写（等于把
+// 这条链路的 DOM 覆盖全删掉），或**在接缝下走原生通道**。这里选后者：
+//
+//   `context.addInitScript(() => { window.androidBridge = {} })`
+//
+// 这不是"假装入口存在"：`androidBridge` 正是 Capacitor 判定平台的**真实依据**
+// （`@capacitor/core` 的 `getPlatformId()`：`win.androidBridge` 存在 → `'android'`），
+// 安卓 WebView 里由原生侧注入。装上它之后，产品代码走的就是它在 APK 里的原路：
+// `isAndroidUpdate()` 为真 → `AppUpdateField` 渲染 → 底部是「确认下载」而不是 `<a>下载 APK</a>`。
+//
+// 随之而来的断言变化（都按「通道真的换了」写，不是放宽）：
+//   · 底部出口：`确认下载` 按钮（改前断的是网页通道的 `<a>下载 APK</a>` 直链）；
+//   · 网页那套 `<a href=…>` 降级分支今天**整段不可达**（整个组件只在安卓通道渲染）——
+//     改前那几条 `linkHref` 断言断的是一个跑不到的分支，已改成「原生通道没有直链」；
+//     要不要退役那段 `native ? … : <a>` 死代码、或恢复 Web 端入口，由产品定（见 PR 说明）；
+//   · 「清单来自哪台机器」这条事实在原生通道上落在**诊断区**（「更新服务」/「本次生效」），
+//     改前是靠直链 href 拼出来的，现在按诊断区断。
+//
+// 与 N5 的分工不变：N4 只看「检查 + 结论 + 诊断区 + 手势滚动」，不碰下载 / 安装的桥；
+// N5 用 harness 换掉 `@capacitor/core`，真的点「确认下载 / 安装更新」。
 //
 // 表驱动：`SCENARIOS` 一行 = 一条主路径（route 剧本 + 驱动 + 断言）。
 //
@@ -29,13 +55,24 @@ import { chromium } from 'playwright'
 import { CURRENT, CHANNEL_BUILD_TYPE, NEWEST_INSTALLABLE, nextPatch } from '../helpers/current-version.mjs'
 import { serveDir, skipEnv, ROOT } from '../helpers/env.mjs'
 import { assertNoEgress, installEgressGate } from '../helpers/helpers.mjs'
+import { downloadFallbackBase, downloadPrimaryBase } from '../../scripts/lib/endpoints.mjs'
+// 安卓通道的原生桥替身（`d22009fa` 之后更新链路只在安卓通道渲染，见文件头）
+import { installNativeUpdateBridge, nativeManifestPlan } from '../fixtures/domain10/native-update-bridge.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const DIST = path.resolve(ROOT, process.env.DIST_DIR || 'dist')
 
-/** 两台分发机（与 src/services/updateManifest.ts 的 RELEASE_BASES 同源） */
-const PRIMARY = 'http://62.106.70.167:8888'
-const FALLBACK = 'https://dl.rose7.cn'
+/**
+ * 两台分发机 —— 从 `config/endpoints.json` 读，**不在用例里写地址字面量**。
+ *
+ * 改前这里硬编码 `http://62.106.70.167:8888` / `https://dl.rose7.cn`。分发机换到
+ * `https://jingluo.nekoai.com.cn` 之后，`releaseUrl()` 的白名单（`RELEASE_BASES`，派生自同一份配置）
+ * 不再认那个旧地址 → 原生通道一按「确认下载」就抛 `INVALID_APK_URL`，界面停在失败态，
+ * 后面的点击全变成 30s 超时：**看起来像用例坏了，其实是地址过期**。
+ * 现在与产品同源（`src/services/updateManifest.ts` 经 `__ENDPOINTS__.dl*` 读同一份 JSON）。
+ */
+const PRIMARY = downloadPrimaryBase
+const FALLBACK = downloadFallbackBase
 
 /**
  * #412：预置的「上次成功时间」= 1 小时前。取固定相对时间而不是写死某一天：
@@ -50,6 +87,15 @@ const CACHE_SAVED_AT = Date.now() - 60 * 60 * 1000
  * 「默认是预发布」：1.4.3 起是 stable，写死会让清单记录被渠道过滤掉（看起来像「没有新版本」）。
  */
 const DEFAULT_CHANNEL = CHANNEL_BUILD_TYPE
+/**
+ * 原生桥回的「设备上装的是哪一版」：清单里那条 `versionCode` 更高，所以一定有可装的新版本
+ * （更新用例的语义就是旧包装新包；与 N5 的 `PREVIOUS` 同一口径）。
+ */
+const INSTALLED = {
+  version: CURRENT.version,
+  versionCode: CURRENT.versionCode,
+  artifactVariant: 'standard',
+}
 const OTHER_CHANNEL = DEFAULT_CHANNEL === 'stable' ? 'prerelease' : 'stable'
 /** 渠道名（与 AppUpdateField 的 CHANNEL_LABEL 同源，只在本文件做断言用） */
 const CHANNEL_LABEL_ZH = { stable: '稳定版', prerelease: '稳定版与预发布版' }
@@ -125,15 +171,36 @@ const manifestBody = (releases) => JSON.stringify({ releases })
  * 跨域 GET 必须自己给 CORS 头，否则浏览器按 CORS 失败处理 —— 那会变成 network 类失败。
  */
 const manifestStubs = (plan) => {
-  // 一行可以给 {status, releases} / {status, body} / 一个返回上面两者的函数
+  // #686：从 `context.route` 改成**登记进出站总闸的桩**（host + path 精确匹配）：总闸在 page 级装了
+  // 全量通配路由，page 路由优先于 context 路由，两处各拦一半会让清单请求先被总闸判成「漏出」而 abort。
+  // 应答内容与原 route.fulfill 一致（跨域 GET 必须自己给 CORS 头，否则会变成 network 类失败）。
+  /**
+   * 顺带把两台分发机上的 `announcements.json` 也登记成桩：它是**首屏的公告链**，与更新无关，
+   * 但打的是同一批分发机（`services/announcements/remote.ts`）。不登记的话总闸会把它记成
+   * 「未登记出站」，红在一条跟本用例无关的启动链路上（与 #803 的内置 Key 领取同一类）。
+   * 应答空清单 = 「这台机器上还没有公告」，公告模块自身行为照旧跑。
+   */
+  const announcementStubs = [PRIMARY, FALLBACK].map((base) => ({
+    name: `${new URL(base).host}/announcements.json`,
+    host: new URL(base).host,
+    path: '/announcements.json',
+    method: 'GET',
+    respond: () => ({
+      status: 200,
+      headers: { 'access-control-allow-origin': '*', 'content-type': 'application/json' },
+      body: JSON.stringify({ announcements: [] }),
+    }),
+  }))
+  return [...announcementStubs, ...manifestStubs2(plan)]
+}
+
+/** 清单桩本身（两台都要拦） */
+const manifestStubs2 = (plan) => {
   const resolvePlan = (base) => {
     const spec = (base === PRIMARY ? plan.primary : plan.fallback) ?? { status: 200, releases: [] }
     const value = typeof spec === 'function' ? spec() : spec
     return { status: value.status ?? 200, body: value.releases ? manifestBody(value.releases) : (value.body ?? '') }
   }
-  // #686：从 `context.route` 改成**登记进出站总闸的桩**（host + path 精确匹配）：总闸在 page 级装了
-  // 全量通配路由，page 路由优先于 context 路由，两处各拦一半会让清单请求先被总闸判成「漏出」而 abort。
-  // 应答内容与原 route.fulfill 一致（跨域 GET 必须自己给 CORS 头，否则会变成 network 类失败）。
   return [PRIMARY, FALLBACK].map((base) => ({
     name: `${new URL(base).host}/releases.json`,
     host: new URL(base).host,
@@ -155,7 +222,12 @@ const manifestStubs = (plan) => {
   }))
 }
 
-/** 打开 设置 → 应用更新 → 检查更新；`waitFor` 决定等到哪种结论出现 */
+/**
+ * 打开 设置 → 应用更新（「关于」组那一行）→ 检查更新；`waitFor` 决定等到哪种结论出现。
+ *
+ * `5bc3104e` 之后「检查更新」不是设置一级列表上的按钮，而是「应用更新」二级页里的按钮
+ * （一级列表上那一行是 `settings-row-update`，右侧值是当前版本号）。所以先点行、再点按钮。
+ */
 const openUpdateDialog = async (page, { waitFor }) => {
   const entry = page.getByRole('button', { name: '检查更新', exact: true })
   if (!(await entry.isVisible().catch(() => false))) {
@@ -165,6 +237,7 @@ const openUpdateDialog = async (page, { waitFor }) => {
       await page.waitForTimeout(320)
     }
     await page.getByRole('button', { name: '设置', exact: true }).last().tap()
+    await page.getByTestId('settings-row-update').tap()
   }
   await entry.waitFor({ state: 'visible', timeout: 15000 })
   await entry.scrollIntoViewIfNeeded()
@@ -303,14 +376,14 @@ const SCENARIOS = [
       assert.match(p.status, /发现新版本/, `结论行应有「发现新版本」：${p.status}`)
       assert.equal(p.title, NEW_VERSION, `弹窗应显示新版本号，实际 ${p.title}`)
       assert.deepEqual(p.items.slice(0, 2), ['修复重试与离线提示', '下载失败不再残留满格进度'], '更新说明应逐条渲染')
-      // F10-13：网页预览降级成链接，而不是「确认下载」按钮
-      assert.equal(p.hasConfirmDownloadButton, false, 'web 通道不该出现「确认下载」按钮')
-      assert.equal(p.linkText, '下载 APK', `web 通道应给「下载 APK」链接，实际 ${JSON.stringify(p.linkText)}`)
-      assert.equal(
-        p.linkHref,
-        `${PRIMARY}/${RELEASE_FILE}`,
-        `链接应拼在真的回了清单的 base（首选机）上，实际 ${p.linkHref}`
-      )
+      /**
+       * F10-13 / 通道：安卓通道给的是「确认下载」按钮，**没有** `<a>下载 APK</a>` 直链。
+       * 改前这里断的是网页通道的降级链接 —— 那个分支今天整段不可达（整个组件只在安卓通道渲染，
+       * 见文件头「通道变了」）。「清单来自哪台机器」改由诊断区那条「更新服务」把守（下面几条）。
+       */
+      assert.equal(p.hasConfirmDownloadButton, true, '安卓通道应给「确认下载」按钮')
+      assert.equal(p.linkHref, null, `安卓通道不该有「下载 APK」直链，实际 ${p.linkHref}`)
+      assert.equal(p.linkText, null, `安卓通道不该有「下载 APK」链接文案，实际 ${JSON.stringify(p.linkText)}`)
       // F10-12：诊断区四个事实（版本 / 渠道 / 更新服务 / 最近检查）都在
       for (const keyword of ['当前版本', '更新渠道', '更新服务', '最近检查']) {
         assert.ok(p.diagnostics.includes(keyword), `诊断区应有「${keyword}」：${p.diagnostics}`)
@@ -330,16 +403,22 @@ const SCENARIOS = [
     plan: { primary: { status: 503 }, fallback: { releases: [release()] } },
     waitFor: '发现新版本，确认后再下载。',
     assert: (p) => {
-      assert.equal(
-        p.linkHref,
-        `${FALLBACK}/${RELEASE_FILE}`,
-        `回退后链接必须拼在旧机上（拼首选机会 404），实际 ${p.linkHref}`
+      /**
+       * 回退后「这次生效的是哪台机器」在安卓通道上落在诊断区的「本次生效」一行
+       * （`base !== DEFAULT_RELEASE_BASE` 时才渲染）：它必须指向旧机，否则排查时会误判成首选机在服务。
+       */
+      assert.ok(
+        p.diagnostics.includes(new URL(FALLBACK).host),
+        `回退后诊断区的「本次生效」必须指向旧机（${new URL(FALLBACK).host}）：${p.diagnostics}`
       )
       assert.ok(
         p.diagnostics.includes('已回退备用分发机'),
         `回退发生时诊断区要写明「本次生效」，否则排查时会误判成首选机在服务：${p.diagnostics}`
       )
-      assert.ok(p.diagnostics.includes('dl.rose7.cn'), `诊断区应点出实际生效的 host：${p.diagnostics}`)
+      assert.ok(
+        p.diagnostics.includes(new URL(FALLBACK).host),
+        `诊断区应点出实际生效的 host（${new URL(FALLBACK).host}）：${p.diagnostics}`
+      )
     },
   },
   {
@@ -397,10 +476,11 @@ const SCENARIOS = [
       )
       // #412 第 2 项：失败态必须有「手动下载最新版」这条出口（#310 的期望第 4 条）
       assert.equal(p.manual?.text, '手动下载最新版', `失败态应给「手动下载最新版」入口：${JSON.stringify(p.manual)}`)
+      // 原生通道上它是**按钮**（走 App 内嵌浏览器 `nativeBrowser.open`），不是链接：没有 href
       assert.equal(
         p.manual?.href,
-        'https://dl.rose7.cn/',
-        `没有缓存时手动下载应指向公开下载站首页，实际 ${p.manual?.href}`
+        null,
+        `安卓通道的手动下载是按钮不是链接，实际 href=${p.manual?.href}`
       )
     },
   },
@@ -425,10 +505,18 @@ const SCENARIOS = [
       await page.getByText(PICKED_BY_CHANNEL[DEFAULT_CHANNEL]).first().waitFor({ timeout: 15000 })
     },
     assert: (p, extra) => {
-      // 两次切换各触发一次请求，且请求的都是同一台机器的同一个 URL（渠道只影响筛选）
-      assert.ok(extra.requests.length >= 3, `切渠道应自动重查（应有 ≥3 次清单请求），实际 ${extra.requests.length}`)
-      const urls = new Set(extra.requests.map((item) => item.url))
-      assert.deepEqual([...urls], [`${PRIMARY}/releases.json`], `渠道不影响请求地址（只影响筛选），实际请求过：${[...urls].join(', ')}`)
+      /**
+       * 两次切换各触发一次重查 —— 事实来源是**原生桥的调用记账**（`window.__nativeCalls`）：
+       * 安卓通道上取清单是 `AppUpdate.manifest()` 这一次原生调用，浏览器侧没有 fetch，
+       * `page.on('request')` 什么也看不到（改前那条断言数的是网页通道的 `releases.json` 请求）。
+       *
+       * 「请求地址不随渠道变化」这条在原生通道上搬到了原生层（`UpdateEndpoint.java` 只有一套地址、
+       * 渠道只参与 `selectUpdate` 筛选），L1 的 JS 看不到 URL —— 这里改成断**同一个 base 被反复用**
+       * （桥回的 base 每次都是首选机），筛选变化由下面的 `title` 断言把守。
+       */
+      assert.ok(extra.requests.length >= 3, `切渠道应自动重查（应有 ≥3 次清单调用），实际 ${extra.requests.length}`)
+      const bases = new Set(extra.requests.map((item) => item.base))
+      assert.deepEqual([...bases], [PRIMARY], `渠道不影响清单来源（只影响筛选），实际用过：${[...bases].join(', ')}`)
       assert.equal(
         p.title,
         PICKED_BY_CHANNEL[DEFAULT_CHANNEL],
@@ -494,13 +582,10 @@ const SCENARIOS = [
       assert.match(cache, /共 2 条/, `缓存区块要给出条数：${cache}`)
       assert.match(cache, /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/, `缓存区块要给上次成功时间（带日期，不然会被当成刚拉的）：${cache}`)
       assert.ok(cache.includes(NEW_VERSION), `缓存区块要列出上次看到的版本号：${cache}`)
-      // 手动下载：有缓存且能选出可装版本 → 直链指向那条记录，拼在缓存里的 base 上
+      // 手动下载：失败态必须有这条出口。安卓通道上它是按钮（没有 href）——
+      // 改前那条「拼在缓存 base 上的直链」断言断的是网页通道的 `<a>`（今天不可达，见文件头）。
       assert.equal(p.manual?.text, '手动下载最新版', `应给「手动下载最新版」入口：${JSON.stringify(p.manual)}`)
-      assert.equal(
-        p.manual?.href,
-        `${PRIMARY}/${RELEASE_FILE}`,
-        `有缓存时应直接给缓存里最新可装记录的直链，实际 ${p.manual?.href}`
-      )
+      assert.equal(p.manual?.href, null, `安卓通道的手动下载是按钮不是链接，实际 href=${p.manual?.href}`)
       // 缓存里的版本只是「上次看到过」，不许因此冒出一个可点的「下载 APK」按钮
       assert.equal(p.linkHref, null, '缓存兜底不许把旧记录当成「已确认可装的新版本」')
       assert.equal(p.hasConfirmDownloadButton, false, '缓存兜底不许出现「确认下载」')
@@ -529,7 +614,9 @@ const SCENARIOS = [
         false,
         `脏缓存必须整份丢弃（不许展示半份）：${p.cacheFallback}`
       )
-      assert.equal(p.manual?.href, 'https://dl.rose7.cn/', `脏缓存时手动下载退回下载站首页，实际 ${p.manual?.href}`)
+      // 原生通道上手动下载是按钮（没有 href）：点到的是 App 内嵌浏览器，落点由 `manualDownloadTarget` 决定
+      assert.equal(p.manual?.text, '手动下载最新版', `脏缓存时仍应给「手动下载最新版」出口：${JSON.stringify(p.manual)}`)
+      assert.equal(p.manual?.href, null, `安卓通道的手动下载是按钮不是链接，实际 href=${p.manual?.href}`)
     },
   },
   {
@@ -595,12 +682,24 @@ try {
         hasTouch: true,
         reducedMotion: 'reduce',
       })
+      /**
+       * 「这次查了几次清单」的事实来源：原生通道上清单是**原生化**的一次调用，
+       * `page.on('request')` 看不到它 —— 该桥替身把每次原生调用记在 `window.__nativeCalls`。
+       */
       const requests = []
-      context.on('request', (request) => {
-        if (request.url().endsWith('/releases.json')) requests.push({ url: request.url() })
-      })
       // 首屏前预置 localStorage：`scenario.storage` 让「有缓存 / 缓存脏了」这类现场可配置
       // （#412 的失败兜底必须真的读到 localStorage 里的那份快照，不能靠组件内部 state 假装）
+      /**
+       * 安卓通道 + 原生更新桥替身（文件头「通道变了」那一节）：
+       *   · `androidBridge` 让 `isAndroidUpdate()` 为真（Capacitor 判平台就是看它）→ 组件才渲染；
+       *   · `PluginHeaders` + `nativePromise` 让 `nativeUpdate.manifest()` 这条**原生调用**有回音，
+       *     剧本按本行的 `plan.primary / plan.fallback` 演进（原生层的「先新机后旧机」由
+       *     `nativeManifestPlan()` 按同一口径演一遍 —— 那是 `UpdateEndpoint.java` 的活，L1 测不到）。
+       */
+      await installNativeUpdateBridge(context, {
+        installed: INSTALLED,
+        manifest: nativeManifestPlan(scenario.plan, { primary: PRIMARY, fallback: FALLBACK }, manifestBody),
+      })
       await context.addInitScript((seed) => {
         try {
           for (const [key, value] of Object.entries(seed)) localStorage.setItem(key, value)
@@ -637,6 +736,17 @@ try {
         driveError = String(error).split('\n')[0]
       }
       const measured = await page.evaluate(probe)
+      /**
+       * 原生调用的记账（桥替身写在 `window.__nativeCalls`）：`manifest` 的每次调用带上
+       * 剧本里那台机器回的 `base`，用例据此断「重查了几次 / 来源有没有漂」。
+       */
+      requests.push(
+        ...(await page.evaluate(() =>
+          (window.__nativeCalls ?? [])
+            .filter((call) => call.method === 'manifest')
+            .map((call) => ({ base: call.base ?? null }))
+        ))
+      )
       const tag = `${scenario.id}@${viewport.label}`
       if (driveError !== null) {
         failures.push(`${tag} 驱动失败：${driveError}`)

@@ -18,6 +18,7 @@ import {
   getProviderKind,
   getServerKeyMark,
   readSourceField,
+  recordConfigRejection,
   setApiKey,
   setBaseUrlFor,
   setModelFor,
@@ -174,6 +175,25 @@ export type ConfirmSourceResult =
 export const confirmSourceRow = (row: DraftRowKey, draft: SourceDraft): ConfirmSourceResult => {
   const check = checkSourceDraft(row, draft)
   if (!check.ok) {
+    /**
+     * 配置保存被拒**也要留痕**（与旧 store 形态的 `BaseUrlField.save()` / `settingsDialogState`
+     * 同一口径，`recordConfigRejection(field, reason)` → 诊断里的 `config_change / provider-<field>`
+     * 且 `result=rejected`）。
+     *
+     * 为什么必须记在这里：这一页把地址 / 模型 / Key 全收进**草稿**，落盘只剩「确认使用」这一个
+     * 入口（`mode: 'draft'` 的输入框只回调 `draft.onChange`，不写存储）。所以草稿形态下，
+     * 校验失败的那一瞬间就是**唯一**能记的时刻 —— 不记，「点了确认没反应」这类问题在日志里
+     * 一个字都查不到（旧 store 形态里那次 `config_change` 就是这么来的）。
+     *
+     * `reason` 沿用旧口径的两个值：必填格没填是 `required`，填了但不合法是 `invalid`。
+     * 只记字段名与判定档位，草稿内容（含 Key 原文）一个字都不进日志。
+     */
+    recordConfigRejection(
+      check.field,
+      check.messageKey === 'settingsTestApiKeyRequired' || check.messageKey === 'settingsBaseUrlRequired'
+        ? 'required'
+        : 'invalid'
+    )
     return { kind: 'invalid', field: check.field, messageKey: check.messageKey }
   }
   const kind: ProviderKind = row === 'third' ? thirdRowKind() : 'deepseek'

@@ -24,19 +24,115 @@
 
 ---
 
-## 2. L0 快速门（每次提交，目标 < 60s）
+## 2. L0 快速门（每次提交）
+
+### 2.1 一条命令：`pnpm dev-check`
 
 ```bash
-npx tsc -p tsconfig.json                      # 类型
-npx oxlint src rspack.config.ts               # lint
-node tests/which.mjs --git --layer unit       # 受影响文件的单测（按改动映射）
+pnpm hooks:install                  # 一次性：接上 .githooks（见 2.4）
+pnpm dev-check                      # 改完那一刻：32 道内容门禁 + tsc + lint，实测 12~18s
+pnpm dev-check -- --content         # 只跑纯内容门禁（pre-commit 跑的就是这条），实测 ~4s
+pnpm dev-check -- --strict          # HEAD 上本来就红的也算红（修 main / 发版前自查）
 ```
 
-- **只跑受影响文件的单测**，不跑整层。映射由 `tests/which.mjs` 给出：
-  改动文件 → 规则命中（`RULES`）或单测 import 反查 → 用例清单。
-- 映射不出来时**回落 unit 全量**并打印原因（`! <文件>：… 回落 N 个用例`），不静默跳过。
-- 纯文档改动 → 0 个用例（L0 只剩 tsc + lint）。
-- 目标耗时：单测都是毫秒级，实际 < 20s；给 60s 上限是留给 tsc 冷启动。
+它**不新增任何检查**：跑的全是仓库里已有的 `check:*` 脚本，命令从 `package.json` 的 script
+**解析**出来（不在编排脚本里抄第二份 —— 抄一份就一定会漂，`tests/gates/README.md` 第 1 条坑就是这个）。
+编排入口是 `scripts/dev-check.mjs`，文件头写了分档、归因、退出码的完整口径。
+
+| 档 | 命令 | 判什么 | 实测（4 核本机） |
+| --- | --- | --- | --- |
+| 提交档 | `pnpm dev-check -- --content` | 27 道纯内容门禁：行尾 / 仓库卫生 / 大小写撞车 / DB 版本 / 重复实现 / 写死 IP·端口 / 端点与超时来源 / 消费侧白名单 / 日志字段 / i18n / 应用身份 / 产物前缀 / 脱敏规则 / 守卫语法 / 兼容基线 / 四个 CSS 兜底 / 上限收敛 / 图标留白 / fixture 清单 / webroot / 私有根 / 文档引用 / 方向验收 | ~4s |
+| 默认档 | `pnpm dev-check` | 上面 27 道 + 5 道慢一点的内容门禁（截图引用 / 能力文档同步 / 能力盘点 / 测试布局 / 测试重复）+ **类型门 + lint** = 最多 34 条判据 | 12~18s |
+| 厚档 | `pnpm test:fast` | 类型 + L0 快速子集（`tests/fast-subset.json` 减去最慢的 20 个文件）+ 黄金套件；**≤60s 是契约，超了 exit 1**（见第 10 节） | ~40-60s |
+
+并发 6 跑，所以默认档的墙钟是「最慢那一条」而不是「32 条相加」（实测 wall 12.3s / 串行 36.6s，4 核机器；
+机器上同时跑着别的 lane 时会到 18s 左右）。
+
+**深档那 5 道带 `scope`**：只有你的改动落在它的输入范围里才跑 ——
+`check:ui-shots` 只看 `docs/ui/`，`check:test-layout` / `check:test-duplication` 只看 `tests/`，
+`check:capabilities` / `check:capabilities-docs` 看 `src/` + `android/`。所以「只改了一个 src 文件」时
+默认档不会被截图扫描的 8 秒拖住。跳过的会**逐条打印原因**（`跳过的 4 道（你的改动没碰到它们的输入，不是「通过」）`），
+不是静默省掉。工作区干净时（没有改动集可归因）同样按 scope 跳过 —— 那一刻你要的不是等 40 秒看仓库现状，
+要看现状用 `--deep` 全跑 / `--strict` 按「HEAD 上也不许红」的口径跑。
+
+### 2.2 为什么把这一批挪到本地（成本账，不是洁癖）
+
+`.github/workflows/ci.yml` 的 `checks` job 有 91 个步骤、20 分钟上限，其中 32 道是门禁。
+本地实测这 32 道里 **27 道是纯文本扫描，合计 ~15 秒**（串行 22 秒，并发 4 秒）。
+也就是说：一个 CRLF 文件、一对仅大小写不同的模块名、一行写死的 IP、一个写死的 IndexedDB 版本号，
+**本机 0.2~2 秒就能判死**，但以前要等 push 之后 CI 跑到 install + 前面十几步之后才红。
+
+而一旦红在那个位置，人的反应不是修，是**绕过**（跳过全量、在红的基础上继续叠 PR）。
+越晚的门禁越贵，也越容易被绕过 —— 绕过不是道德问题，是成本问题。
+
+### 2.3 红可归因（这条比「跑得全」重要）
+
+一个**在 HEAD 上本来就红**的门禁，如果本地聚合入口照实报红，结果只有一种：所有人每天看到同一条红，
+两天后这条命令就没人跑了。所以 `dev-check` 在门禁 exit≠0 时做三件事：
+
+1. 从该门禁的输出里**收割文件路径**（不去解析它的语义）；
+2. 收割到的路径**有落在你的改动集**（`git status` 的已跟踪改动 + 新增文件）→ **RED（你造成的）**，阻塞；
+3. 一个都不沾 → **△ HEAD（HEAD 上就有，不是你这次改坏的）**：照样打印，但不阻塞、exit 0；
+4. 一个路径都收割不到（输出里没点到文件）→ **按 RED 处理**：判不出归因就不许放行。
+
+归因是**现场算的**，没有基线登记表 —— 所以**不存在「豁免会过期」**这件事：别人把那条红修好，
+这里自动变绿；你新引入一条，这里立刻变红（`--strict` 可以关掉降级，按「HEAD 上也不许红」的口径跑）。
+
+**哪些门禁不做文件归因**：`check:i18n` 是 `attribution: 'strict'`。你在 `src/` 里加一个
+`t('new.key')`，它点名的是 `src/i18n/locales/*.json`（你没碰过的文件）—— 这种门禁做文件归因
+会把**你的**红说成「HEAD 上就有」，比不判更坏。跨文件的因果一律按 strict 处理。
+
+### 2.4 钩子：把「记得跑」变成「跑过了」
+
+```bash
+pnpm hooks:install        # git config --local core.hooksPath .githooks（零依赖，不用 husky）
+pnpm hooks:uninstall      # 永久关掉；`git commit --no-verify` 只跳过一次
+```
+
+| 钩子 | 跑什么 | 实测 |
+| --- | --- | --- |
+| `.githooks/pre-commit` | `dev-check --content --brief`（提交档） | ~4s |
+| `.githooks/pre-push` | `dev-check --brief`（默认档：内容 + 类型 + lint） | ~14s |
+
+三条必须知道的口径：
+
+1. **`core.hooksPath` 是 clone 级配置**，对这个 clone 的**所有 worktree** 同时生效。
+   多 lane 并行开 worktree 时，装一次＝每个 lane 的提交都会过一遍提交档（~4s）。
+2. **exit 2 = 判不了，钩子放行但大字告警**：缺 `node_modules`、入口配错、某道门禁自己说
+   「前置缺失」时，不该变成「代码不许提交」，但也**绝不算通过**（CI 上同样的口径：
+   `check:bundle-target` 头注释「没有产物 = 没有检查，所以一律判失败，不存在『跳过』」）。
+3. **没装钩子时 `dev-check` 会自己喊**：结尾一行 `⚠ 本地钩子没装（core.hooksPath=未设置）`。
+   「入口在不在用」不能靠自觉，得让工具自己报。
+
+### 2.5 本地判不了的那 10 道（明说不判，不装绿）
+
+| 门禁 | 为什么本地不判 |
+| --- | --- |
+| `check:bundle-target` `check:legacy` `check:syntax-floor` `check:matrix` `check:test-seam` | 判据的输入是**构建产物**（`dist/`）。本地没产物时它们 exit 2（= 判不了）。要本地判就先 `pnpm build`。 |
+| `check:keystore` `check:apk` `check:public-artifact-redaction` | 要签名材料 / 已构建 APK / 产物目录。CI 只跑 `--config-only` 降级档，全量在发布机。 |
+| `check:retention` | 要在分发机上跑。 |
+| `check:release-traceability` | 要 tags + `origin/main` 完整历史 + `gh`。合并前 / 发版前跑（`docs/RELEASE-CHECKLIST.md`）。 |
+
+这 10 道在 `dev-check --list` 里会连同理由一起列出来 —— **不跑也要说得出为什么**，
+静默跳过等于把一道门禁从视野里删掉。
+
+### 2.6 下一层：`pnpm test:fast`（类型 + 单测子集 + 黄金）
+
+`dev-check` 管「门禁类」判据（静态扫描 + 类型 + lint）；**行为**判据在下一层：
+
+```bash
+pnpm test:fast            # 类型 + L0 快速子集 + 黄金套件；≤60s 是契约，超预算自己 exit 1
+```
+
+- **只跑受影响文件的单测**这件事仍由 `tests/which.mjs` 负责（`node tests/which.mjs --git --layer unit`）：
+  改动文件 → 规则命中（`RULES`）或单测 import 反查 → 用例清单；映射不出来时**回落 unit 全量**并打印原因
+  （`! <文件>：… 回落 N 个用例`），不静默跳过。它适合**未知改动**（改了哪个文件都能找回 import 它的单测），
+  `test:affected` 适合「我知道改的是哪个域」（见第 10 节）。
+- ⚠ **已知边界（实测）**：`--git` 内部只读 `git diff --name-only HEAD`，**新建但还没 `git add` 的文件看不见**；
+  这种情况下它 exit 2 并打一句用法提示，看着像「你参数写错了」。现在绕开：`git add -N <新文件>` 之后再跑，
+  或者直接把路径当参数传（`node tests/which.mjs src/xxx.ts --layer unit`）、或用 `--stdin`。
+  （`pnpm dev-check` 的归因没有这个问题：它读 `git status --untracked-files=all`。）
+- 纯文档改动 → 0 个用例（只剩 `dev-check` 的内容门禁 + 类型/lint）。
 - 例：
 
 ```bash
@@ -105,7 +201,9 @@ npm run test:integration -- --baseline          # 集成全量与基线比对，
 
 | 场景 | 跑什么 | 预期耗时 |
 | --- | --- | --- |
-| 改一个 `.ts` 逻辑 | `tests/which.mjs --git --layer unit` | < 20s |
+| **刚改完任何东西（默认动作）** | `pnpm dev-check`（内容门禁 + 类型 + lint；红可归因，见第 2 节） | 12~18s |
+| **提交前只想过一遍最便宜的** | `pnpm dev-check -- --content`（27 道纯内容门禁） | ~4s |
+| 改一个 `.ts` 逻辑，想知道「该跑哪些用例」 | `pnpm dev-check` + `tests/which.mjs --git --layer unit`；要连单测一起跑就用 `pnpm test:fast` | < 20s / ~40-60s |
 | 改 UI / 设置页 / 渠道 | `tests/which.mjs --git`（域内 1~2 个集成） | 1~2min |
 | 改构建脚本 / 产物注入 | `internal-build` + `auto-title` | 2~3min |
 | 改 `android/` 的 gradle 脚本（`build.gradle` / `variables.gradle`） | `pnpm exec cap sync android && cd android && ./gradlew help --no-daemon`（先看第 9.6 节） | 20~40s（warm 缓存） |
@@ -283,7 +381,8 @@ tsc 不读 `.gradle`、oxlint 只扫 `src`、单测不碰 Android、产物扫描
 
 | 场景 | 命令 | 声明预算 | 实际做了什么 |
 | --- | --- | --- | --- |
-| 提交前 / 推送前 | `pnpm test:fast` | **≤60s（超出 exit 1）** | `tsc` + L0 快速子集（`tests/unit` 减去 `tests/fast-subset.json` 登记的 20 个慢文件，默认并发 3）+ 黄金套件 4 条主路径 |
+| 改完那一刻（每改一次都该跑） | `pnpm dev-check` | 12~18s（无硬预算；超了先看是哪一道慢，见下） | 32 道已有内容门禁（并发跑）+ `tsc` + `oxlint`；**红可归因**：只把「落在你改动集里的」算红，HEAD 上本来就红的不阻塞（第 2 节） |
+| 要「行为级」一轮（类型 + 单测子集 + 黄金） | `pnpm test:fast` | **≤60s（超出 exit 1）** | `tsc` + L0 快速子集（`tests/unit` 减去 `tests/fast-subset.json` 登记的 20 个慢文件，默认并发 3）+ 黄金套件 4 条主路径 |
 | 改完一处、想知道「就这一处该跑什么」 | `pnpm test:affected -- <改动路径...>` | 秒级~1min | 按 `tests/domain-map.json` 的 10 个域挑 unit + regression + golden，并把选中的用例真的跑掉；集成用例只列出、要 `--with-integration` 才跑 |
 | 合并前 / 发版前 | `pnpm test:full` | 分钟~20 分钟 | unit 全量 + regression + golden + integration（集成层 `--baseline`，只判「不新增失败」） |
 | 想知道「现在整体长什么样」 | `pnpm test:report` | < 2s | 生成 `docs/testing/report.md`（各层文件数/用例数/上次实测耗时、每域功能点覆盖、known-red/flaky 清单） |
@@ -745,3 +844,47 @@ CI 位置：`.github/workflows/ci.yml` 的 `checks` job，紧跟 `check:manifest
   `copy-limit` / `update-stuck-button-373` 这类用例会自己 spawn rspack 打 `dist-copy-limit` /
   `dist-update-373`，它们继承 `process.env` —— 挂在 build 步骤上的话这些自建产物是「未登录」包，
   用例会以「拿不到侧栏」的形式假红（#510 实测踩过一次）。
+
+---
+
+## 14. 本地入口的维护（`dev-check` 门禁表）
+
+### 14.1 一条硬规矩：`check:*` 必须在门禁表里归类
+
+`scripts/dev-check.mjs` 里有一张 `GATES` 表，`package.json` 里**每一个** `check:*` 都必须出现一次，
+`where` 四选一：
+
+| `where` | 含义 | 本地跑吗 |
+| --- | --- | --- |
+| `content` | 纯文本 / 仓库扫描：不依赖产物、网络、本机密钥 | 提交档 + 默认档 |
+| `deep` | 同上，但单条 ≥1s（截图引用 7.8s / 能力文档 2.5s…） | 只在默认档 |
+| `dist` | 判据的输入是 `dist/` 里的产物 | 不跑，`--list` 里带 `reason` |
+| `release` | 要签名材料 / APK / 分发机 / tags 与 origin 历史 | 不跑，`--list` 里带 `reason` |
+
+没归类 → `dev-check` 当场 **exit 2** 并点名是哪一道、该加哪一行。为什么这条要机械化：
+新加一道门禁却没进本地入口，它就只活在 CI 里 —— **写了、没人跑、不会红**（#368 那个坑的原形状）。
+
+反向也钉住了：表里每个 id 必须在 `package.json` 里有同名 script，且该 script 里那条
+`scripts/*.mjs` 必须真存在。改个名（`check:dup-impl` → `check-duplicate-impl`）在这里先红，
+而不是等到 CI 步骤 `MODULE_NOT_FOUND`。
+
+### 14.2 这 11 道门禁第一次有了「本地执行入口」
+
+`tests/unit/domain10-gate-wiring.test.mjs` 的 `KNOWN_UNWIRED` 登记了 11 道**有别名但 CI 没接线**的门禁
+（「脚本能判红 ≠ 有人在跑」）。本入口不改 CI（CI 归别处），但让其中 **10 道**在本地真的被跑：
+
+| 门禁 | 以前 | 现在 |
+| --- | --- | --- |
+| `check:identity` `check:guard` `check:gap` `check:focus` `check:gutter` `check:container` `check:compat-baseline` `check:hardcoded-ports` `check:limits` `check:icon` | 只有人手记得才跑（CI 里没有） | 每次 `pnpm dev-check` / 每次 commit 都跑（提交档，合计 ~1.5s） |
+| `check:apk` | 同上 | 仍不本地跑：要一个已构建的 APK 路径（`release` 档，`--list` 里带理由） |
+
+这条不是「新增检查」：10 道脚本一个字没改，只是**执行位置**从「没人跑」变成「每次改完都跑」。
+
+### 14.3 不要做的事
+
+1. **不要为了让 `dev-check` 变绿而加豁免/基线表。** 归因是现场算的（你的改动集 × 门禁点名的文件），
+   没有登记表，所以也没有「豁免会过期」这件事。想放过一条红，就把它修掉或在 Issue 里记它。
+2. **不要在 `dev-check` 里加新判据。** 它只编排。真要加检查 → 加一道 `check:*` 门禁 + 负向对照（第 9 节），
+   然后在 `GATES` 里归一行。
+3. **不要把 `pnpm test:full` 当成「改完就该跑」的那条。** 它是合并前/发版前的全量；每次改动都跑全量
+   等于把门禁变成「没人跑」（第 5 节第 1 条）。

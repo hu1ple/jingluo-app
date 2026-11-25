@@ -1,0 +1,19 @@
+#!/bin/sh
+# pre-push —— 推送前的默认档（内容门禁 + 类型门 + lint，实测 ~13s）
+#
+# 为什么默认档放在 push 而不是 commit：push 才是「这条红会被别人看见、并拖红别人 PR」的那一刻。
+# commit 档只跑纯内容门禁（~4s），因为 amend 便宜，但「每次提交都要等 13 秒」会让人开始用 --no-verify。
+#
+# exit 码口径同 pre-commit：0 放行 / 1 拦下 / 2 放行但明确告警（判不了 ≠ 通过）。
+
+node scripts/dev-check.mjs --brief
+code=$?
+
+if [ "$code" -eq 2 ]; then
+  echo ""
+  echo "⚠ pre-push 放行了，但 dev-check 是 exit 2（判不了）：上面那几条**没有被检查**。"
+  echo "  这不是通过。修好环境后重跑：node scripts/dev-check.mjs"
+  exit 0
+fi
+
+exit "$code"

@@ -1,0 +1,24 @@
+#!/bin/sh
+# pre-commit —— **最便宜的失败点**（提交档：纯内容门禁，实测 ~4s）
+#
+# 守的是「这一刻就已经错了、只是还没人看」的那类东西：CRLF 行尾、仅大小写不同的文件名、
+# 写死的 IP / 端口 / IndexedDB 版本号、本机绝对路径、i18n 键漏一侧、白名单外的端点…
+# 这些在 CI 里要等 install + 构建 + 前面十几步跑完才爆，在这里 3 秒就爆，而且当场告诉你修法。
+#
+# 完整口径见 scripts/dev-check.mjs 文件头。跳过：git commit --no-verify（那是你的选择，不是没人拦）。
+#
+# exit 码口径（和 dev-check 一致）：
+#   0 → 放行；1 → 拦下（有红，输出里有修法）；2 → **放行但大字提醒**（环境没准备好 / 入口配错了，
+#   例如缺 node_modules）。2 不拦是因为「装不上依赖」不该变成「代码不许提交」，但它绝不算通过。
+
+node scripts/dev-check.mjs --content --brief
+code=$?
+
+if [ "$code" -eq 2 ]; then
+  echo ""
+  echo "⚠ pre-commit 放行了，但 dev-check 是 exit 2（判不了）：上面那几条**没有被检查**。"
+  echo "  这不是通过。修好环境（多半是 pnpm install）后重跑：node scripts/dev-check.mjs --content"
+  exit 0
+fi
+
+exit "$code"

@@ -32,9 +32,9 @@
 > **`release:check` 不验签名**（零依赖、不装 Android SDK，读不出已签名 APK 里的证书）：指纹判据在
 > `check:keystore`（keystore 侧）与 `verify:apk`（APK 侧），三者的分工与「为什么不塞进 release:check」见 **§16**。
 
-> 打 tag **不再触发任何 workflow**：`.github/workflows/release.yml` 已改为**手动 `workflow_dispatch`**，
-> 它只做「把已构建、已签名的 APK 挂成 Release 资产 + 校验 debuggable + 写 sha256」，
-> 不构建、不碰 keystore、**不读 `releases.json`**（详见 §6.1）。
+> 打 tag **不触发任何 workflow —— 仓库里今天没有任何「自动发布」workflow**：`~~.github/workflows/release.yml~~`
+> 已于 `ce7968e3`（2026-11-24）整条删除（它当年只做「把已构建、已签名的 APK 挂成 Release 资产 + 校验 debuggable
+> + 写 sha256」，不构建、不碰 keystore、不读 `releases.json`）。这三件事现在**全归人**：见 §6.1 的做法 A。
 
 ---
 
@@ -270,7 +270,7 @@ BT=${ANDROID_HOME:-$HOME/android-sdk}/build-tools/${BUILD_TOOLS_VERSION:?先 cp 
   | 位置 | 行为 |
   | --- | --- |
   | `./build-apk.sh release` | 出包后自动跑关卡，判不过直接失败（debug 模式只告警，因为 debug 变体天生 debuggable） |
-  | `.github/workflows/release.yml`（手动触发） | 取到 APK 字节之后、创建 Release 之前拦一道（判不出来也拒） |
+  | `.github/workflows/build-apk.yml`（手动 `workflow_dispatch`，出包后跑 `pnpm run verify:apk`） | 产物五件套里含 debuggable：判不出来也拒（fail-closed） |
   | `POST /api/v1/release`（dl 服务端） | 拒收 debuggable 包，返回 `400 APK_DEBUGGABLE` |
 
 
@@ -354,8 +354,11 @@ BT=${ANDROID_HOME:-$HOME/android-sdk}/build-tools/${BUILD_TOOLS_VERSION:?先 cp 
   逐个断言 `exit 1` 且点名对应检查项；
   另外两条断言「缺 aapt2 → exit 2」「不是 APK → exit 2」。
 
-  同一套判据在 `.github/workflows/release.yml` 里是内联的另一份（#630 的写法，尚未合并）——
-  接线到 workflow 的裁决不在这条命令的范围里；**只要 workflow 没接，人就必须自己跑这一条**。
+  ~~同一套判据在 `.github/workflows/release.yml` 里是内联的另一份（#630 的写法，尚未合并）~~ ——
+  那份内联副本随该 workflow 一起被删了（`ce7968e3`，2026-11-24），**流水线上不再有第二份判据**：
+  今天唯一的流水线调用点是 `.github/workflows/build-apk.yml` 里的 `pnpm run verify:apk` 那一步，
+  它调的就是这条命令本身。**但那条 workflow 只在有人手动触发时跑**（手工出包时不会自动跑），
+  所以人仍然必须自己跑这一条。
 
 五项全过才继续。任何一项不过都没有「先发后修」这种选项。
 
@@ -444,7 +447,7 @@ git push origin v1.4.0-beta.9
 - tag 必须是 `v<version>`（本手册与可选的 workflow 都按这个约定解析版本号，格式不符会 `::error::` 退出）。
 - tag 一旦推错 commit：**不要 force 改已有 tag**。删 Release 后删 tag 再重打，或换新版本号。
 - tag 指向的提交必须是 `main` 的祖先（从 tag 就能复现问题）：判据、门禁与豁免流程见 [§6.2](#62-发布溯源tag-必须是-main-祖先)。
-- **push tag 不会触发任何 workflow**（`.github/workflows/release.yml` 已改成手动触发，见 §6.1）。
+- **push tag 不会触发任何 workflow**（仓库里已没有任何自动发布 workflow，见 §6.1）。
   这是刻意的：以前「推 tag → workflow 去 dl 清单里找这个版本 → 找不到就红」把发版绑死在 dl 上，
   1.4.3 按 #614 裁决不进 dl，于是每次发布都必然红。现在 tag 只是 tag。
 - 推完 tag 就去做 §6.1 发 GitHub Release。
@@ -490,27 +493,21 @@ gh release create v$V $APK \
 - 版本号含 `-beta` / `-rc` 时加 `--prerelease`。
 - 已经有 Release 要换包：`gh release upload v$V "$APK" --clobber`（`$APK` 同上面那条 CLI 算出来的名字）。
 
-**做法 B（可选）：手动触发 workflow 帮你建/补。** Actions → `Release` → Run workflow：
+**~~做法 B（可选）：手动触发 workflow 帮你建/补。~~ —— 已删除，不要照着做。**
+那个 workflow 是 `~~.github/workflows/release.yml~~`，已于 `ce7968e3`（2026-11-24）整条删除
+（原因：它是仓库里唯一「推 tag 就自动构建并发布」的路径，为避免误触发布，整条移除）。
+**今天仓库里没有任何发布流水线**，Actions 里也没有 `Release` 这个 workflow，
+`gh run list --workflow=release.yml` 只会报 workflow 不存在。要恢复自动化只能从历史取回那个文件
+（`git show ce7968e3^:<那个文件路径>`），本仓不在文档单里改 `.github/**`。
 
-| 输入 | 填什么 |
-| --- | --- |
-| `tag` | 已存在的 tag，例 `v1.4.3`（必须与 tag 内 `package.json` 的 `version` 一致） |
-| `apk_url` | 要上传的 APK 的 https 直链；**留空**则依次尝试「Release 里已上传的 `.apk` 资产」→「dl 上该版本的存量地址」 |
+它当年做的事留在下面，只作为「手工发版时自己得补上哪几步」的核对清单（做法 A 一条命令之外）：
 
-它做的事（每一步都会在日志里说清）：
-
-1. 校验 tag 存在、格式是 `v<version>`；
+1. 校验 tag 存在、格式是 `v<version>`（`git rev-parse` / `git tag -l` 自己核）；
 2. 校验 **tag 指向的那个 commit** 的 `package.json`：`version` == tag 版本、`androidVersionCode` 是正整数；
-3. 取 APK 字节（不查任何清单），算 `sha256` / `md5` / size；
-4. `node scripts/check-apk-debuggable.mjs <apk>` —— 是 debuggable 包直接拒（fail-closed，判不出来也拒）；
+3. 取 APK 字节（不查任何清单），算 `sha256` / `md5` / size（做法 A 里的 `sha256sum`）；
+4. `node scripts/check-apk-debuggable.mjs <apk>` —— debuggable 包直接拒（fail-closed，判不出来也拒）；
 5. 用 `CHANGELOG.md` 里同版本小节生成 notes，并把 sha256 写进正文；
 6. `gh release create`（已存在则 `upload --clobber` + `edit`）。
-
-失败时它给的是**可执行的下一步**，不是「清单里没有这个版本」这种假原因：
-tag 不存在 → 提示先 push tag；`package.json` 版本对不上 → 指名两边版本号；
-取不到 APK → 列出三条出路（填 `apk_url` / 先手工 `gh release upload` / 走做法 A）。
-
-- 观察：`gh run list --workflow=release.yml --limit 3`（手动触发的那条）。
 
 ---
 
@@ -1217,7 +1214,7 @@ pnpm verify:apk <apk> --allow-insecure # exit 0，但结论行强制标 INSECURE
 
 | 发布 | 走哪条 | 清单 |
 | --- | --- | --- |
-| **正式发布（standard）** | **只走 GitHub Release**（裁决 #614 决定 2：dl 不再是正式渠道；操作见 §6.1：手工 `gh release create`，或手动触发 `release.yml`） | 公网 `releases.json` **冻结**，只保留历史 standard 条目；发版**不再要求**清单里有这一条 |
+| **正式发布（standard）** | **只走 GitHub Release**（裁决 #614 决定 2：dl 不再是正式渠道；操作见 §6.1：**只能**手工 `gh release create`；`~~release.yml~~` 已删除（`ce7968e3`）） | 公网 `releases.json` **冻结**，只保留历史 standard 条目；发版**不再要求**清单里有这一条 |
 | **私有（internal）** | `node scripts/publish-private-apk.mjs`（默认 `--target private`，`ssh`/`scp` 直连分发主机，**不出公网**） | **独立私有清单**（`DL_PRIVATE_RELEASES_JSON`，线上 `/opt/dl-private/releases.internal.json`，**在私有根下**、webroot 之外） |
 | 公网 `releases.json` | 冻结：只允许 `artifactVariant === 'standard'` 且 `buildType === 'stable'` | 出现 `internal` 条目 = 硬 FAIL（**接口 + 校验器 + 发布脚本 + 卫生门禁四道**，见 14.4b / 14.8） |
 

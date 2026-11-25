@@ -335,6 +335,32 @@ npm run test:integration -- --baseline          # 集成全量与基线比对，
 任何一环断了直接红，报错指到**该补的那一环**（补 ci.yml 的对照步骤），而不是回来补测试里的一行正则。
 "只 echo 不判定"的步骤不算对照：`exit 1` 必须是独立命令行，文案里出现 `exit 1` 不算数。
 
+### 9.4a `check:doc-refs` 的引用解析口径（写死，别再猜）
+
+文档里的「文件:行号」按什么基准解析，只有这一套口径（判据实现见 `scripts/check-doc-refs.mjs` 脚本头
+「相对路径引用」与「`.github/**` 的引用」两节，反例见 `--selftest` ⑦–⑪）：
+
+| 引用写法 | 解析基准 | 判不了的时候 |
+| --- | --- | --- |
+| `src/services/api/client.ts`、`android/app/build.gradle`（带 `/`、首段是仓库根下的真实目录） | **仓库根** | 文件不存在 → 红 |
+| `components/settings/Settings.module.css`（首段不是仓库根下的条目，即省略了 `src/`） | 全仓**路径后缀唯一匹配** | 零匹配 / 多匹配 → WARN 点名 |
+| `releases.json`、`metrics.json`（裸名、不带行号） | 不判（远端清单 / 采集产物，不是仓库文件） | 只记账 |
+| `.github/workflows/ci.yml:104` | **仓库根**（前导点算路径的一部分，不算「名字的尾巴」） | 文件不存在 / 行号错 → 红 |
+| `./build-apk.sh`、`./src/main.tsx` | ① **文档所在目录** → ② **仓库根** | 两段都不中 → 红，并把试过的两段基址印出来 |
+| `../shared/build-types.mjs`（markdown 链接的常规写法） | ① **文档所在目录**（= 仓库根的 `shared/build-types.mjs`）→ ② 仓库根 | 同上 |
+| 两层上跳（`../..` + 文件名，在 `docs/` 下会越出仓库根） | **刻意不支持** → 显式红（`relative-escape`），不许静默跳过 | — |
+| `from './client.js'`（import 说明符） | 不判：基准是**导入它的那个模块**，不是仓库根也不是文档目录 | 只记 `module-specifier` 账 |
+
+两条容易踩的：
+
+1. **相对路径两段基址是顺序固定的**（先文档目录、后仓库根），不是"哪个中了算哪个"：两段落在**两个不同**
+   文件时判 WARN 要求补成仓库相对路径 —— 否则同一个 `./x` 在两份文档里会指向两个不同的文件，而门禁全绿。
+2. **删除线 `~~…~~` 是「曾存在、现已删除」的显式标记**，不判定但会计数打印。引用一个已删除的文件
+   （例如 `~~.github/workflows/release.yml~~`）就该这么写，别为了让门禁绿而删掉那段说明。
+
+账本口径（`scripts/audit-debt/check-doc-refs.json`）：**只许等于现状**。死引用永不记账；行号漂移按到期日
+记账；**账面比实际多也判红**（修好了但没销账 = 账本在骗人，与 `check:ui-shots` 同一口径）。
+
 ### 9.5 `build` 为什么**能**做负向对照（成本实测，别再当"不适用"）
 
 `build`（`node scripts/build.mjs --internal`）曾被登记为"慢，可能不适用"。实测**没必要放弃**：
@@ -682,7 +708,7 @@ stack: … node:internal/test_runner/runner:354 → FileTest.parseMessage
 | # | 机制 | 实测形态 |
 | --- | --- | --- |
 | ① | **替身泄漏** | `api-key-failure-374` 调 `installChatBridge()`，把 `diagnostics/collector` 这个模块说明符（解析到 `src/services/diagnostics/collector.ts`）换成 `chat-stubs/collector.mjs`（没有 `recordError`）。同批后面的 4 个 `attachment-*` 加载即失败：`does not provide an export named 'recordError'`。单跑必绿 |
-| ② | **hook 链抢占条件路由** | `api-request-timeout` 的 `catch` 兜底先把 `./db.js` 解析成 `./db.ts` 成功返回，于是 `chat-retry-retryable` 那套「按 parentURL 换假 db」的分支**根本没进去** → `sendMessage()` 返回 false（`草稿非空时应能发出去`） |
+| ② | **hook 链抢占条件路由** | `api-request-timeout` 的 `catch` 兜底先把 import 说明符 `db.js` 解析成 `db.ts` 成功返回，于是 `chat-retry-retryable` 那套「按 parentURL 换假 db」的分支**根本没进去** → `sendMessage()` 返回 false（`草稿非空时应能发出去`） |
 | ③ | **模块缓存首写者胜 / 模块级单例** | `pdf-parser-480` 先把 `pdfjs-dist` 换成替身，`pdf-parser-partial-480` 拿到同一份实例（`PDF 打开失败`）；`reading-settings` 装上的 settings 订阅活到后面 thinking-* 文件里（`document is not defined`） |
 
 #### 三层处置（按「能不能在进程内修」分）

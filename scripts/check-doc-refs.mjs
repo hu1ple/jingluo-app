@@ -53,11 +53,41 @@
  *      c. 唯一匹配就按它判存在性与行号（行号错照样红）；**多匹配 / 零匹配 → WARN 点名**
  *         （绝不静默放过 —— 这正是本单要堵的那个洞）。
  *
+ * ## 相对路径引用（`./x`、`../x`）解析成哪个文件（2026-11 定死，别再猜）
+ *
+ * 以前这一整类**不受管辖**：正则从 `b` / `s` 开始匹配，token 前面是 `/`，于是被
+ * `not-standalone` 当成「URL / 绝对路径的一部分」丢掉。闸打开后第一件事就是把基准写死：
+ *
+ *   ① **文档所在目录**（markdown 链接的语义：`docs/x.md` 里 `../shared/y.mjs` 就是仓库根的 `shared/y.mjs`）；
+ *   ② 解析不到再按**仓库根**（`./build-apk.sh` 这类「在仓库根执行」的写法）。
+ *
+ * 两段都在同一个文件 → 通过；落在**两个不同**文件 → WARN `relative-ambiguous`（补成仓库相对路径）；
+ * 两段都不中 → FAIL `missing-file`（报文里把试过的两段基址逐条印出来）；
+ * `../../x` 在 `docs/` 下**越出仓库根** → FAIL `relative-escape`（刻意不支持，所以**显式报错**，
+ * 不许静默跳过 —— 静默跳过就是又开一个盲区）。
+ * 实现：`resolveRelative()`；反例见 `--selftest` ⑧⑨。
+ *
+ * ## `.github/**` 的引用（2026-11 打开的盲区）
+ *
+ * 引用 token 以前不允许以 `.` 开头，而 `before === '.'` 又被一刀切成「名字的一部分」，
+ * 于是 `.github/workflows/ci.yml:945` 这类引用**连存在性都不验**。实测后果：
+ * `docs/ci-self-hosted-runner.md` 里 12 处 `ci.yml:行号` 锚点早就全错（指到空行 / 别的注释 /
+ * 孤立 `#`），门禁一次都没报过。现在 `REF_RE` 允许前导点（`.github/…` 是一个完整路径），
+ * `before === '.'` 只在这个点**确实在名字内部**时才算跳过（`dotInsideName()`）。
+ * 反例见 `--selftest` ⑦（指对 → 绿，行号改错 → 红且点名）。
+ *
+ * ## 不按仓库路径判的一类：import 说明符
+ *
+ * 文档引用源码片段时会带出 `import … from './client.js'`。这个 `./client.js` 的解析基准是
+ * **导入它的那个模块**，不是仓库根也不是文档目录 —— 拿仓库路径去判它，唯一的修法是删掉代码引文。
+ * 所以紧跟 `from '…'` / `import('…')` 的引用**不判定**，但记入 `module-specifier` 账
+ * （`--audit-skipped` 能数出来）。这是「不判定」而不是「没看见」。
+ *
  * ## 跳过必须记账（#678）
  *
  * 「不判定」和「没看见」是两件事。所有被跳过的引用都按原因记账，`--audit-skipped` 打印
- * 分组计数与逐条清单：`not-standalone` / `artifact-hash` / `placeholder` / `skip-dir` /
- * `first-segment-not-root` / `other-ext` / `bare-artifact` / `ambiguous-bare`。
+ * 分组计数与逐条清单：`not-standalone` / `module-specifier` / `artifact-hash` / `placeholder` /
+ * `skip-dir` / `first-segment-not-root` / `other-ext` / `bare-artifact` / `ambiguous-bare`。
  * 加这个开关的理由和 #661 一样：门禁「看起来在守」，底下却有一整类引用从没被看过，
  * 而没人能从输出里看出来 —— 那就只能让它自己把账本摊开。
  * 顺带量了第二类：`REF_EXT` 白名单之外的扩展名（`--audit-skipped` 里的 `other-ext`）也按同样口径
@@ -70,6 +100,7 @@
  *   它们是「命名约定」，不是「某个文件」；
  * - 依赖与产物目录（`node_modules/**` 等）；
  * - `fenced code block` 里的命令与输出；
+ * - **import 说明符**（`from './client.js'`）：基准是「导入它的那个模块」，不是仓库路径（见上节）。
  * - **删除线里的路径**（`~~tests/golden/g07-xxx.test.mjs~~`）：这是「曾有、现已删除」的记录，
  *   迁移 / 删除清单必须写得清删了什么，硬判「文件不存在」会逼人把删除记录也删掉。
  *   这类引用**单独计数并打印**（`已删除（删除线…）N 处`），不是静默放行 ——
@@ -81,8 +112,15 @@
  * 里面的 `文件:行号` 记的是当次取证那一刻的仓库状态，事后「修」它等于篡改证据。
  * 这些引用只计数、不判定、不影响退出码。
  *
- * 退出码：0 合格（可能有「账期内的漂移」提示）/ 1 有死引用，或有未记账·已到期的漂移，或账本形状不合规 /
- * 2 环境不具备（找不到 docs 目录）。
+ * ## 账本：只许等于现状（账实不符 = 红）
+ *
+ * 「行号漂移」这一档走账本（每笔带到期日）。但账本**还能反过来骗人**：引用早就改对了、账没销，
+ * 账面上就永远躺着一笔不存在的债 —— 人照着它以为这里还没修（白跑一趟），也会因此高估账本的
+ * 可信度。所以口径是：**账面比实际多也判红**（与 `check-ui-shots` 统一），修法只有「把这条删掉」。
+ * 死引用（文件不存在 / 相对路径越界）、到期、新增漂移、账实不符，四者都红。
+ *
+ * 退出码：0 合格（可能有「账期内的漂移」提示）/ 1 有死引用，或有未记账·已到期的漂移，
+ * 或账实不符，或账本形状不合规 / 2 环境不具备（找不到 docs 目录）。
  *
  * 维护提示：这个门禁验的是「引用还指得着」，**不验**「文档描述的行为是否还对」。后者只能读代码
  * 复核；别把这里变绿当成文档正确。
@@ -165,8 +203,20 @@ const skipForScan = (_rel, name) => SKIP_DIR_NAMES.has(name)
 const REF_EXT =
   'tsx|jsx|mts|cts|ts|mjs|cjs|json|js|css|scss|md|html|py|gradle|java|kt|yaml|yml|sh|txt|xml|toml|service|conf'
 
+/**
+ * 一处引用 = 一个 token `路径[:起行[-止行]]`。
+ *
+ * 开头的 `(?:\\.\\.?/)*` 与 `\\.?` 不是装饰，是 2026-11 这次「打开 `.github/**` 盲区」的核心：
+ *   - `(?:\\.\\.?/)*` 吃掉 `./` `../` `../../` 前缀 → `./build-apk.sh`、`../shared/x.mjs`
+ *     才是一个**完整的** token（以前正则从 `b` / `s` 开始匹配，token 前是 `/`，整条被
+ *     `not-standalone` 当「URL / 绝对路径的一部分」丢掉：文档里所有相对写法都不受管辖）；
+ *   - `\\.?` 允许**前导点**：`.github/workflows/ci.yml` 是一个文件路径，不是「某个更长名字的尾巴」。
+ *     以前它以 `github/...` 入列、前面是 `.`，被 `before === '.'` 一刀切成「名字的一部分」→
+ *     `.github/**` 整类引用**连存在性都不验**（实测：`docs/ci-self-hosted-runner.md` 里 12 处
+ *     `ci.yml:行号` 锚点全错，门禁一次都没报过）。
+ */
 const REF_RE = new RegExp(
-  `([A-Za-z0-9_@][\\w.@/+-]*\\.(?:${REF_EXT}))(?::(\\d+)(?:[-–](\\d+))?)?(?![\\w.-])`,
+  `((?:\\.\\.?/)*\\.?[A-Za-z0-9_@][\\w.@/+-]*\\.(?:${REF_EXT}))(?::(\\d+)(?:[-–](\\d+))?)?(?![\\w.-])`,
   'g',
 )
 
@@ -271,7 +321,12 @@ const judgeRef = (index, ref, docDir) => {
 
   // ---- 解析目标文件 ----
   let target = null
-  if (file.includes('/')) {
+  if (/^\.\.?\//.test(file)) {
+    // `./x`、`../x`：两段基址解析（文档所在目录 → 仓库根），规则见 resolveRelative
+    const rel = resolveRelative(index, file, docDir)
+    if (rel.verdict) return rel
+    target = rel.target
+  } else if (file.includes('/')) {
     if (index.paths.has(file)) target = file
     else if (index.paths.has(`${file}/`)) target = `${file}/`
     else if (!existsSync(path.join(ROOT, file.split('/')[0]))) {
@@ -379,6 +434,58 @@ const judgeRef = (index, ref, docDir) => {
   return { verdict: 'ok', kind: 'line', target, suffix: suffixResolved }
 }
 
+/**
+ * 相对路径引用（`./build-apk.sh`、`../shared/build-types.mjs`、`./src/main.tsx`）解析成哪个文件？
+ *
+ * **定死这条规则的理由**：文档里两种写法都有，而且都对 ——
+ *   - markdown 链接 `[..](../shared/build-types.mjs)` 的 `../` **只能**按文档所在目录解，
+ *     改成仓库根相对会让 GitHub 上的链接点不开；
+ *   - 命令与「在仓库根跑这个脚本」的口径（`./build-apk.sh release`）按文档目录解就必然落空。
+ * 所以按**两段基址、顺序固定**解析，不让人猜：
+ *   ① 文档所在目录（markdown 链接语义）；
+ *   ② 仓库根（本门禁其余路径引用的基准）。
+ * 两段都落在同一个文件 → 通过；落在**两个不同**文件 → WARN 点名（引用必须补成仓库相对路径）；
+ * 两段都不中 → FAIL，并把**试过的两个基址**逐条印出来（读者/修的人不用再猜）。
+ * `../../x` 在 `docs/` 下会**越出仓库根** —— 那是显式 FAIL（`relative-escape`），不是「不判定」：
+ * 「刻意不支持」必须报错，静默跳过就是又开一个盲区。
+ *
+ * 返回 `{ target }` 或 `{ verdict, kind, message }`。
+ */
+const resolveRelative = (index, file, docDir) => {
+  const tries = []
+  const hits = []
+  const bases = docDir === '.' ? [['.', '仓库根（文档就在根上）']] : [[docDir, `文档所在目录 ${docDir}`], ['.', '仓库根']]
+  for (const [base, label] of bases) {
+    const norm = path.posix.normalize(base === '.' ? file : `${base}/${file}`)
+    if (norm === '..' || norm.startsWith('../')) {
+      tries.push(`${label} → ${norm}（**越出仓库根**，这一档刻意不支持）`)
+      continue
+    }
+    tries.push(`${label} → ${norm}`)
+    if ((index.paths.has(norm) || index.paths.has(`${norm}/`)) && !hits.includes(norm)) hits.push(norm)
+  }
+  if (hits.length === 1) return { target: hits[0] }
+  if (hits.length > 1) {
+    return {
+      verdict: 'warn',
+      kind: 'relative-ambiguous',
+      message:
+        `相对路径在两段基址上都解析到了文件，无法定位（补成仓库相对路径）：${hits.join(' / ')}`,
+    }
+  }
+  const escaped = tries.every((t) => t.includes('越出仓库根'))
+  return {
+    verdict: 'fail',
+    kind: escaped ? 'relative-escape' : 'missing-file',
+    message:
+      (escaped
+        ? '相对路径越出仓库根（`../` 写多了一层）：'
+        : '文件不存在（相对路径两段基址都没命中）：') +
+      `${file}；试过：${tries.join('；')}。` +
+      '解析基准见脚本头「相对路径引用」一节（① 文档所在目录 → ② 仓库根）',
+  }
+}
+
 /** 从 md 文本抽引用（fenced code block 里的命令/输出不算） */
 /** `~~…~~` 删除线区间（`~~` 与 `**` 一样是「这里的东西已经不在了」的通用标记） */
 const STRIKE_RE = /~~.+?~~/g
@@ -392,6 +499,19 @@ const strikeSpans = (line) => {
 }
 
 /**
+ * 匹配点前面那个 `.` 是「名字内部的分隔」还是「token 的开头」？
+ *
+ * - `v1.2.3/x.ts`、`…/a.b/` 这类：点前面还是名字字符 → 是名字的一部分（跳过）；
+ * - `.github/workflows/ci.yml`：点前面是空格 / 反引号 / 括号 / 行首 → 点就是路径的第一个字符，
+ *   这**必须**判（本次要打开的正是这个盲区）；
+ * - `./x`、`../x` 由 `REF_RE` 的前缀一起吃掉，不会走到这里。
+ */
+const dotInsideName = (line, index) => {
+  if (index === 0 || line[index - 1] !== '.') return false
+  return index >= 2 && /[\w.@+~*-]/.test(line[index - 2])
+}
+
+/**
  * 被跳过（不判定）的引用，按原因归档的名字 + 人话说明。
  *
  * 为什么要能把它们**数出来**（#678）：`check-doc-refs` 曾有整整一类引用被 `continue`
@@ -402,7 +522,12 @@ const strikeSpans = (line) => {
  * 且 `--audit-skipped` 能把账本打出来。
  */
 const SKIP_REASONS = {
-  'not-standalone': '不是独立引用（前面紧贴 `/` `~` `*` `.`：URL / 绝对路径 / 通配符 / 名字的一部分）',
+  'not-standalone':
+    '不是独立引用（前面紧贴 `/` `~` `*`，或点是名字内部的分隔：URL / 绝对路径 / 通配符 / 名字的一部分）' +
+    '—— 注意 `.github/**`、`./x`、`../x` **不再**落进这一档（前导点与相对前缀已算 token 的一部分）',
+  'module-specifier':
+    '模块说明符（`from \'./x.js\'`）：解析基准是**导入它的那个模块**，不是仓库根也不是文档目录，' +
+    '按仓库路径判只会逼人删掉代码引文 —— 不判定，但记账',
   'artifact-hash': '构建产物哈希名（`main.030dd2a6.js`），不是仓库路径',
   placeholder: '模板占位符（`xxx.md`）',
   'skip-dir': '依赖 / 产物目录（`node_modules/**` 等）',
@@ -433,6 +558,8 @@ const extractRefs = (text, skipped) => {
     while ((m = REF_RE.exec(line)) !== null) {
       const file = m[1]
       const before = m.index === 0 ? '' : line[m.index - 1]
+      /** 引用前面紧邻的 40 个字符（判 `from './x.js'` 这类模块说明符用） */
+      const prefix = line.slice(Math.max(0, m.index - 40), m.index)
       // 删除线里的路径 = 「曾有、现已删除」的记录（迁移/删除清单要写清删了什么）。
       // 以前这类引用被下面 `before === '~'` 那条规则**静默丢掉**（一个看不见的后门：
       // 任何文档只要给死引用套一层 `~~` 就能过门禁，且没人知道发生过）。
@@ -448,9 +575,18 @@ const extractRefs = (text, skipped) => {
         })
         continue
       }
-      // 绝对路径 / URL / 通配 / 名字的一部分，都不是独立引用
-      if (before === '/' || before === '~' || before === '*' || before === '.') {
+      // 绝对路径 / URL / 通配 / 名字的一部分，都不是独立引用。
+      // 前导点这一档从「before === '.' 一律跳过」收窄成「这个点确实在名字内部」：
+      // `.github/…` 的点是 **token 开头**（前面是空格 / 反引号 / 括号），它是路径，必须判。
+      if (before === '/' || before === '~' || before === '*' || dotInsideName(line, m.index)) {
         skip('not-standalone', m, i, file)
+        continue
+      }
+      // 模块说明符（`import … from './client.js'`）：解析基准是「导入它的那个模块」，
+      // 不是仓库根、也不是文档目录 —— 拿仓库路径去判它，唯一的修法是删掉代码引文。
+      // 所以不判定，但记账（`--audit-skipped` 能数出来）。
+      if (/(?:^|[^\w])(?:from|import)\s*\(?\s*['"]$/.test(prefix)) {
+        skip('module-specifier', m, i, file)
         continue
       }
       if (ARTIFACT_RE.test(file)) {
@@ -558,7 +694,7 @@ const auditOtherExt = (text, index, docRel, out) => {
  *   长期把门禁挂在红上，真问题（死引用）反而被淹掉。现在改记账制：每笔带到期日，
  *   新的漂移立刻红，到期的也红。
  */
-const DEAD_KINDS = new Set(['missing-file', 'ambiguous'])
+const DEAD_KINDS = new Set(['missing-file', 'ambiguous', 'relative-escape'])
 const DRIFT_KINDS = new Set(['blank-line', 'out-of-range'])
 
 /** 一句话事故：这条不修，读者会遇到什么 */
@@ -567,6 +703,8 @@ const ACCIDENT = {
   ambiguous: '同名文件不止一个，读者不知道该看哪一份 —— 引用等于没写。',
   'blank-line': '引用指到空行：读者跳过去只看到空白，这条引用就失去了定位能力，只能整篇翻。',
   'out-of-range': '行号越界：文件比引用短，读者翻到底也找不到 —— 要么结论漂走了，要么文件被删改过。',
+  'relative-escape':
+    '相对路径越出仓库根（`../` 写多了一层）：这条引用指向仓库外面，读者按它永远找不到 —— 而且门禁要是把它当「不判定」，它就是又一个看不见的盲区。',
 }
 
 /** 一条能直接敲的修复入口（不是「请修正」这种空话） */
@@ -576,6 +714,11 @@ const fixOf = (item) => {
     return `git log --diff-filter=D --oneline -- ${target}   # 看它何时被删；换路径或把引用改成 ~~${target}~~（删除线=曾存在）`
   if (item.kind === 'ambiguous')
     return `rg --files | grep -E '/${target.split('/').pop()}$'   # 看是哪几份同名，引用补成仓库相对路径`
+  if (item.kind === 'relative-escape')
+    return (
+      '少写一层 ../：docs/x.md 里指仓库根下的文件用 ../<名字>，指同目录用 ./<名字>；' +
+      '或者直接写仓库相对路径（不带 ./ ../ 前缀）'
+    )
   if (item.kind === 'out-of-range')
     return `wc -l ${target}   # 把行号收进文件内，或改成「函数名/常量名」定位`
   return `grep -n "<你引用的那个符号>" ${target}   # 拿到真实行号改对；符号改名了就改引用`
@@ -585,7 +728,7 @@ const fixOf = (item) => {
 const debtKeyOf = (item) => `${item.doc}::${item.raw}`
 
 /**
- * `--selftest`：**故意做错必须被拦**。六拍，全在一个临时仓库里跑（`CHECK_DOC_REFS_ROOT`），
+ * `--selftest`：**故意做错必须被拦**。十一拍，全在一个临时仓库里跑（`CHECK_DOC_REFS_ROOT`），
  * 不碰真仓库的任何文件：
  *   ① 干净 → exit 0
  *   ② 写一个不存在的路径（死引用）→ **必 exit 1**，且印「事故 + 修法」
@@ -593,6 +736,13 @@ const debtKeyOf = (item) => `${item.doc}::${item.raw}`
  *   ④ 同一处漂移记进账（未到期）→ **必 exit 0**（容忍在账期内的漂移）
  *   ⑤ 同一本账改成已过期 → **必 exit 1**
  *   ⑥ 账本条目没有到期日 → **必 exit 1**（永久豁免不存在）
+ *   ⑦ **`.github/…` 前导点必须被看见**：指对了 → exit 0；行号改错 → **必 exit 1 且点名**
+ *      （这一拍是这次开闸的反例：`before === '.'` 一刀切时，⑦的两条都会 exit 0 —— 门禁看不见 `.github/**`）
+ *   ⑧ **相对路径两段基址**：`./build-apk.sh`（仓库根解析）→ exit 0；`./gone.sh` → **必 exit 1**，
+ *      且把「试过文档所在目录 / 仓库根」逐条印出来（不让人猜）
+ *   ⑨ **越出仓库根必须显式报错**：`../../x.md` → **必 exit 1**（`relative-escape`），不许静默跳过
+ *   ⑩ **模块说明符不按仓库路径判**：`import x from './ghost.js'` → exit 0（记账为 module-specifier）
+ *   ⑪ **账实不符 = 红**：账上登记 1 处、实际 0 处 → **必 exit 1**
  */
 const selftest = () => {
   const tmp = mkdtempSync(path.join(os.tmpdir(), 'check-doc-refs-selftest-'))
@@ -668,6 +818,87 @@ const selftest = () => {
       ok: shapeless.status === 1 && shapeless.out.includes('expires'),
       detail: `exit ${shapeless.status}`,
     })
+    // ⑥ 收尾：账本现在是坏的，先清掉，后面几拍不该被它影响
+    rmSync(ledger, { force: true })
+
+    // ---------- ⑦ `.github/**` 前导点必须被看见（本次开闸的核心反例） ----------
+    mkdirSync(path.join(tmp, '.github', 'workflows'), { recursive: true })
+    writeFileSync(
+      path.join(tmp, '.github', 'workflows', 'ci.yml'),
+      '# ci\nrun: pnpm test\n# tail\n',
+      'utf8',
+    )
+    writeFileSync(doc, '看 `.github/workflows/ci.yml:2`。\n', 'utf8')
+    const dotOk = gate(tmp)
+    cases.push({
+      name: '⑦ `.github/workflows/ci.yml:2` 指对了 → exit 0（证明前导点不再是「名字的一部分」）',
+      ok: dotOk.status === 0,
+      detail: `exit ${dotOk.status}`,
+    })
+    writeFileSync(doc, '看 `.github/workflows/ci.yml:99`。\n', 'utf8')
+    const dotBad = gate(tmp)
+    cases.push({
+      name: '⑦ `.github/…` 的行号改错 → 必 exit 1 且点名该文件',
+      ok: dotBad.status === 1 && dotBad.out.includes('.github/workflows/ci.yml:99'),
+      detail: `exit ${dotBad.status}`,
+    })
+
+    // ---------- ⑧ 相对路径：两段基址（文档所在目录 → 仓库根） ----------
+    writeFileSync(path.join(tmp, 'build-apk.sh'), '#!/bin/sh\necho ok\n', 'utf8')
+    writeFileSync(doc, '在仓库根跑 `./build-apk.sh`。\n', 'utf8')
+    const relOk = gate(tmp)
+    cases.push({
+      name: '⑧ `./build-apk.sh`（仓库根那段基址解析到）→ exit 0',
+      ok: relOk.status === 0,
+      detail: `exit ${relOk.status}`,
+    })
+    writeFileSync(doc, '跑 `./gone.sh`。\n', 'utf8')
+    const relBad = gate(tmp)
+    cases.push({
+      name: '⑧ `./gone.sh` 两段基址都不中 → exit 1 且印出试过的基址',
+      ok: relBad.status === 1 && relBad.out.includes('试过：') && relBad.out.includes('仓库根'),
+      detail: `exit ${relBad.status}`,
+    })
+
+    // ---------- ⑨ 越出仓库根：显式报错，不静默跳过 ----------
+    writeFileSync(doc, '看 `../../outside.md:1`。\n', 'utf8')
+    const escape = gate(tmp)
+    cases.push({
+      name: '⑨ `../../outside.md` 越出仓库根 → exit 1 且报 relative-escape',
+      ok: escape.status === 1 && escape.out.includes('越出仓库根'),
+      detail: `exit ${escape.status}`,
+    })
+
+    // ---------- ⑩ 模块说明符：不按仓库路径判（记账，不判红） ----------
+    writeFileSync(doc, "例：`import x from './ghost.js'`\n", 'utf8')
+    const specifier = gate(tmp)
+    cases.push({
+      name: "⑩ `import x from './ghost.js'`（模块说明符）→ exit 0，不判红",
+      ok: specifier.status === 0,
+      detail: `exit ${specifier.status}`,
+    })
+
+    // ---------- ⑪ 账实不符 = 红 ----------
+    writeFileSync(doc, '看 `src/thing.ts:2`。\n', 'utf8')
+    mkdirSync(debtDir, { recursive: true })
+    writeFileSync(
+      ledger,
+      JSON.stringify({
+        gate: 'check-doc-refs',
+        entries: {
+          // 这笔登记了，但现实里一处漂移都没有（行 2 是空行……不，2 行确实是空行 → 会真的红，
+          // 所以这里用「文件里根本不存在的那条引用」来造「账多出实际」）
+          'docs/probe.md::src/nothing.ts:3': { count: 2, why: 'selftest', issue: '#0', expires: soon },
+        },
+      }),
+      'utf8',
+    )
+    const shrink = gate(tmp)
+    cases.push({
+      name: '⑪ 账面比实际多（登记 2 处、实际 0 处）→ exit 1 且报「账实不符」',
+      ok: shrink.status === 1 && shrink.out.includes('账实不符'),
+      detail: `exit ${shrink.status}`,
+    })
   } catch (error) {
     cases.push({ name: 'selftest 自身抛错', ok: false, detail: error.message })
   } finally {
@@ -739,7 +970,13 @@ const main = () => {
   const warns = findings.filter((f) => f.verdict === 'warn')
 
   // 分级：死引用永远拦；行号漂移走账本（有到期日）。
-  const deadRefs = fails.filter((f) => DEAD_KINDS.has(f.kind))
+  // 兜底（fail-closed）：**没有归类的 fail 不许放行** —— 新增一种 kind 却忘了分类，
+  // 结果就是「报了但不算红」，和静默跳过只差一个打印。
+  for (const f of fails) {
+    if (!DEAD_KINDS.has(f.kind) && !DRIFT_KINDS.has(f.kind))
+      console.error(`内部错误：未分类的 fail kind=${f.kind}（${f.doc}:${f.docLine} ${f.raw}）→ 按死引用处理`)
+  }
+  const deadRefs = fails.filter((f) => DEAD_KINDS.has(f.kind) || (!DRIFT_KINDS.has(f.kind) && f.kind !== ''))
   const drift = fails.filter((f) => DRIFT_KINDS.has(f.kind))
   const actualDrift = new Map()
   for (const item of drift) {
@@ -761,7 +998,13 @@ const main = () => {
   const redDrift = drift
     .filter((item) => redReason.has(debtKeyOf(item)))
     .map((item) => ({ ...item, why: redReason.get(debtKeyOf(item)) }))
-  const hardRed = deadRefs.length + redDrift.length
+  // **账实不符 = 红**（本次裁决，与 `check-ui-shots` 统一口径）：账面登记 N 处、实际一处都没有，
+  // 说明这笔豁免早就不对应任何真实缺陷 —— 留着它就是一张「看起来还欠着一笔」的假账。
+  // 账本的作用是「让该红的红、该忍的忍」，一旦它可以比现实多，它就同时骗了两个方向：
+  // 人会照着它以为某处还没修（白干一趟），也会因此相信「账本可信」（下次真有人拿它当依据）。
+  // 修法只有一条：把这条从账本里删掉（或把 count 改成实际的数）。
+  const shrinkRed = settled.shrink
+  const hardRed = deadRefs.length + redDrift.length + shrinkRed.length
 
   if (json) {
     console.log(
@@ -779,7 +1022,8 @@ const main = () => {
             entries: debt.entries.size,
             settled: settled.settled.length,
             redDrift: redDrift.map(({ key, why }) => ({ key, why })),
-            shrink: settled.shrink.map(({ key, registered, found }) => ({ key, registered, actual: found.count })),
+            shrinkRed: shrinkRed.length,
+            shrink: shrinkRed.map(({ key, registered, found }) => ({ key, registered, actual: found?.count ?? 0 })),
             problems: debt.problems,
           },
         },
@@ -878,10 +1122,18 @@ const main = () => {
   )
   printGroup('WARN', warns)
 
-  if (settled.shrink.length) {
-    console.log(`ℹ 账面比实际多 ${settled.shrink.length} 笔（引用已改对，但账没销 —— 提示，不判红）：`)
-    for (const item of settled.shrink) {
-      console.log(`  ${item.key}  登记 ${item.registered}，实际 ${item.count}  → 从 scripts/audit-debt/check-doc-refs.json 删掉这一条`)
+  if (shrinkRed.length) {
+    console.log(`❌ 账实不符 ${shrinkRed.length} 笔（引用早就改对了，账没销 —— 账本在骗人，判红）：`)
+    for (const item of shrinkRed) {
+      const actual = item.found?.count ?? item.count ?? 0
+      console.log(`  ${item.key}  登记 ${item.registered} 处，实际 ${actual} 处`)
+      console.log(
+        '      事故：这笔豁免已经不对应任何真实缺陷。账留着它，人就会照着它以为这里还没修（白跑一趟），' +
+          '下一次也没人敢信这本账。',
+      )
+      console.log(
+        '      修法：从 scripts/audit-debt/check-doc-refs.json 删掉这一条（登记数大于实际但都不是 0 时：把 count 改成实际的数）',
+      )
     }
     console.log('')
   }

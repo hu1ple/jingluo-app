@@ -396,10 +396,12 @@ set -a; . /opt/caddy/caddy.env; set +a
 ./caddy-alidns reload --config /opt/caddy/Caddyfile --adapter caddyfile --address unix//run/caddy/admin.sock
 ```
 
-## 8. GitHub Release 流水线
+## 8. GitHub Release 流水线（**已删除**：`~~.github/workflows/release.yml~~`，`ce7968e3` / 2026-11-24）
 
-`.github/workflows/release.yml`，**手动 `workflow_dispatch` 触发**（裁决 #614 决定 2 之后：正式发布渠道是
-GitHub Release，dl 只是历史分发，所以「发 Release」不再由 tag push 自动跑，也**不再读 `releases.json`**）：
+**今天仓库里没有任何发布流水线。** 正式发布由**人**在签名机上手工 `gh release create`（命令见
+[`docs/RELEASE-MANUAL.md`](RELEASE-MANUAL.md) §6.1 做法 A，清单一套见 [`docs/RELEASE-CHECKLIST.md`](RELEASE-CHECKLIST.md) D2）。
+下面这段是那个已删除的 workflow 当年做的事，**留作手工发版时要自己补上的核对清单**（当年它「手动
+`workflow_dispatch` 触发」，裁决 #614 决定 2 之后已不读 `releases.json`）：
 
 1. 校验输入 `tag` 存在且形如 `v<version>`（不存在 → 提示先 push tag）；
 2. 校验 **tag 指向的 commit** 里 `package.json` 的 `version` == tag 版本、`androidVersionCode` 为正整数；

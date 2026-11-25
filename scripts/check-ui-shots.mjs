@@ -513,9 +513,16 @@ if (JSON_OUT) {
     if (bookedOrphans.length > 40) console.log(`  …另 ${bookedOrphans.length - 40} 条（--list 看全部）`)
   }
   if (settled.shrink.length) {
-    console.log(`\nℹ 账面比实际多 ${settled.shrink.length} 笔（图已删或已补上引用，但账没销 —— 提示，不判红）：`)
+    // **账实不符 = 红**（与 `check-doc-refs` 同一口径）：图删了 / 已补上引用，但账还挂着 ——
+    // 这本账就不再是「现状」，而是一段过期叙述。留着它 = 拿假账换绿灯。
+    console.log(`\n❌ 账实不符 ${settled.shrink.length} 笔（图已删或已补上引用，账没销 —— 判红）：`)
     for (const item of settled.shrink.slice(0, 20)) {
-      console.log(`  ${item.key}  → 从 scripts/audit-debt/check-ui-shots.json 删掉这一条`)
+      console.log(`  ${item.key}  登记 ${item.registered} 张，实际 ${item.found?.count ?? 0} 张`)
+      console.log(
+        `      事故：这张图已经不需要豁免了（删了、或已有文档引用它），账却还挂着 —— 账本从此比现实多，` +
+          '下一次谁也不知道「账上还欠着」是不是真的。',
+      )
+      console.log(`      修法：从 scripts/audit-debt/check-ui-shots.json 删掉这一条`)
     }
     if (settled.shrink.length > 20) console.log(`  …另 ${settled.shrink.length - 20} 条`)
   }
@@ -538,7 +545,8 @@ if (JSON_OUT) {
         (debt.entries.size ? '（到期即红；新增孤儿不记账就红）' : ''),
     )
   }
-  const green = redOrphans.length === 0 && dead.length === 0 && debt.problems.length === 0
+  const green =
+    redOrphans.length === 0 && dead.length === 0 && debt.problems.length === 0 && settled.shrink.length === 0
   console.log(
     green
       ? bookedOrphans.length
@@ -548,7 +556,7 @@ if (JSON_OUT) {
   )
 }
 
-process.exit(redOrphans.length || dead.length || debt.problems.length ? 1 : 0)
+process.exit(redOrphans.length || dead.length || debt.problems.length || settled.shrink.length ? 1 : 0)
 
 
 /**
@@ -560,6 +568,8 @@ process.exit(redOrphans.length || dead.length || debt.problems.length ? 1 : 0)
  *   ④ 同一本账改成已过期 → **必 exit 1**
  *   ⑤ 删掉一张被引用的图（悬空引用）→ **必 exit 1**，且印「事故 + 修法」
  *   ⑥ 账本条目没有到期日 → **必 exit 1**（永久豁免不存在）
+ *   ⑦ **账实不符 → 必 exit 1**：账上登记了一张「已被文档引用」的图（它已经不是孤儿），
+ *      账多出来的一笔就是假账 —— 与 `check-doc-refs` 同一口径（账本只许等于现状）
  */
 function selftest() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'check-ui-shots-selftest-'))
@@ -649,6 +659,27 @@ function selftest() {
       name: '⑥ 账本没有到期日 → exit 1',
       ok: shapeless.status === 1 && shapeless.out.includes('expires'),
       detail: `exit ${shapeless.status}`,
+    })
+
+    // ⑦ 账实不符：把「已被引用」的图登记成孤儿 → 账比实际多，必须红
+    //   （恢复到「图与引用都在」的干净状态，只把这笔假账挂上去，排除其它红因）
+    fs.writeFileSync(path.join(dir, '360', 'a.png'), PNG)
+    fs.rmSync(path.join(dir, '360', 'b.png'))
+    runGit(['add', '-A'])
+    fs.writeFileSync(
+      ledger,
+      JSON.stringify({
+        gate: 'check-ui-shots',
+        entries: {
+          'docs/ui/probe/360/a.png': { count: 1, why: 'selftest 假账', issue: '#0', expires: soon },
+        },
+      }),
+    )
+    const shrink = gate()
+    cases.push({
+      name: '⑦ 账面比实际多（登记一张已被引用的图）→ exit 1 且报「账实不符」',
+      ok: shrink.status === 1 && shrink.out.includes('账实不符'),
+      detail: `exit ${shrink.status}`,
     })
   } catch (error) {
     cases.push({ name: 'selftest 自身抛错', ok: false, detail: error.message })

@@ -10,8 +10,10 @@
 
 ## 0. 前提（不成立就别开工）
 
-- **唯一事实来源是 `https://dl.rose7.cn/releases.json`**：App 自动更新读它，`.github/workflows/release.yml` 也从它取
-  `file` / `md5` / `size` / `changes` 去镜像 GitHub Release。**它里面没有的版本，tag 打上去 CI 一定 404。**
+- **`https://dl.rose7.cn/releases.json` 只服务 internal / 历史 standard 条目**（裁决 #614 决定 2）；App 自动更新读它。
+  曾经由 `~~.github/workflows/release.yml~~` 从它取 `file` / `md5` / `size` / `changes` 去镜像 GitHub Release ——
+  **那个 workflow 已于 `ce7968e3`（2026-11-24）整条删除**，现在没有任何流水线读这份清单，也没有「清单里没这个版本
+  → tag 打上去 404」这回事了（打 tag 不触发任何东西）。正式发布走 GitHub Release，由人手工发（见 D2）。
 - **APK 不在 CI 里构建**，只在那台持有签名 keystore 的 Linux 机器上构建。
 - **上传要在打 tag 之前完成**（顺序颠倒 = 404，见上面两条）。
 - 版本号唯一来源是仓库根 `package.json`：`version` → Android `versionName`，`androidVersionCode` → `versionCode`
@@ -33,7 +35,7 @@
 | **A 定版本** | Windows 开发机或任意有 git+node 的机器 | git、node 22、pnpm | `pnpm run release:check` | PR 合并进 `main`，拿到 merge commit | 10 分钟 |
 | **B 构建** | **那台 Linux 签名机**（不可替代） | JDK 21、Android SDK、`/root/.android/debug.keystore` | `pnpm run release:check --apk` | 产物存在、sha256 记下来、证书指纹不变 | 10–20 分钟 |
 | **C 上传** | 任意机器（要能拿到 APK 文件） | 发布令牌 | `pnpm run release:upload` | 服务端 `ok:true` 且回包 sha256 == 本地 | 2 分钟 |
-| **D 打 tag** | 任意机器 | 自己的 GitHub 账号（能 push tag） | 无（`git` + `gh`） | `release.yml` 跑绿、`gh release view` 能看到资产 | 5 分钟 |
+| **D 打 tag + 发 Release** | 任意机器 | 自己的 GitHub 账号（能 push tag） | 无（`git` + `gh`） | `gh release view` 能看到 tag 与一个 `.apk` 资产（没有 workflow 跑，见 D 节引言） | 5 分钟 |
 | **E 校验** | 任意机器 | 网络（能下 APK） | `pnpm run release:verify` | 三方 hash 一致（本地 / releases.json / dl 下载件）+ 烟测通过 | 10 分钟 |
 
 失败回滚速查见 §6；哪些步骤必须人工、哪些必须那台机器、为什么，见 §3。
@@ -63,7 +65,8 @@ ASSET=$(node scripts/artifact-name.mjs --version "$V")   # → jingluo-chat-$V.a
 
 #### A2. 写 `CHANGELOG.md` 的 `## <version> (YYYY-MM-DD) — 一句话标题` 段
 
-- 做：这一段的 `- ` 条目会被脚本抽成 dl 的 `meta.changes`，也会进 GitHub Release notes（`release.yml` 从 `releases.json` 取）。
+- 做：这一段的 `- ` 条目会被脚本抽成 dl 的 `meta.changes`（只有 internal / 历史 standard 条目走 dl）；正式发布的
+  Release notes 由**人**从同一节贴进去（`gh release create --notes-file`，见 D2）——**已没有任何 workflow 替你镜像**。
   **写用户看得懂的话**（「修复低内核机型白屏」），不要写「refactor xxx」。
 
 > **处在服务端迁移窗口期时（现在就是）**：本段 `changes` 里**必须**带一条给运维的提醒——旧机
@@ -254,10 +257,11 @@ pnpm run release:upload -- --apk $APK
 
 ### 阶段 D｜打 tag（任意机器，需要你自己的 GitHub 账号）
 
-> **正式发布 = GitHub Release**（裁决 #614 决定 2）。**推 tag 不会触发任何 workflow**：
-> `release.yml` 已改成手动 `workflow_dispatch`，它只做「把已构建、已签名的 APK 挂成 Release 资产 + 校验 debuggable
-> + 算 sha256 写进正文」，**不查 `releases.json`、不校验 dl 的 md5**。它也不构建，keystore 不出签名机。
-> 所以阶段 C（上传 dl）只对 internal/私有包还有意义；standard 正式版打完 tag 直接进 D2 发 Release。
+> **正式发布 = GitHub Release**（裁决 #614 决定 2）。**推 tag 不会触发任何 workflow —— 仓库里今天已经没有任何
+> 「自动发布」的 workflow**：`~~.github/workflows/release.yml~~` 已于 `ce7968e3`（2026-11-24）整条删除
+> （它当年只做「把已构建、已签名的 APK 挂成 Release 资产 + 校验 debuggable + 算 sha256 写进正文」，
+> 不构建、不碰 keystore、不查 `releases.json`）。所以这三件事现在**全归人**，见 D2 的做法 A。
+> 阶段 C（上传 dl）只对 internal/私有包还有意义；standard 正式版打完 tag 直接进 D2 发 Release。
 
 #### D1. 在阶段 A 的 merge commit 上打 tag 并推送
 
@@ -283,20 +287,18 @@ gh release create v$V $APK \
   --notes-file /tmp/notes-$V.md            # 正文含 version / versionCode / commit / sha256
 ```
 
-做法 B —— 手工触发 workflow（Actions → `Release` → Run workflow，`tag` 填 `v$V`，
-`apk_url` 留空则优先取「Release 里已上传的 .apk 资产」，其次取 dl 上该版本的存量地址）：
+~~做法 B —— 手工触发 workflow（Actions → `Release` → Run workflow，`tag` 填 `v$V`，`apk_url` 留空则优先取
+「Release 里已上传的 .apk 资产」）~~ —— **这条路已经不存在**：`~~.github/workflows/release.yml~~` 于 `ce7968e3`
+（2026-11-24）删除，仓库里不再有任何「替你把 APK 挂成 Release」的流水线（要恢复只能从历史取回该文件，
+本仓不动 `.github/**`）。**今天只有做法 A。**
 
-```bash
-gh run list --workflow release.yml --limit 3     # 手动触发的那一条
-```
-
-两端都看：
+核对 Release：
 
 ```bash
 gh release view v$V --repo zzy-repo/deepseek-app
 ```
 
-- 成功判据：`release.yml` 这次的 run 是 `success`；`gh release view` 显示 tag `v$V` 且带一个 `.apk` 资产
+- 成功判据：`gh release view` 显示 tag `v$V` 且带一个 `.apk` 资产
   （名字 = 上面 CLI 算出的 `$ASSET`，前缀跟着 `config/appIdentity.json` 的 `artifactPrefix` 走；#836 之前的历史包叫 `deepseek-chat-*`，不改名），
   资产大小等于 `releases.json` 里的 `size`。
 - 失败回滚：
@@ -516,7 +518,7 @@ node scripts/release-upload.mjs --apk $APK --dry-run
 | C `429 RATE_LIMITED` | 每分钟 2 次限制 | 按 `Retry-After` 等，再单独重跑 C3 | 上传这一步可以单独重试 |
 | C `401 UNAUTHORIZED` | 令牌错/被撤销 | 按 §4 换令牌 | 不要重复试同一枚 |
 | C 成功但包是错的 | 内容不对 / 变体错 | dl 侧是 **append-only**：**不能删**。发一个 `versionCode` 更大的修复版本（走 A→E）覆盖 `latest`，必要时找 ECS 维护者把记录标 `breaking` | 已经下载到的用户只能靠新版本修 |
-| D tag 推错 commit（CI 还没建 Release） | `release.yml` 失败 | `git push --delete origin v$V && git tag -d v$V`，改完重打 | tag 还没「出厂」，可以删 |
+| D tag 推错 commit（还没建 Release） | 推完才发现指错 commit | `git push --delete origin v$V && git tag -d v$V`，改完重打 | tag 还没「出厂」，可以删；**没有 CI 会替你发现**，推完自己 `git rev-list -n1 v$V` 核一遍 |
 | D Release 已建但版本有问题 | 用户能下到坏包 | **先** `gh release delete v$V --repo zzy-repo/deepseek-app --yes`，**再**删 tag | 顺序反了会留下指向 404 的 Release |
 | E `release:verify` FAIL | 记录缺失 / hash 不一致 | 不许宣布完成；按上一条撤 Release + tag；找 ECS 维护者处理线上文件 | 线上文件与记录不一致时，是服务端要修数据 |
 | E 烟测装不上/白屏 | 覆盖安装失败、启动白屏 | 撤 tag + Release，`releases.json` 的 `latest` 需要回退到上一版（需 ECS 权限） | 这是唯一需要动服务端的状态 |
@@ -527,7 +529,7 @@ node scripts/release-upload.mjs --apk $APK --dry-run
 
 - **本清单还没有被真实跑过一整遍。** 写这份清单的人手上既没有那台签名机的 keystore，也没有发布令牌，
   所以脚本只用 `--dry-run`、离线 fixture 和「缺令牌报错」这三条路径验证过；「上传成功」「CI 建 Release」
-  两个环节来自 `docs/dl-release-api.md` 与 `release.yml` 的约定，未经实际执行。**第一次照着跑的人，请把踩到的坑补回本文件。**
+  两个环节来自 `docs/dl-release-api.md` 的约定与被删除的 `~~.github/workflows/release.yml~~`（`ce7968e3`），未经实际执行。**第一次照着跑的人，请把踩到的坑补回本文件。**
 - **签名机仍是单点。** keystore 只在 `/root/.android/debug.keystore`，那台机器没了就得换证书（= 所有已装用户无法覆盖升级）。
   这是本单接受的边界，不试图消除。
 - **不覆盖**：iOS / 桌面端发布、`deploy/dl-release/` 的服务端部署与运维、`.github/workflows/**` 的改动

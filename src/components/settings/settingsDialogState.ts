@@ -314,9 +314,15 @@ export const ensureSendPrerequisites = (): boolean => {
  *
  * 三步都有意义，缺一条就变成 #490 描述的那个现状（发一条、等一个 4xx、再从英文原文里猜）：
  *  1. **toast 说清是哪一项**：五种命中各有一句话（`sendBlocked*`），不是笼统的「配置有误」；
- *  2. **跳到对应设置**：打开设置并落在「数据管理」，同时在**那一行**写红字
- *     （`sendConfigBlocked`，由 `ApiConfigFields` 的地址 / 模型行读取）；
+ *  2. **给一个点了就过去的入口**：toast 上挂「打开设置」，用户点了才落在「账户与消费」
+ *     （地址 / 模型都在那一页）；拦下的同时把 `sendConfigBlocked` 写上，`ApiConfigFields`
+ *     的地址 / 模型行据此写红字 —— marker 与服务端/设置层无关，用户从侧栏自己进来也读得到；
  *  3. **返回 false**：调用方据此不再往下走 —— 请求数为 0 是这条拦截的全部价值。
+ *
+ * **拦下时不自动打开设置层**（产品决定 2026-11-25：「地址/模型填错也没有必要自动打开设置，
+ * 压根不需要什么自动打开设置的操作」）：与 `ensureApiKey` 同一条纪律 —— 自动弹层会打断用户，
+ * 也让「点一下就走」变成「先关一层弹层」。源码门禁 `tests/unit/no-auto-settings.test.mjs`
+ * 的第 [6][7] 条钉住这件事（本函数体里不许出现 `openSettings(`）。
  *
  * 本函数只在**发送入口**被调用，启动链路一次都不走（2026-11-25 起 `App` 的启动 effect 连
  * `ensureApiKey` 都不调了）：用户还没做任何事时，不该因为一个历史遗留的空模型被弹窗打断。
@@ -332,8 +338,12 @@ export const ensureSendConfig = (): boolean => {
     code: verdict.code,
     field: verdict.jumpTo,
   })
-  showToast({ key: verdict.messageKey })
-  openSettings('account')
+  // 拦下只发通知，**不打开设置层**（产品决定 2026-11-25：「压根不需要什么自动打开设置的操作」）。
+  // 「打开设置」在按钮上，用户自己点才进 —— 与 `ensureApiKey` 同一条路径（复用同一个 helper 与 key）。
+  showToast(
+    { key: verdict.messageKey },
+    { action: { key: 'openSettingsEntry', run: openSettingsFromHint } }
+  )
   useSettingsDialog.setState({ sendConfigBlocked: verdict.code })
   return false
 }

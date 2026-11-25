@@ -43,7 +43,7 @@
 | F1-06 | **内核过低明确提示**与升级路径 | 启动（WebView 主版本 < 83） | 「本机系统浏览器内核过旧」+ 设置 → 应用 → Android System WebView → 更新 | 通用报错、误报（内核够用也弹） | ✓ | — | — | 手动 | **已覆盖**（L0 充分，L3 为模拟器手动） | #104 #209 #276 |
 | F1-07 | **渲染进程被回收/被杀后自动恢复**，App 不闪退 | 系统 OOM、后台回收、`kill` 渲染进程 | 接管事件（恒 `true`）→ 重建 WebView → 回到可用状态 | 整个 App 进程消失（`aw_browser_terminator` 杀进程） | ✓ | — | — | 手动 | **部分覆盖（缺自动化设备用例）** | #44 #291 |
 | F1-08 | **损坏数据/渲染异常兜底**：不白屏，给错误页 | 打开被写坏的会话 / 任意渲染期抛错 | 能修就修（`files=null` 等）；修不了给错误页：人话 + 重载 + 复制诊断 | 整棵树卸载 → 整屏纯白 | ✓ | ✓ | — | — | **已覆盖** | #28 |
-| F1-09 | **清数据后首启**：无 Key 时自动引导输入，不卡住 | 首次安装、设置里清除数据后启动 | 自动打开设置（数据管理/API Key），保存后可直接发消息 | 停在欢迎页无引导；点发送无反应 | — | ✓ | ✓ | 手动 | **部分覆盖（隐式前置，无断言）** | #86 |
+| F1-09 | **清数据后首启**：无 Key 时给可操作的引导，不卡住 | 首次安装、设置里清除数据后启动 | **首启不自动弹设置**；点发送给通知（「还没有可用的 API Key」+「去选择渠道」），点按钮才进设置（账户与消费 → 模型来源）保存后可直接发消息 | 停在欢迎页无引导；点发送无反应 | — | ✓ | ✓ | 手动 | **部分覆盖（隐式前置，无断言）** | #86 |
 
 ### 1.2 覆盖证据（按 ID）
 
@@ -55,7 +55,7 @@
 - **F1-06**：同上 + `tests/unit/compat-baseline.test.mjs`、`tests/unit/legacy-webview-compat.test.mjs`、`tests/unit/container-query-fallback.test.mjs`、`tests/unit/has-fallback.test.mjs`、`tests/unit/flex-gap-fallback.test.mjs`、`tests/unit/legacy-replace-all.test.mjs`、`tests/unit/legacy-bundle-target.test.mjs`。L3：`scripts/compat/matrix-scan.mjs`、`docs/compat/matrix/README.md`。
 - **F1-07**：`tests/unit/render-process-gone.test.mjs`（5 例：Java 源码契约 + 断言 JVM 测试存在）、`android/app/src/test/java/com/example/deepseekchat/RenderProcessGoneGuardTest.java`（**存在但没有任何 runner/CI 调用**，见下）。L3 手动：`scripts/compat/p1-chat.mjs`（pid 不变）、`docs/repro/g6-issue-45-46-25-44.md`、`docs/compat/compat-old/*/logcat-*.txt`（「渲染进程接管已安装」）。
 - **F1-08**：`tests/unit/session-repair.test.mjs`（8 例：`files/messages/blocks=null`、脏元素、分支会话）、`tests/unit/error-report.test.mjs`（7 例：报告字段与脱敏）、`tests/integration/error-boundary.test.mjs`（3 条链：`files=null` 正常渲染 + 渲染抛错出错误页 + 复制诊断）。该文件头自己写明「未覆盖 Android WebView 真机、低内核边界页」。
-- **F1-09**：`tests/helpers/helpers.mjs:25-26`（每个 integration 用例都 `localStorage.clear()` 后 reload）、`tests/helpers/helpers.mjs:44-49`（`openSettingsDataSection` 允许「已自动弹出」也算通过）、`tests/e2e/real-upstream.test.mjs:271-298`（有弹层就切分组，没有就点设置）。**没有一条断言「无 Key 时设置必须自动弹出」**。
+- **F1-09**：`tests/integration/domain01-first-run.test.mjs`（2026-11-25 改口径：**首启不弹设置** → 点发送断言通知文案 + 「去选择渠道」按钮 + 请求数 0 → 点按钮才进设置 → 存 Key → 关闭 → 再发送成功）、`tests/helpers/helpers.mjs:25-26`（每个 integration 用例都 `localStorage.clear()` 后 reload）、`tests/helpers/helpers.mjs:104-119`（`openSettingsDataSection`：没有弹层就自己点设置入口，**不依赖**「有没有自动弹出」）、`tests/e2e/real-upstream.test.mjs:271-298`（有弹层就切分组，没有就点设置）。**「无 Key 时设置必须自动弹出」这条口径已被产品否掉**（2026-11-25），现在断言的是「不自动弹 + 通知上有可点入口」。
 
 ### 1.3 先做减法：现有用例的合并/删除建议
 
@@ -72,7 +72,7 @@
 | 拟定用例 | 层级 | 表驱动? | 覆盖功能点 | 覆盖分支数 | 不可合并原因(若有) |
 | --- | --- | --- | --- | --- | --- |
 | `storage-failure.test.mjs`：启动阶段注入 IndexedDB 故障，表驱动跑「列表读抛错 / 单会话读抛错 / 会话缺失 / 重试成功 / 正常首屏」 | L1 | **是**（5 行同一夹具） | **F1-01,F1-03,F1-04** | 5 | — |
-| `first-run.test.mjs`：清空 localStorage 冷启动 → 断言自动弹设置、无白屏、存 Key 后能发一条 | L1 | 否（单场景，3 分支串行） | **F1-09,F1-01** | 3 | 唯一需要「真实首启 + 设置弹层 + 发送」串起来的场景；表驱动会掩盖时序 |
+| `first-run.test.mjs`：清空 localStorage 冷启动 → 断言首启不自动弹设置、无白屏、点发送给通知 → 点「去选择渠道」进设置存 Key → 能发一条 | L1 | 否（单场景，3 分支串行） | **F1-09,F1-01** | 3 | 唯一需要「真实首启 + 设置弹层 + 发送」串起来的场景；表驱动会掩盖时序 |
 | `render-process-recover`（脚本：`adb shell kill <renderer pid>` → 进程存活 + 界面重建 + 落诊断） | L3 手动 | 否 | **F1-07,F1-02** | 2 | **需真实 WebView 渲染进程被杀 + `recreate()` 时序**，浏览器与桩都造不出来 |
 | **小计** | | 2 / 3 表驱动 | 覆盖 F1-01,03,04,07,09（+F1-02 现状取证） | 10 | **新增 3 个用例（L1 2 + L3 1）** |
 

@@ -290,7 +290,7 @@ test('[1] 文案键齐备：五个 sendBlocked* 中英都有、且真的翻译�
 
 // ============================================================ [2] 门禁：toast + 跳转 + 落点
 
-test('[2] ensureSendConfig：五类各自拦下、清空请求之外的副作用（toast / 设置 / 落点）', () => {
+test('[2] ensureSendConfig：五类各自拦下，副作用是「通知 + 点了才开设置 + 落点红字」', () => {
   const EXPECT = {
     base_url_empty: { field: 'baseUrl', key: 'sendBlockedBaseUrlEmpty' },
     base_url_no_protocol: { field: 'baseUrl', key: 'sendBlockedBaseUrlNoProtocol' },
@@ -322,13 +322,28 @@ test('[2] ensureSendConfig：五类各自拦下、清空请求之外的副作用
   assert.equal(apiConfig.setBaseUrl('https://api.example.com/v1'), true)
   assert.equal(dialogState.ensureSendConfig(), false, '模型名为空必须拦下')
   let state = dialogState.useSettingsDialog.getState()
-  assert.equal(state.open, true, '拦截要打开设置')
-  // #727 阶段 1：地址与模型搬到了第三个 tab（账户与消费）。断言口径不变（「落在地址与模型所在的
-  // 那一页」），值换成新 IA 的 `account` —— `SettingsDialog` 的 data tab 已经**明确不留**这几行，
-  // 落在 `data` 等于把人送到一个没有输入框的面板（`ensureSendConfig` 里也是 `openSettings('account')`）。
-  assert.equal(state.section, 'account', '落在「账户与消费」（地址与模型都在这一页）')
+  // 产品决定 2026-11-25：「压根不需要什么自动打开设置的操作」。口径与 `ensureApiKey` 一致 ——
+  // 拦下只发通知，设置层**必须还是关着**（`reset()` 刚把它关掉，这里不许被拦下动作重新打开）。
+  assert.equal(state.open, false, '拦下时不许自动打开设置（设置层应保持关着）')
+  assert.equal(
+    state.section,
+    'general',
+    '拦下时也不许偷偷改分组：没打开就是没导航（`reset()` 摆的是 general）'
+  )
+  // 红字仍然由 marker 驱动：设置页怎么被打开与它无关（`ApiConfigFields` 读的就是这个 store）
   assert.equal(state.sendConfigBlocked, 'model_empty', '设置页要知道被点名的是哪一类')
-  assert.deepEqual(useToast.getState().message, { key: 'sendBlockedModelEmpty' }, 'toast 说明原因')
+  // toast：点名是哪一项，并且带一个「点了才进设置」的按钮
+  const toast = useToast.getState()
+  assert.deepEqual(toast.message, { key: 'sendBlockedModelEmpty' }, 'toast 说明原因（点名模型）')
+  assert.ok(toast.action !== null, '提示必须带动作（否则用户只知道错了、不知道去哪改）')
+  assert.equal(toast.action.key, 'openSettingsEntry', '动作文案：打开设置')
+  // 点了才开，且落在地址与模型所在的那一页
+  // #727 阶段 1：地址与模型搬到了第三个 tab（账户与消费）—— `SettingsDialog` 的 data tab
+  // 已经**明确不留**这几行，落在 `data` 等于把人送到一个没有输入框的面板。
+  toast.action.run()
+  state = dialogState.useSettingsDialog.getState()
+  assert.equal(state.open, true, '点了按钮才打开设置')
+  assert.equal(state.section, 'account', '落在「账户与消费」（地址与模型都在这一页）')
 
   // 改对了就清：改错行不清
   dialogState.clearSendConfigBlocked('baseUrl')

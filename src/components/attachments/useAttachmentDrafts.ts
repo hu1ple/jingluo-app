@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { formatSize } from '../../services/attachments.js'
 import { AttachmentAddError } from '../../services/attachments/addError.js'
 import type { DocumentAttachment } from '../../services/attachments/types.js'
+import { classifyStorageFailure } from '../../services/chat/db.js'
 import type { LinkedMessage } from '../../i18n/index.js'
 import { showToast } from '../base/toastState.js'
 import {
@@ -112,7 +113,9 @@ const addFailureToast = (file: File, error: unknown): LinkedMessage => {
       case 'attachment.store':
         return {
           key:
-            error.causeName === 'QuotaExceededError' ? 'attachAddStorageFull' : 'attachAddStorageFailed',
+            classifyStorageFailure(error.cause) === 'quota'
+              ? 'attachAddStorageFull'
+              : 'attachAddStorageFailed',
           params,
         }
     }

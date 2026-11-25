@@ -276,6 +276,7 @@ test(
     makeId.mock.restore()
     for (const [errorName, key] of [
       ['QuotaExceededError', 'attachAddStorageFull'],
+      ['NS_ERROR_DOM_QUOTA_REACHED', 'attachAddStorageFull'],
       ['DataCloneError', 'attachAddStorageFailed'],
     ]) {
       failWrite(t, 'files', errorName)
@@ -286,11 +287,12 @@ test(
       (entry) => entry.msg === 'document attachment add failed'
     )
     assert.deepEqual(
-      entries.slice(-4).map((entry) => entry.meta),
+      entries.slice(-5).map((entry) => entry.meta),
       [
         { stage: 'attachment.read', 'error.name': 'NotReadableError' },
         { stage: 'attachment.prepare', 'error.name': 'OperationError' },
         { stage: 'attachment.store', 'error.name': 'QuotaExceededError' },
+        { stage: 'attachment.store', 'error.name': 'NS_ERROR_DOM_QUOTA_REACHED' },
         { stage: 'attachment.store', 'error.name': 'DataCloneError' },
       ]
     )

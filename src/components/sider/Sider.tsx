@@ -20,6 +20,7 @@ import { AnnouncementBadge } from '../announcements/AnnouncementBadge.js'
 import { useAnnouncements } from '../announcements/useAnnouncements.js'
 import { closeMobileSider, useMobileSider } from './mobileSiderState.js'
 import { SessionItem } from './SessionItem.js'
+import { ShareImport } from './ShareImport.js'
 import styles from './Sider.module.css'
 
 /** 展开的侧边栏：名称与收起按钮、开启新对话、按时间分组的会话列表、底部设置；移动端放在抽屉里，收起按钮关闭抽屉 */
@@ -168,6 +169,7 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
         </span>
         {t('newChat')}
       </button>
+      <ShareImport />
       {sessions.length > 0 ? (
         <div className={styles.selectionToggleRow}>
           <button

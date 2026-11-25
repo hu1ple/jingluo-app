@@ -19,6 +19,12 @@
 #                      显式允许「回环地址」出包（只给本地联调，Issue #601）。不设时，只要
 #                      consume/pay/migration 的 base 是 127.0.0.1 / localhost / ::1 就构建失败。
 #                      设了之后产物会打上 LOOPBACK_CONSUME=true 标记 → 传不上 dl（400 拒收）。
+# 发布关卡（release 模式，**本地产的包与 CI 产的包同一套判据**）：
+#   · 构建前 `scripts/check-keystore-config.mjs`：证书指纹必须是已发布证书 —— 最便宜的失败点，
+#     不通过就别花几分钟做 web 构建 + gradle（换签 = 已装用户无法覆盖升级）；
+#   · 构建后 `scripts/verify-release-apk.mjs`：六项（debuggable / 变体跨层同源 / 回环 / 证书 /
+#     明文标记 / 包内 consume.baseUrl + 主机白名单）+ 版本号断言（package.json ↔ APK）。
+#     红 = 禁止上传 dl / 禁止分发，产物留在原地但打不进发布流程。
 #   BUILD_VARIANT=standard|staging
 #                      发布变体（默认 standard = 对外）。staging = 预发布联调包：
 #                      web 层走 `pnpm run build:staging`（`--staging --allow-insecure`，产物落 dist/），
@@ -27,7 +33,9 @@
 #                      产物带 INSECURE_CONSUME=true 自证标记 → staging-only，禁止公开分发（#601）。
 #
 # 说明: 本脚本不依赖交互式 shell 环境，自行 export ANDROID_HOME / PATH；
-#       首次运行会自动生成 keystore（若 android/keystore/keystore.properties 缺失）。
+#       release 模式**不再**在缺 keystore.properties 时自动生成 release keystore —— 一把新生成的
+#       key 永远不等于已发布证书（gradle 的指纹闸门必炸），自动生成只会让人以为「材料齐了」，
+#       排错却排到签名上。缺材料就 die，并指到 check:keystore。debug keystore 仍然自动生成。
 #       硬闸门：java 主版本 < REQUIRED_JAVA_MAJOR → 失败；BUILD_TOOLS_VERSION 未设置
 #       或目录不存在 → 失败（并列出已安装档位）。
 # =============================================================================
@@ -37,7 +45,7 @@ MODE="${1:-debug}"                 # debug | release
 EXTRA_ARG="${2:-}"
 case "$MODE" in
   debug|release) ;;
-  -h|--help|help) sed -n '2,33p' "$0"; exit 0 ;;
+  -h|--help|help) sed -n '2,40p' "$0"; exit 0 ;;   # 行号范围跟着文件头走，改头注释要同步
   *) echo "[build-apk] 未知模式: $MODE （只支持 debug / release）" >&2; exit 2 ;;
 esac
 
@@ -137,6 +145,24 @@ if [ ! -x "$AAPT2_BIN" ] && [ -x "$AAPT2_BIN.exe" ]; then AAPT2_BIN="$AAPT2_BIN.
 
 log "模式=$MODE  ANDROID_HOME=$ANDROID_HOME  JAVA_HOME=$JAVA_HOME (java $JAVA_MAJOR)  BUILD_TOOLS_VERSION=$BUILD_TOOLS_VERSION  node=$NODE_VER_RAW"
 
+# 版本号的唯一来源是 package.json（build.gradle 的 appVersionName / appVersionCode 也读它）：
+# 这里读出期望值，构建后用 verify:apk 的 --expect-version-* 断言「包内 versionCode/versionName == 这份」。
+# 事故形状：改了 package.json 但 gradle 复用了上一份产物 / 拿错包 / 忘了 bump androidVersionCode ——
+# 那几种情况在 dl 上传时才红（409 VERSION_CONFLICT），而出包这一秒就能判。
+PKG_VERSION_NAME="$(node -p "require('./package.json').version" 2>/dev/null || true)"
+PKG_VERSION_CODE="$(node -p "require('./package.json').androidVersionCode" 2>/dev/null || true)"
+case "$PKG_VERSION_CODE" in
+  '' | *[!0-9]*) die "package.json 的 androidVersionCode 不是正整数（'${PKG_VERSION_CODE}'）：它是 Android versionCode 的唯一来源，版本号判不出来就不出包" ;;
+esac
+[ -n "$PKG_VERSION_NAME" ] || die "package.json 的 version 读不出来：它是 versionName 的唯一来源"
+log "版本号（package.json）: ${PKG_VERSION_NAME} (versionCode ${PKG_VERSION_CODE})"
+
+# 原生侧的 ARTIFACT_VARIANT 口径与 build.gradle 的 updateVariant 一致（INTERNAL_BUILD=1 → internal，
+# 否则 standard）。注意 **staging 不是原生侧变体**：它只是 web 层 profile + 明文放行，产物标记仍是
+# standard（见 android/app/build.gradle 的 updateVariant / CI 里 `verify:apk --variant standard`）。
+NATIVE_VARIANT=standard
+[ "${INTERNAL_BUILD:-}" = "1" ] && NATIVE_VARIANT=internal
+
 # local.properties：把 SDK 路径钉进 Gradle（该文件已 gitignore）。
 # 内容不变就不重写，避免和 IDE 里那份来回打架（Issue #273 现状第 3 条）。
 SDK_DIR_LINE="sdk.dir=$(printf '%s' "$ANDROID_HOME" | sed 's|\\|/|g')"
@@ -148,19 +174,29 @@ else
   log "local.properties 已指向同一 SDK，不覆盖"
 fi
 
-# --------------------------------------------------- 2. 首次运行自动生成签名材料
+# --------------------------------------------------- 2. 签名材料（release 缺了就 die）
 KS_DIR="$ANDROID_DIR/keystore"
 KS_PROPS="$KS_DIR/keystore.properties"
 if [ ! -f "$KS_PROPS" ]; then
-  log "未找到 android/keystore/keystore.properties，自动生成 debug + release keystore（仅本机，不提交）"
+  if [ "$MODE" = "release" ]; then
+    # 以前这里会**顺手生成**一把 release keystore + 一份 props。那把 key 永远不等于已发布证书
+    # （gradle 的 EXPECTED_CERT_SHA256 闸门必炸），却让「材料齐了」这个错觉先成立，
+    # 于是排错一路排到签名错误上 —— 现在直接说清缺什么、去哪拿。
+    die "release 构建缺少签名材料，已中止（不会自动生成一把永远用不上的 key）。
+  缺失文件：$KS_PROPS
+  为什么不能自动生成：release 包的证书必须是**已发布证书**（换签 = 已装用户无法覆盖升级）。
+  修法：
+    1) cp android/keystore/keystore.properties.example $KS_PROPS
+    2) 按注释填四个 *Release 键，storeFileRelease 指向已发布的那把 keystore
+       （本机是 /root/.android/debug.keystore；见 docs/RELEASE-MANUAL.md §1）
+    3) chmod 600 $KS_PROPS && pnpm run check:keystore
+  只想本地跑 debug 包：./build-apk.sh（debug 会自动生成 debug keystore）。"
+  fi
+  log "未找到 $KS_PROPS，自动生成 debug keystore（仅本机，不提交；release 材料要手工放）"
   mkdir -p "$KS_DIR"
   command -v keytool >/dev/null || die "找不到 keytool（请安装 JDK 21）"
   rand_pass() { head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20; }
-  REL_PASS="$(rand_pass)"; DBG_PASS="$(rand_pass)"
-  [ -f "$KS_DIR/release.keystore" ] || keytool -genkeypair -v -keystore "$KS_DIR/release.keystore" \
-    -alias deepseekchat -keyalg RSA -keysize 2048 -validity 10950 -storetype PKCS12 \
-    -storepass "$REL_PASS" -keypass "$REL_PASS" \
-    -dname "CN=DeepSeek Chat, OU=Dev, O=DeepSeek, L=Shanghai, ST=Shanghai, C=CN" >/dev/null
+  DBG_PASS="$(rand_pass)"
   [ -f "$KS_DIR/debug.keystore" ] || keytool -genkeypair -v -keystore "$KS_DIR/debug.keystore" \
     -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10950 -storetype PKCS12 \
     -storepass "$DBG_PASS" -keypass "$DBG_PASS" \
@@ -168,10 +204,8 @@ if [ ! -f "$KS_PROPS" ]; then
   umask 077
   cat > "$KS_PROPS" <<EOF
 # 本地签名凭据 —— 已被 .gitignore 排除，切勿提交
-storeFileRelease=../keystore/release.keystore
-storePasswordRelease=$REL_PASS
-keyAliasRelease=deepseekchat
-keyPasswordRelease=$REL_PASS
+# 只有 debug 那一组是自动生成的。**release 四个键必须手工填**（指向已发布证书那把 key），
+# 别在这里凭空生成 release keystore：新 key 永远不等于已发布证书，gradle 的指纹闸门会中止构建。
 
 storeFileDebug=../keystore/debug.keystore
 storePasswordDebug=$DBG_PASS
@@ -179,7 +213,39 @@ keyAliasDebug=androiddebugkey
 keyPasswordDebug=$DBG_PASS
 EOF
   chmod 600 "$KS_PROPS"
-  log "keystore 生成完成: $KS_DIR"
+  log "debug keystore 生成完成: $KS_DIR（release 四个键仍缺，见 docs/RELEASE-MANUAL.md §1）"
+fi
+
+# ------------------------------------- 2b. 发布前签名门禁（最便宜的失败点）
+# 为什么放在 pnpm build / gradle 之前（Issue #697 的接法，本脚本此前**只有 CI 有这一步**）：
+# 本地产 release 包的人从来没跑过 check:keystore —— 于是「本地产出一个用户装不上的包」这条路是通的：
+# 指纹不对 → gradle 那道闸（build.gradle 的 EXPECTED_CERT_SHA256）到 assembleRelease 才炸，
+# 而那时 web 构建 + cap sync 已经白跑几分钟；更糟的是有人为让它过而改期望值。
+if [ "$MODE" = "release" ]; then
+  log "步骤 2b：签名凭据自检（证书指纹必须等于已发布证书）"
+  if ! node "$PROJECT_ROOT/scripts/check-keystore-config.mjs"; then
+    die "签名凭据不合格，已中止（还没开始 web 构建）。
+  证书指纹 ≠ config/appIdentity.json 的 expectedCertSha256 = 换签 = **已安装用户无法覆盖升级**，禁止发布。
+  修法见上面 check:keystore 的输出（把 keystore.properties 的 storeFileRelease / 口令 / 别名指到已发布证书）；
+  不要改 expectedCertSha256 让闸门变绿 —— 那是签名迁移，必须单独规划。"
+  fi
+fi
+
+# ------------------------------------- 2c. staging 变体的期望 consume base（唯一解析点）
+# gradle 的 -PconsumeBase 与构建后 verify:apk 的 --expect-consume-base **必须同一个值**：
+# 它是「这次出包应该连哪台后端」的唯一期望。各读一次就会出现「gradle 按 A 打、校验按 B 比」。
+STAGING_CONSUME_BASE=""
+if [ "$BUILD_VARIANT" = "staging" ]; then
+  STAGING_CONSUME_JSON="$PROJECT_ROOT/config/endpoints.staging.json"
+  [ -f "$STAGING_CONSUME_JSON" ] || die "找不到 $STAGING_CONSUME_JSON（staging 变体必须有这份端点配置）"
+  if ! STAGING_CONSUME_BASE="$(node -p "JSON.parse(require('node:fs').readFileSync(process.argv[1],'utf8')).consume.baseUrl" -- "$STAGING_CONSUME_JSON")"; then
+    die "读不出 $STAGING_CONSUME_JSON 的 consume.baseUrl（见上方 node 报错）"
+  fi
+  case "$STAGING_CONSUME_BASE" in
+    http://*|https://*) ;;
+    *) die "$STAGING_CONSUME_JSON 的 consume.baseUrl 不是协议://主机 形式：'$STAGING_CONSUME_BASE'" ;;
+  esac
+  log "staging 期望 consume base: $STAGING_CONSUME_BASE（来源 $STAGING_CONSUME_JSON）"
 fi
 
 # ------------------------------------------------------------ 3. 前端构建产物
@@ -192,16 +258,16 @@ elif [ "$BUILD_VARIANT" = "staging" ]; then
   #                      否则 src/services/consume/http.ts 在模块级就抛错 → 装上白屏，#601）
   #   · DIST_OUT=dist **必须显式给**：build.mjs 对 staging 默认落 dist-pre（避免顶掉发版用的 dist/），
   #     而 capacitor 的 webDir 是 dist/、本脚本也只认 dist/ —— 不给就会把上一份 standard 产物 sync 进 APK。
-  log "步骤 1/3：pnpm run build:staging（staging 变体 → dist/）"
+  log "步骤 3：pnpm run build:staging（staging 变体 → dist/）"
   ALLOW_INSECURE_CONSUME=true DIST_OUT=dist pnpm run build:staging
 else
-  log "步骤 1/3：pnpm build（产物 -> dist/）"
+  log "步骤 3：pnpm build（产物 -> dist/）"
   pnpm build
 fi
 [ -f "$PROJECT_ROOT/dist/index.html" ] || die "dist/index.html 不存在，前端构建失败"
 
 # ------------------------------------------------------ 4. 同步 web 产物到原生工程
-log "步骤 2/3：pnpm exec cap sync android（dist -> android/app/src/main/assets/public）"
+log "步骤 4：pnpm exec cap sync android（dist -> android/app/src/main/assets/public）"
 # 用 pnpm exec：走本地 @capacitor/cli，版本锚在 pnpm-lock.yaml 里；
 # 原来的 npx 会按需向网络拉包，版本不锚定（Issue #273 现状表）
 pnpm exec cap sync android
@@ -229,24 +295,16 @@ fi
 #   · -PconsumeBase=<staging consume base>：与 dist/build-info.json 的自述值同源（都读 config/endpoints.staging.json）
 #   · -PallowInsecureConsume=true         ：闸 1b 放行「明文非回环」+ 写 INSECURE_CONSUME=true 自证标记
 #   · ALLOW_INSECURE_CONSUME=true         ：web 侧同一个开关的另一入口（gradle 也认），免得出半套包
+#
+# 期望的 consume base 在**进入 android/ 之前**就解析出来（步骤 2c）：gradle 与构建后的 verify:apk
+# 必须用同一个值 —— 各读一次的话，一处读成功一处读失败就会出现「gradle 按这台的地址打、校验按另一台比」。
 if [ "$BUILD_VARIANT" = "staging" ]; then
-  # 注意：这里已经 `cd android/` 了（gradle 必须在 android/ 下跑），所以配置要用**绝对路径**读 ——
-  # 写成相对路径 './config/...' 会读不到（实测 CI 第一次跑就栽在这：node 静默失败 → die）。
-  STAGING_CONSUME_JSON="$PROJECT_ROOT/config/endpoints.staging.json"
-  [ -f "$STAGING_CONSUME_JSON" ] || die "找不到 $STAGING_CONSUME_JSON（staging 变体必须有这份端点配置）"
-  if ! STAGING_CONSUME_BASE="$(node -p "JSON.parse(require('node:fs').readFileSync(process.argv[1],'utf8')).consume.baseUrl" -- "$STAGING_CONSUME_JSON")"; then
-    die "读不出 $STAGING_CONSUME_JSON 的 consume.baseUrl（见上方 node 报错）"
-  fi
-  case "$STAGING_CONSUME_BASE" in
-    http://*|https://*) ;;
-    *) die "$STAGING_CONSUME_JSON 的 consume.baseUrl 不是协议://主机 形式：'$STAGING_CONSUME_BASE'" ;;
-  esac
   export ALLOW_INSECURE_CONSUME=true
   GRADLE_ARGS+=("-PconsumeBase=$STAGING_CONSUME_BASE" "-PallowInsecureConsume=true")
   printf '\033[1;33m[build-apk][警告] BUILD_VARIANT=staging：产物指向预发布后端 %s（明文），带 INSECURE_CONSUME 标记 → 只许内网联调，禁止公开分发\033[0m\n' "$STAGING_CONSUME_BASE" >&2
 fi
 
-log "步骤 3/3：./gradlew ${GRADLE_ARGS[*]}"
+log "步骤 5：./gradlew ${GRADLE_ARGS[*]}"
 ./gradlew "${GRADLE_ARGS[@]}"
 
 APK_PATH="$APK_DIR/$APK_NAME"
@@ -255,7 +313,56 @@ APK_PATH="$(readlink -f "$APK_PATH")"
 APK_SIZE="$(du -h "$APK_PATH" | cut -f1)"
 APK_BYTES="$(stat -c %s "$APK_PATH")"
 
-printf '\n\033[1;32m================ BUILD OK (%s) ================\033[0m\n' "$MODE"
+
+
+# ------------------------------------- 6. 发布产物校验（release = 硬闸；debug = 只警告）
+#
+# 这一层以前**只有 CI 有**：`.github/workflows/build-apk.yml` 打完包跑 `verify:apk` 六项，
+# 而本脚本只在最后跑一次 check-apk-debuggable —— 于是「本地 ./build-apk.sh release 产出一个
+# 用户装不上 / 连错后端 / 标记错」的包这条路是通的：同一份源码，CI 产的包红、本地产的不红。
+# 现在两条路径跑同一套判据（同一份实现，不另抄判定）：
+#   · debuggable（Issue #60：1.0.0～1.4.0-beta.8 共 15 个已发布包都是 debug 变体产物）
+#   · 变体标记 + 跨层同源（web 产物自述 variant ↔ 原生 ARTIFACT_VARIANT）
+#   · 回环标记 / 明文标记（标记 ∪ 地址事实；明文 + 生产主机是明确禁止的组合）
+#   · 签名证书指纹（换签 = 已装用户无法覆盖升级）
+#   · 包内 consume.baseUrl（逐字 + 主机白名单；#763）
+#   · 版本号（package.json ↔ APK 内的 versionCode / versionName）
+log "步骤 6：发布产物校验（六项 + 版本号；红 = 禁止上传 dl / 禁止分发）"
+if [ "$MODE" = "release" ]; then
+  VERIFY_ARGS=(--variant "$NATIVE_VARIANT")
+  VERIFY_ARGS+=(--expect-version-code "$PKG_VERSION_CODE" --expect-version-name "$PKG_VERSION_NAME")
+  if [ "$BUILD_VARIANT" = "staging" ]; then
+    # staging = 明文联调包：地址是 config/endpoints.staging.json 那台（**不是**生产地址），
+    # 所以期望值要显式传 staging 的 base，并显式认可「这是明文包」（结论行会标 INSECURE(staging-only)）。
+    VERIFY_ARGS+=(--allow-insecure --expect-consume-base "$STAGING_CONSUME_BASE")
+  fi
+  if ! node "$PROJECT_ROOT/scripts/verify-release-apk.mjs" "$APK_PATH" "${VERIFY_ARGS[@]}"; then
+    die "发布产物校验不通过，禁止上传 dl / 禁止分发。
+  APK: $APK_PATH
+  上面那张表点名了是哪一项红（debuggable / variant / loopback / cert / insecure / consumeBase / 版本号），
+  每一行的 detail 里写了修法。**不要**为了过闸去改判据（期望指纹、变体、地址白名单都是发布级事实）：
+     · 证书不对 → 已装用户无法覆盖升级，先修签名材料（pnpm run check:keystore），别改 expectedCertSha256；
+     · 变体 / 地址不对 → 改出包参数或 config，重新出包；
+     · 版本号不对 → package.json 的 version / androidVersionCode 才是唯一来源，改完重出包。
+  产物留在原地供排查（$APK_PATH），但它不是发布包。"
+  fi
+else
+  # debug 产物天生 debuggable：不是发布包，只做提示（仍然跑同一份判定，不另抄一份）
+  if node "$PROJECT_ROOT/scripts/check-apk-debuggable.mjs" "$APK_PATH"; then
+    printf '\033[1;33m[警告] 这是 debug 产物：只许本地联调 / 模拟器烟测，禁止上传 dl.rose7.cn、禁止当发布包分发（Issue #60）\033[0m\n'
+  else
+    printf '\033[1;33m[警告] debug 产物的 debuggable 状态判不出来（按禁止分发处理，Issue #60）\033[0m\n'
+  fi
+fi
+
+# ------------------------------- 7. 收尾横幅（**校验通过之后**才说「可以装上」）
+# 顺序刻意放在校验后面：先跑完判据再宣布成功 —— 否则「BUILD OK / 安装命令」会出现在红之前，
+# 而人只会看到绿的半边（红的 die 在下面才触发）。
+if [ "$MODE" = "release" ]; then
+  printf '\n\033[1;32m============ RELEASE 产物校验通过 ============\033[0m\n'
+else
+  printf '\n\033[1;32m================ BUILD OK (%s) ================\033[0m\n' "$MODE"
+fi
 printf 'APK 绝对路径 : %s\n' "$APK_PATH"
 printf 'APK 大小     : %s (%s bytes)\n' "$APK_SIZE" "$APK_BYTES"
 printf '构建变体     : %s%s\n' "$BUILD_VARIANT" "$([ "$BUILD_VARIANT" = staging ] && echo '（staging-only，禁止公开分发）' || echo '')"
@@ -266,21 +373,3 @@ if [ -x "$AAPT2_BIN" ]; then
 fi
 printf '安装命令     : adb install -r "%s"\n' "$APK_PATH"
 printf '\033[1;32m==============================================\033[0m\n'
-
-# ------------------------------------- 4. 发布完整性关卡：android:debuggable 必须为 false
-# Issue #60：1.0.0～1.4.0-beta.8 共 15 个已发布包都是 debug 变体产物，带 android:debuggable="true"，
-# 任何已授权 adb 的机器都能 run-as 读私有数据。这道关卡读 APK 内的 AndroidManifest.xml（不依赖 aapt2），
-# release 模式判不过就直接失败，产物留在原地但不许上传/分发。
-log "步骤 4：发布完整性关卡（android:debuggable 必须为 false）"
-if node "$PROJECT_ROOT/scripts/check-apk-debuggable.mjs" "$APK_PATH"; then
-  DEBUGBLE_STATE=clean
-else
-  DEBUGBLE_STATE=dirty
-fi
-if [ "$MODE" = "release" ]; then
-  [ "$DEBUGBLE_STATE" = "clean" ] || die "release 产物带 android:debuggable=true，禁止上传 dl / 禁止分发（Issue #60）。
-  APK: $APK_PATH
-  重出包：cd android && ./gradlew :app:assembleRelease -PartifactVariant=internal"
-else
-  printf '\033[1;33m[警告] debug 变体天生就是 debuggable：只许本地联调 / 模拟器烟测，禁止上传 dl.rose7.cn、禁止当发布包分发（Issue #60）\033[0m\n'
-fi

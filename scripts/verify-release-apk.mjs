@@ -51,12 +51,29 @@
  * | # | 检查 | 判据 |
  * |---|------|------|
  * | 1 | `debuggable` 不存在或 false | 复用 `check-apk-debuggable.mjs` 的 `evaluateApkDebuggable`（**不重写判定**） |
- * | 2 | `ARTIFACT_VARIANT == --variant` | `aapt2 dump xmltree --file AndroidManifest.xml` 的 meta-data |
- * | 3 | `LOOPBACK_CONSUME` 不存在或 false | 同上；**缺失视为通过**（老包没有这个标记，#601 的闸 2 同口径） |
+ * | 2 | `ARTIFACT_VARIANT == --variant` **且**与包内 `build-info.json` 的 `variant` 同源 | `aapt2 dump xmltree --file AndroidManifest.xml` 的 meta-data + 自述文件 |
+ * | 3 | `LOOPBACK_CONSUME` 不存在或 false **且**包内地址不是回环 | 标记靠 xmltree；**地址事实以 `build-info.json` 为准**（缺失视为通过，老包兼容）。<br>标记缺失 / false 但地址是回环 → **exit 1**（`#601` 的「标记缺失就放行」被这一层堵住） |
  * | 4 | 签名证书 SHA-256 == `--expect-cert` | `apksigner verify --print-certs` |
- * | 5 | `INSECURE_CONSUME` 不存在或 false，**或者**带了 `--allow-insecure` | 同上；缺失视为 false（向后兼容）。<br>`true` 且没带 `--allow-insecure` → **exit 1**（明文联调包，禁止公开分发）；<br>带了 → 通过，但结论行强制标 `INSECURE(staging-only)`、`--json` 里 `insecure: true` |
- * | 6 | 包内 `consume.baseUrl` == 期望值（**且不命中禁止域**） | 读 APK 里的 `assets/public/build-info.json` 的 `endpoints.consume.baseUrl`（#763） |
+ * | 5 | `INSECURE_CONSUME` 不存在或 false，**或者**带了 `--allow-insecure` | 标记靠 xmltree，事实靠包内地址。缺失视为 false（向后兼容）。<br>`true` / 地址是明文且没带 `--allow-insecure` → **exit 1**（明文联调包，禁止公开分发）；<br>带了 → 通过，但结论行强制标 `INSECURE(staging-only)`、`--json` 里 `insecure: true`。<br>**不允许的组合**：明文 `http` + **生产主机**（`config/endpoints.json` 的 `allowedHosts`）→ **exit 1，即使带了 `--allow-insecure`**；<br>地址是明文但标记不是 `true` → **exit 1**（标记是声明、地址是事实） |
+ * | 6 | 包内 `consume.baseUrl` == 期望值（**且不命中禁止域、主机在白名单内**） | 读 APK 里的 `assets/public/build-info.json` 的 `endpoints.consume.baseUrl`（#763） |
+ * | — | 版本号断言（可选 `--expect-version-code` / `--expect-version-name`） | 不给就 `skipped`（报告明写「未判」）；给了但不符 → **exit 1**，`failing` 里带 `version` |
  * | — | 附加输出（不算失败项） | `versionName` / `versionCode` / `sha256` / `md5` / `size`，供 Release 正文直用 |
+ *
+ * ## 「标记」与「事实」为什么必须分开判（第 3 / 5 项）
+ *
+ * `LOOPBACK_CONSUME` / `INSECURE_CONSUME` 是**产物自证标记**（构建期写进 AndroidManifest），
+ * 它们回答的是「出包的人说这个包是什么」，而 `build-info.json` 里的 `consume.baseUrl` 是
+ * **事实**（web 产物实际注入的地址）。只读标记的后果是：**标记缺失 = 放行** —— 那正好是
+ * 「明文包 / 回环包」的通用逃生口（少写一个 meta-data 就能过）。所以现在两边都读：
+ * 地址是明文 / 回环时，标不标、标 false 都要红；两者不一致本身也红（标记不可信就不许发）。
+ *
+ * ## 第 6 项的第二个、第三个维度（主机）
+ *
+ *   · **禁止域** `--forbid-host`：人传的清单。#763 之后它只作为「临时封某个域」的手段 ——
+ *     CI 与本地打包从来没传过它，所以它挡不住下一个 `sub2api.rose7.cn`；
+ *   · **白名单**（配置派生，默认生效）：包内地址的主机必须属于 `config/endpoints.json` 与
+ *     `config/endpoints.staging.json` 的 `allowedHosts` 并集，否则 exit 1 —— 即使「期望 == 实际」
+ *     （把期望值一起改成错域名，这是 #763 事故的真实形状）。`--allow-host` 是显式逃生舱，会留痕。
  *
  * 第 5 项为什么存在：`-PallowInsecureConsume=true` 让「明文 http 非回环」的 staging 包打得出来
  * （#651 的发版铁律要求 staging 指向 `http://140.210.13.146:16000`，明文是已知代价），代价是这个包
@@ -77,12 +94,13 @@
  *   · **不符就 exit 1**，报告里**两个值都点名**（期望 / 实际）。
  *
  * ## 退出码（与 `check-apk-debuggable` 同一口径）
- *   0  六项全过（且前门三道配置判据全过）→ 可以发布
+ *   0  六项全过（且前门三道配置判据全过、版本号断言不是 fail/unknown）→ 可以发布
  *   1  有项目**明确不过**（读到值、值不对；含「配置 ≠ 已发布断言」「gradle 第二份副本 ≠ 配置」
- *      「包内 consume.baseUrl ≠ 期望值」「包内 consume.baseUrl 命中禁止域」）
+ *      「包内 consume.baseUrl ≠ 期望值」「命中禁止域」「主机不在白名单」「明文 + 生产主机」
+ *      「自证标记与地址事实不符」「版本号 ≠ 期望」）
  *      → 禁止发布，报告点名是哪一项（前门拦下时 `failing = ['certSources']`，两个值都抄出来）
  *   2  判不出来（缺 aapt2 / apksigner、SDK 没装、不是 APK、清单读不出、配置读不到、`--expect-cert` 非法、
- *      包内 build-info.json 缺失 / 非 JSON / 无该字段）
+ *      白名单读不到、包内 build-info.json 缺失 / 非 JSON / 无该字段、版本号读不出）
  *      → **同样禁止发布**（fail-closed）
  *
  * ## 边界（别夸大）
@@ -112,7 +130,7 @@ import {
 import { loadBuildEnv, resolveBuildTools, toolchainHint } from './lib/androidTools.mjs';
 import { RE_CERT_SHA256 } from './lib/appIdentity.mjs';
 import { readZipEntry } from '../deploy/dl-release/apk-manifest.mjs';
-import { ENDPOINTS_FILE } from './lib/consumeEndpoints.mjs';
+import { ENDPOINTS_FILE, ENDPOINTS_PROFILES, isLoopbackHost } from './lib/consumeEndpoints.mjs';
 import {
   CERT_FALLBACK_REL,
   CERT_PRIMARY_REL,
@@ -380,6 +398,147 @@ export function resolveExpectConsumeBase(options = {}) {
   return { ok: true, exitCode: EXIT_OK, value, source: CONSUME_BASE_SOURCE_CONFIG, invalid: null, file };
 }
 
+/**
+ * 读包内产物自述（`assets/public/build-info.json`）。**只读一次**，第 2 项（跨层同源）与
+ * 第 3/5/6 项（地址事实）共用同一份结果 —— 三处各读一遍的话，迟早有一处漏了 `null` 判断，
+ * 于是「没有自述文件」在半边被当通过、在另一半被判不出来。
+ *
+ * @param {string} apk
+ * @returns {{ok: boolean, value: object|null, why: string|null}}
+ */
+export function readBuildInfoEntry(apk) {
+  let buf;
+  try {
+    buf = readZipEntry(fs.readFileSync(apk), BUILD_INFO_ENTRY);
+  } catch (error) {
+    return { ok: false, value: null, why: `读 APK 字节 / 解压 ${BUILD_INFO_ENTRY} 失败：${error.message}（判不出来）` };
+  }
+  if (buf === null) {
+    return {
+      ok: false,
+      value: null,
+      why:
+        `APK 里没有 ${BUILD_INFO_ENTRY}：` +
+        'cap sync 没跑 / 产物不是这次 `pnpm build` 出的（没有自述文件就无法证明包里连的是哪台后端、哪个变体）',
+    };
+  }
+  try {
+    return { ok: true, value: JSON.parse(buf.toString('utf8')), why: null };
+  } catch (error) {
+    return {
+      ok: false,
+      value: null,
+      why: `${BUILD_INFO_ENTRY} 不是合法 JSON（${error.message}）：判不出包里的地址与变体`,
+    };
+  }
+}
+
+/**
+ * 「包内地址的主机必须属于仓库配置允许的主机」—— 白名单从配置派生，不由命令行传入。
+ *
+ * 为什么要有它（#763 的补正面）：`--forbid-host` 是**人传**的参数，CI 与本地打包都没传，
+ * 于是「1.4.5–1.4.8 四个包全指向 `sub2api.rose7.cn`」这件事在闸门眼里不存在 —— 判据写了、
+ * 但没人调它，等于没有。白名单改成从 `config/endpoints.json` 与 `config/endpoints.staging.json`
+ * 的 `allowedHosts`（两份 profile 的并集，`consume` / `pay` 共用同一组主机）派生之后，
+ * 「不在这份配置里的主机」天然是红的，不需要谁记得传参。
+ *
+ * 口径：
+ *   · 并集而不是按 profile 取 —— 判的是「这个包里的地址是不是本仓库认可的一台后端」，而
+ *     `--expect-consume-base` / `BUILD_VARIANT=staging` 决定的是「本次该用哪一台」；两件事分开判，
+ *     否则给 staging 包做校验时会被生产的白名单误伤；
+ *   · `--allow-host <host>` 是**显式**逃生舱（临时联调域名），会进报告与 `--json`，不是静默放行；
+ *   · 配置读不到 / `allowedHosts` 为空 → **判不出来**（exit 2），白名单空集等于「全部禁止」，
+ *     而「全部禁止」在报告里会被误读成「每个包都坏」，必须分开说。
+ *
+ * @param {{root?: string, allowHosts?: string[]}} [options]
+ * @returns {{ok: boolean, hosts: string[], prodHosts: string[], sources: string[], extras: string[],
+ *            invalid: string|null}}
+ */
+export function resolveAllowedHosts(options = {}) {
+  // `ENDPOINTS_FILE` 是 `<root>/config/endpoints.json`：上跳两层就是仓库根（`root` 只为复用方 / 单测存在）
+  const root = options.root ?? path.dirname(path.dirname(ENDPOINTS_FILE));
+  const sources = [];
+  const hosts = [];
+  /** 生产 profile（config/endpoints.json）认可的主机：第 5 项用它判「明文不许打生产」 */
+  const prodHosts = [];
+  let prodSeen = false;
+  for (const [profile, rel] of Object.entries(ENDPOINTS_PROFILES)) {
+    const file = path.join(root, rel);
+    let raw;
+    try {
+      raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch (error) {
+      // 生产 profile 是硬依赖（第 6 项的期望值也从它来）；staging profile 缺了只是少一组白名单
+      if (profile === 'production') {
+        return {
+          ok: false,
+          hosts: [],
+          prodHosts: [],
+          sources: [],
+          extras: [],
+          invalid: `读不到 ${rel}（${error.code ?? error.message}）：允许的主机白名单只能来自这份配置（不回落内置常量）`,
+        };
+      }
+      continue;
+    }
+    if (profile === 'production') prodSeen = true;
+    const list = Array.isArray(raw?.allowedHosts) ? raw.allowedHosts : [];
+    const cleaned = list
+      .filter((host) => typeof host === 'string')
+      .map((host) => host.trim().toLowerCase())
+      .filter((host) => host !== '');
+    if (cleaned.length) sources.push(`${rel} 的 allowedHosts（${cleaned.length} 个）`);
+    if (profile === 'production') prodHosts.push(...cleaned);
+    hosts.push(...cleaned);
+  }
+  if (!prodSeen) {
+    return { ok: false, hosts: [], prodHosts: [], sources: [], extras: [], invalid: `读不到 ${ENDPOINTS_PROFILES.production}：判不出允许的主机白名单` };
+  }
+  const extras = Array.isArray(options.allowHosts)
+    ? [...new Set(options.allowHosts
+      .filter((host) => typeof host === 'string')
+      .map((host) => host.trim().toLowerCase())
+      .filter((host) => host !== ''))]
+    : [];
+  const unique = [...new Set(hosts)];
+  if (!unique.length && !extras.length) {
+    return {
+      ok: false,
+      hosts: [],
+      prodHosts: [...new Set(prodHosts)],
+      sources,
+      extras,
+      invalid: `配置里的 allowedHosts 一个主机都没有（${Object.values(ENDPOINTS_PROFILES).join(' / ')}）：白名单空集不是「随便哪台都行」，按判不出来处理`,
+    };
+  }
+  return { ok: true, hosts: unique, prodHosts: [...new Set(prodHosts)], sources, extras, invalid: null };
+}
+
+/** 解析成 `URL`；非 URL 返回 null（不抛）—— 用来从「包里的地址」派生事实（明文 / 回环 / 主机） */
+const parseUrlOrNull = (value) => {
+  try {
+    return new URL(String(value));
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * `value` 的主机是否命中 `hosts` 里的某一条（相等或其子域）；命中返回那条主机名，否则 null。
+ * 用于「明文不许打生产主机」这条组合禁令（第 5 项）—— 那个判据要的是**命中哪一台**，
+ * 不是「在不在白名单里」，所以与 {@link hostOutsideAllowlist} 分开写（口径不同，别合并）。
+ */
+export function findHostIn(value, hosts) {
+  if (typeof value !== 'string' || value === '' || !Array.isArray(hosts) || !hosts.length) return null;
+  const host = hostOf(value);
+  if (host === null) return null;
+  for (const item of hosts) {
+    const needle = String(item).toLowerCase();
+    if (host === needle || host.endsWith(`.${needle}`)) return needle;
+  }
+  return null;
+}
+
 /** 从 URL 取主机名（小写）；取不出来返回 null（非 URL 值交给原始字符串兜底匹配） */
 function hostOf(value) {
   try {
@@ -413,6 +572,34 @@ export function findForbiddenHostHit(values, forbidHosts) {
     }
   }
   return null;
+}
+
+/**
+ * 包内地址的主机是否**不在**白名单里（第 6 项的第三个维度，#763 的补正面）。
+ *
+ * 与 {@link findForbiddenHostHit} 的分工：那个判「明确列出的禁止域」，靠人传参；
+ * 这个判「不在这份仓库配置认可的主机集合里」，靠配置派生 —— 所以「期望值和实际值一起被改成
+ * 一个谁都没听说过的域名」也能红，而不是只有被人手工列进 `--forbid-host` 的那一个域名才会红。
+ *
+ * 命中的值是**包内实际地址**（白名单本身来自配置，不该反过来判期望值 —— 期望值另有逐字比对那一层）。
+ *
+ * @param {string} value 包内实际 base
+ * @param {{hosts: string[], extras: string[]}} allowed {@link resolveAllowedHosts} 的结果
+ * @param {string[]} forbidHosts 禁止域（已被禁止域判红的先走那条分支，这里不重复报）
+ * @returns {{host: string|null, value: string}|null} 不在白名单时返回命中的值；在白名单 / 判不出来时 null
+ */
+export function hostOutsideAllowlist(value, allowed, forbidHosts = []) {
+  if (typeof value !== 'string' || value === '') return null;
+  const host = hostOf(value);
+  // 非 URL（读不出主机名）交给第 6 项的地址判据与格式门禁，不在这里编一个主机名出来
+  if (host === null) return null;
+  const allow = new Set([...(allowed?.hosts ?? []), ...(allowed?.extras ?? [])].map((item) => String(item).toLowerCase()));
+  if (!allow.size) return null; // 白名单为空 = 判不出来（走前门的 exit 2），不在这里把每个包都判红
+  for (const forbidden of forbidHosts ?? []) {
+    if (host === forbidden || host.endsWith(`.${forbidden}`)) return null; // 已经由禁止域分支判红了
+  }
+  const hit = [...allow].some((item) => host === item || host.endsWith(`.${item}`));
+  return hit ? null : { host, value };
 }
 
 /** 检查项状态：pass 通过 / fail 明确不过 / unknown 判不出来（fail-closed） */
@@ -615,6 +802,13 @@ export function verifyReleaseApk(options) {
       .map((host) => host.trim().toLowerCase())
       .filter((host) => host !== ''))]
     : [];
+  // 允许的主机白名单（第 6 项的第二个独立维度）：从配置派生，不靠人传参（#763 的补正面）
+  const allowed = resolveAllowedHosts({ root: options.root, allowHosts: options.allowHosts });
+  // 版本号断言（可选参数）：给了就判，不给就在报告里显式写「未判」（不许静悄悄跳过）
+  const expectVersionCode = Number.isInteger(options.expectVersionCode) ? options.expectVersionCode : null;
+  const expectVersionName = typeof options.expectVersionName === 'string' && options.expectVersionName.trim() !== ''
+    ? options.expectVersionName.trim()
+    : null;
   // 「明文联调包」必须是**显式**认可的一件事：不传就是不许发（见下面第 5 项）
   const allowInsecure = options.allowInsecure === true;
   const apkArg = typeof options.apk === 'string' ? options.apk : '';
@@ -626,13 +820,24 @@ export function verifyReleaseApk(options) {
     expectCertSource: certExpectation.source,
     // 配置里那个值（即便 --expect-cert 覆盖了比对值，它也存在 —— 复核的人要看得出「配置是健康的」）
     configCert: certExpectation.configValue ?? null,
-    // 第 6 项（#763）：期望的包内 consume.baseUrl + 它来自哪里 + 本次的禁止域
+    // 第 6 项（#763）：期望的包内 consume.baseUrl + 它来自哪里 + 本次的禁止域 + 允许的主机白名单
     expectConsumeBase: consumeExpectation.value,
     expectConsumeBaseSource: consumeExpectation.source,
     forbidHosts,
+    allowedHosts: allowed.ok ? allowed.hosts : [],
+    productionHosts: allowed.ok ? allowed.prodHosts : [],
+    allowHosts: allowed.ok ? allowed.extras : [],
     consumeBase: null,
     allowInsecure,
     insecure: false,
+    // 版本号断言（给了才判；`status: 'skipped'` 会在报告里明确写「未判」，不假装通过）
+    versionAssert: {
+      enabled: expectVersionCode !== null || expectVersionName !== null,
+      expectVersionCode,
+      expectVersionName,
+      status: 'skipped',
+      detail: null,
+    },
     buildTools: null,
     info: {},
   };
@@ -643,19 +848,6 @@ export function verifyReleaseApk(options) {
   // 复核的人（和 `--json` 消费方）要能看出「这一次比对的期望值经得起配置层复核」，
   // 而不是只有全绿那一份结果里才带这个字段。
   base.certSources = { ok: true, kind: CERT_SOURCES.OK, exitCode: EXIT_OK };
-
-  // 第 6 项的期望值判不出来（配置读不到 / 缺字段 / `--expect-consume-base` 是空白）→ exit 2。
-  // 位置刻意放在「碰 APK 之前」：拿一个猜出来的期望值去比，比出来的绿是假绿（与第 4 项的前门同口径）。
-  if (!consumeExpectation.ok) {
-    return unknownResult(base, [
-      `包内 consume.baseUrl 的期望值判不出来（来源：${consumeExpectation.source}）：`,
-      `  ${consumeExpectation.invalid}`,
-      '',
-      '修法:',
-      '  1) 确认 config/endpoints.json 存在，且 consume.baseUrl 是非空字符串（唯一来源，不许在脚本里写第二份）；',
-      '  2) 只是想临时按别的地址验一下 → 显式传 --expect-consume-base <url>（输出里会标来源）。',
-    ].join('\n'));
-  }
 
   const expectCert = certExpectation.value;
 
@@ -672,6 +864,32 @@ export function verifyReleaseApk(options) {
     return unknownResult(base, `读不到 APK：${apk}（${error.code ?? error.message}）`);
   }
   if (!stat.isFile()) return unknownResult(base, `不是普通文件：${apk}`);
+
+  // 第 6 项的期望值判不出来（配置读不到 / 缺字段 / `--expect-consume-base` 是空白）→ exit 2。
+  // 位置刻意放在「碰 APK 之前」：拿一个猜出来的期望值去比，比出来的绿是假绿（与第 4 项的前门同口径）。
+  if (!consumeExpectation.ok) {
+    return unknownResult(base, [
+      `包内 consume.baseUrl 的期望值判不出来（来源：${consumeExpectation.source}）：`,
+      `  ${consumeExpectation.invalid}`,
+      '',
+      '修法:',
+      '  1) 确认 config/endpoints.json 存在，且 consume.baseUrl 是非空字符串（唯一来源，不许在脚本里写第二份）；',
+      '  2) 只是想临时按别的地址验一下 → 显式传 --expect-consume-base <url>（输出里会标来源）。',
+    ].join('\n'));
+  }
+
+  // 允许的主机白名单判不出来（配置读不到 / allowedHosts 空且没给 --allow-host）→ exit 2。
+  // 同样放在「碰 APK 之前」：白名单空集在报告里会读成「每个包都坏」，那是误导，不是判据。
+  if (!allowed.ok) {
+    return unknownResult(base, [
+      '允许的主机白名单判不出来（第 6 项的第二个维度）：',
+      `  ${allowed.invalid}`,
+      '',
+      '修法:',
+      `  1) 确认 ${ENDPOINTS_PROFILES.production} 的 allowedHosts 是非空字符串数组（唯一来源，别在脚本里写第二份）；`,
+      '  2) 临时联调域名确实不在配置里 → 显式传 --allow-host <host>（会进报告与 --json，不是静默放行）。',
+    ].join('\n'));
+  }
 
   const tools = resolveBuildTools({
     env,
@@ -710,7 +928,41 @@ export function verifyReleaseApk(options) {
     ? ''
     : `aapt2 dump xmltree 失败（${xmltree.error ? xmltree.error.message : `退出码 ${xmltree.status}`}）：${(xmltree.stderr || xmltree.stdout).trim().split('\n').slice(0, 3).join(' / ')}`;
 
+  // 包内自述（web 层产物写的 build-info.json）：**一次读取**，第 2 项的跨层同源与第 3/5/6 项的
+  // 「地址事实」共用。放在这里（而不是各自去读）是为了让「没有自述文件」只有一种结论。
+  const buildInfo = readBuildInfoEntry(apk);
+  const pkgConsumeBaseRaw = buildInfo.ok ? buildInfo.value?.endpoints?.consume?.baseUrl : undefined;
+  let actualConsumeBase = null;
+  let consumeWhy = buildInfo.ok ? null : buildInfo.why;
+  if (buildInfo.ok) {
+    if (typeof pkgConsumeBaseRaw !== 'string' || pkgConsumeBaseRaw === '') {
+      consumeWhy = `${BUILD_INFO_ENTRY} 里没有 endpoints.consume.baseUrl` +
+        `（${pkgConsumeBaseRaw === undefined ? '字段缺失' : `取值 ${JSON.stringify(pkgConsumeBaseRaw)}`}）：判不出包里的地址`;
+    } else {
+      actualConsumeBase = pkgConsumeBaseRaw;
+    }
+  }
+  // 「地址事实」：由包里那个地址本身派生，**不看标记**。标记是声明，地址是事实 —— 两者不一致时
+  // 以事实为准（否则「标记缺失 = 放行」就成了明文包 / 回环包的通用逃生口）。
+  const pkgConsumeUrl = actualConsumeBase === null ? null : parseUrlOrNull(actualConsumeBase);
+  const loopbackFact = pkgConsumeUrl ? isLoopbackHost(pkgConsumeUrl.hostname) : false;
+  const plaintextFact = pkgConsumeUrl
+    ? pkgConsumeUrl.protocol === 'http:' && !isLoopbackHost(pkgConsumeUrl.hostname)
+    : false;
+
   const variantMarker = meta.get(DEFAULT_MARKER);
+  // 跨层同源（web 产物自述 ↔ 原生清单标记）：两边都写变体名，却从来没人比过 —— 于是
+  // 「`pnpm build:internal` 出 web 产物 + gradle 不带 -PartifactVariant（默认 standard）」会得到
+  // 一个**标记为对外、JS 是内测**的包：自动更新把它当正式版推给所有人，而 JS 里的服务地址 /
+  // 模型 / 私有清单令牌全是内测那套。第 2 项从此判这件事，不再只看调用者传的 --variant。
+  const webVariant = buildInfo.ok && typeof buildInfo.value?.variant === 'string'
+    ? buildInfo.value.variant.trim()
+    : (buildInfo.ok ? null : undefined);
+  const crossLayerWhy = webVariant === undefined
+    ? `自述文件缺失，跨层同源未判（第 6 项会判不出来）：${BUILD_INFO_ENTRY}`
+    : webVariant === null
+      ? `${BUILD_INFO_ENTRY} 里没有 variant 字段（rspack 的 BuildInfoPlugin 一定会写）—— 这份自述不是真产物`
+      : null;
   if (!xmltreeOk) {
     checks.push(check('variant', STATUS.UNKNOWN, expectedVariant, '判不出来', xmltreeWhy));
   } else if (!variantMarker) {
@@ -725,8 +977,26 @@ export function verifyReleaseApk(options) {
       'variant', STATUS.FAIL, expectedVariant, variantMarker.value.trim(),
       '构建变体与 web 构建不同源（build:internal ↔ internal，build ↔ standard），自动更新会推错包',
     ));
+  } else if (webVariant === null) {
+    checks.push(check(
+      'variant', STATUS.FAIL, expectedVariant, `标记 ${variantMarker.value.trim()}，但${crossLayerWhy}`,
+      `原生清单说 ${variantMarker.value.trim()}，web 产物自述里根本没有变体字段 —— 判不出这个包到底是哪个变体，别发`,
+    ));
+  } else if (webVariant !== undefined && webVariant !== variantMarker.value.trim()) {
+    checks.push(check(
+      'variant', STATUS.FAIL, expectedVariant,
+      `原生标记 ${variantMarker.value.trim()} / web 自述 ${webVariant}`,
+      `跨层不同源：AndroidManifest 的 ${DEFAULT_MARKER}=${variantMarker.value.trim()}，` +
+        `但包内 ${BUILD_INFO_ENTRY} 的 variant=${webVariant}。` +
+        '典型成因：`pnpm run build:internal` 出完 web 产物，gradle 没带 -PartifactVariant=internal（默认 standard）。' +
+        '后果：自动更新把它当对外正式版推给所有人，而 JS 里是内测那套服务地址 / 模型 / 私有清单令牌。' +
+        '修法：让 web 变体与 -PartifactVariant 同源（build:internal ↔ internal，build ↔ standard），重新出包',
+    ));
   } else {
-    checks.push(check('variant', STATUS.PASS, expectedVariant, variantMarker.value.trim(), null));
+    checks.push(check(
+      'variant', STATUS.PASS, expectedVariant, variantMarker.value.trim(),
+      crossLayerWhy ?? `跨层同源：${BUILD_INFO_ENTRY} 的 variant 与清单标记一致（${webVariant}）`,
+    ));
   }
 
   const loopbackMarker = meta.get(DEFAULT_LOOPBACK_MARKER);
@@ -736,10 +1006,27 @@ export function verifyReleaseApk(options) {
   if (!xmltreeOk) {
     checks.push(check('loopback', STATUS.UNKNOWN, '不存在或 false', '判不出来', xmltreeWhy));
   } else if (!loopbackMarker) {
-    // 老包没有这个标记：#601 的闸 2 也是「读不到就放行」，这里同口径，避免误伤历史包
-    checks.push(check('loopback', STATUS.PASS, '不存在或 false', '标记缺失（视为 false）', null));
+    // 老包没有这个标记：#601 的闸 2 也是「读不到就放行」，这里同口径，避免误伤历史包。
+    // 但**地址事实**优先：包里那个地址真是回环时，标不标记都拦。
+    if (loopbackFact) {
+      checks.push(check(
+        'loopback', STATUS.FAIL, '不存在或 false', `标记缺失，但包内地址是回环 ${actualConsumeBase}`,
+        `回环标记缺失，但 ${BUILD_INFO_ENTRY} 的 consume.baseUrl 就是回环地址 —— 任何真机都连不上后端（#601）。` +
+          '标记是声明，地址是事实；缺标记不能当「不是回环包」放行',
+      ));
+    } else {
+      checks.push(check('loopback', STATUS.PASS, '不存在或 false', '标记缺失（视为 false）', null));
+    }
   } else if (loopbackRaw === 'false' || loopbackRaw === '0') {
-    checks.push(check('loopback', STATUS.PASS, '不存在或 false', loopbackRaw, null));
+    if (loopbackFact) {
+      checks.push(check(
+        'loopback', STATUS.FAIL, '不存在或 false', `${loopbackRaw}，但包内地址是回环 ${actualConsumeBase}`,
+        `产物自证标记与事实不符：清单写着 LOOPBACK_CONSUME=${loopbackRaw}，可 ${BUILD_INFO_ENTRY} 的 consume.baseUrl ` +
+          '是回环地址（127.0.0.1 / localhost / ::1），真机连不上后端（#601）。以地址为准',
+      ));
+    } else {
+      checks.push(check('loopback', STATUS.PASS, '不存在或 false', loopbackRaw, null));
+    }
   } else if (loopbackRaw === 'true' || loopbackRaw === '1') {
     checks.push(check(
       'loopback', STATUS.FAIL, '不存在或 false', loopbackRaw,
@@ -777,18 +1064,48 @@ export function verifyReleaseApk(options) {
     ? insecureMarker.value.trim().toLowerCase()
     : (insecureMarker ? '<非字符串>' : null);
   const insecureIsTrue = insecureRaw === 'true' || insecureRaw === '1';
-  base.insecure = xmltreeOk && insecureIsTrue;
+  // 结论行与 `--json` 的 `insecure`：标记为真**或**地址事实是明文，二者取并（都意味着「这个包不该公开分发」）
+  base.insecure = xmltreeOk && (insecureIsTrue || plaintextFact);
   if (!xmltreeOk) {
     checks.push(check('insecure', STATUS.UNKNOWN, '不存在或 false', '判不出来', xmltreeWhy));
+  } else if (plaintextFact && !insecureIsTrue) {
+    // 地址是事实、标记是声明：明文包没带（或带错）标记 = 上传侧看不见它 → 会被当正式包分发。
+    // 这一条与 `--allow-insecure` **无关**：放行通道认的是「这个包自证它是明文包」，标记都没有就无从放行。
+    checks.push(check(
+      'insecure', STATUS.FAIL, '不存在或 false',
+      `标记 ${insecureRaw ?? '缺失'}，但包内地址是明文 ${actualConsumeBase}`,
+      `产物自证标记与事实不符：${BUILD_INFO_ENTRY} 的 consume.baseUrl 是非回环明文 http（${actualConsumeBase}），` +
+        `但清单里 INSECURE_CONSUME=${insecureRaw ?? '缺失'}。` +
+        '标记是声明、地址是事实，以事实为准：这种包上传到 dl 时服务端的标记判据看不见它，会被当正式包分发。' +
+        '修法：用 -PallowInsecureConsume=true + ALLOW_INSECURE_CONSUME=true 重新出包（两层同源，标记才会写 true）',
+    ));
   } else if (!insecureMarker) {
     checks.push(check('insecure', STATUS.PASS, '不存在或 false', '标记缺失（视为 false）', null));
   } else if (insecureRaw === 'false' || insecureRaw === '0') {
     checks.push(check('insecure', STATUS.PASS, '不存在或 false', insecureRaw, null));
   } else if (insecureIsTrue) {
-    if (allowInsecure) {
+    // 不允许的组合（显式挡住，不靠人记）：**明文 + 生产主机**。`--allow-insecure` 的语义是
+    // 「这是内网 staging 联调包」，它认的是一台联调后端，不是「我允许把生产后端降到 http」。
+    // 事故形状：有人把 config/endpoints.json 的 consume.baseUrl 改成 http://<生产域> 跑一次构建，
+    // 又照常传了 ALLOW_INSECURE_CONSUME / -PallowInsecureConsume / --allow-insecure —— 三道闸全放行，
+    // 于是全量用户的 API Key 明文出网。所以这一条**不看 --allow-insecure**：它判的是地址本身。
+    const plaintextProdHost = plaintextFact ? findHostIn(actualConsumeBase, allowed.prodHosts) : null;
+    if (plaintextProdHost !== null) {
+      checks.push(check(
+        'insecure', STATUS.FAIL, '不存在或 false',
+        `标记 ${insecureRaw}，且包内地址是**生产主机**上的明文 ${actualConsumeBase}`,
+        `不允许的组合：明文 http + 生产主机 '${plaintextProdHost}'（来自 ${ENDPOINTS_PROFILES.production} 的 allowedHosts）。` +
+          '--allow-insecure 的语义是「内网 staging 联调包」，它不给「把生产后端降到 http」放行 —— ' +
+          '这个包会把用户的 API Key / 会话明文送出网。' +
+          '修法：生产地址必须是 https（改回 config/endpoints.json 的 scheme 重新出包）；' +
+          '确实要联调就用 config/endpoints.staging.json 的联调主机 + BUILD_VARIANT=staging',
+      ));
+    } else if (allowInsecure) {
       checks.push(check(
         'insecure', STATUS.PASS, '不存在或 false', `${insecureRaw}（--allow-insecure 已确认：staging-only）`,
-        '明文联调包：仅限内网 staging 联调，禁止公开分发 / 禁止进公开清单',
+        plaintextFact
+          ? `明文联调包：仅限内网 staging 联调，禁止公开分发 / 禁止进公开清单（地址事实也一致：${actualConsumeBase}）`
+          : '明文联调包：仅限内网 staging 联调，禁止公开分发 / 禁止进公开清单',
       ));
     } else {
       checks.push(check(
@@ -810,34 +1127,10 @@ export function verifyReleaseApk(options) {
   // `rspack.config.ts` 在 afterEmit 里按注入值写的产物自述文件，一字段一地址。
   // 为什么要有这一项：1.4.5–1.4.8 四个包都指向了错的实例（#763），而前五项每次都全绿 ——
   // 「包里连的是谁」从来没人判过。
+  //
+  // 自述文件在**第 2 项之前**已经读过一次（`buildInfo` / `actualConsumeBase` / `consumeWhy`），
+  // 这里不再重读：读两遍就会有两套「缺失时算什么」的说法。
   const expectConsumeBase = consumeExpectation.value;
-  let actualConsumeBase = null;
-  let consumeWhy = null;
-  try {
-    const buildInfoBuf = readZipEntry(fs.readFileSync(apk), BUILD_INFO_ENTRY);
-    if (buildInfoBuf === null) {
-      consumeWhy =
-        `APK 里没有 ${BUILD_INFO_ENTRY}：` +
-        'cap sync 没跑 / 产物不是这次 `pnpm build` 出的（没有自述文件就无法证明包里连的是哪台后端）';
-    } else {
-      let buildInfo = null;
-      try {
-        buildInfo = JSON.parse(buildInfoBuf.toString('utf8'));
-      } catch (error) {
-        consumeWhy = `${BUILD_INFO_ENTRY} 不是合法 JSON（${error.message}）：判不出包里的地址`;
-      }
-      // 解析失败时不再往下读字段：否则「非 JSON」会被下一条覆盖成「字段缺失」，理由就丢了
-      const value = buildInfo === null ? undefined : buildInfo?.endpoints?.consume?.baseUrl;
-      if (consumeWhy === null && (typeof value !== 'string' || value === '')) {
-        consumeWhy = `${BUILD_INFO_ENTRY} 里没有 endpoints.consume.baseUrl` +
-          `（${value === undefined ? '字段缺失' : `取值 ${JSON.stringify(value)}`}）：判不出包里的地址`;
-      } else if (consumeWhy === null) {
-        actualConsumeBase = value;
-      }
-    }
-  } catch (error) {
-    consumeWhy = `读 APK 字节 / 解压 ${BUILD_INFO_ENTRY} 失败：${error.message}（判不出来）`;
-  }
 
   if (consumeWhy !== null) {
     // 缺自述文件 / 非 JSON / 无字段 = **判不出来**（exit 2，fail-closed）：
@@ -849,10 +1142,14 @@ export function verifyReleaseApk(options) {
       actual: actualConsumeBase,
       source: consumeExpectation.source,
       forbidHosts,
+      allowedHosts: allowed.hosts,
+      allowHosts: allowed.extras,
       forbiddenHit: null,
+      hostNotAllowed: null,
     };
     // ① 禁止域（独立维度，先判）：期望 == 实际也要能红 —— 否则「把期望值一起改成那个错域名」
     //    就能自比成绿（1.4.5–1.4.8 的错就是这种形状）。
+    let hostNotAllowed = null;
     const forbiddenHit = findForbiddenHostHit([actualConsumeBase, expectConsumeBase], forbidHosts);
     if (forbiddenHit !== null) {
       base.consumeBase.forbiddenHit = forbiddenHit;
@@ -872,10 +1169,27 @@ export function verifyReleaseApk(options) {
           `实际 '${actualConsumeBase}'（APK: ${BUILD_INFO_ENTRY}）—— 逐字比对，不做规范化；` +
           '多半是出包时 `CONSUME_BASE_OVERRIDE` / 构建分支不对，改配置或重新出包，别改期望值',
       ));
+    } else if ((hostNotAllowed = hostOutsideAllowlist(actualConsumeBase, allowed, forbidHosts)) !== null) {
+      // ③ 主机白名单（#763 的补正面）：期望 == 实际（都指向错域名）时，前两条都是绿的 —— 这正是
+      //    1.4.5–1.4.8 的形状。白名单从配置派生（`allowedHosts`），所以不需要谁记得传 --forbid-host。
+      base.consumeBase.hostNotAllowed = hostNotAllowed;
+      checks.push(check(
+        'consumeBase', STATUS.FAIL, expectConsumeBase, actualConsumeBase,
+        `包内 consume.baseUrl 的主机 '${hostNotAllowed.host}' 不在仓库配置允许的主机里：期望值 '${expectConsumeBase}'、` +
+          `实际 '${actualConsumeBase}' 逐字相同也没用（地址本身不在这份白名单内）。` +
+          `允许的主机来自 ${allowed.sources.join(' + ') || '配置'}（共 ${allowed.hosts.length} 个）` +
+          `${allowed.extras.length ? ` + --allow-host ${allowed.extras.join(' / ')}` : ''}。` +
+          '这正是 #763 的那类事故：1.4.5–1.4.8 全指向一个已废弃的实例。' +
+          '修法：把 config/endpoints.json 的 consume.baseUrl 改回允许的主机重新出包；' +
+          '临时联调域名确实要放行，就把该主机加进 config/endpoints.staging.json 的 allowedHosts，或显式传 --allow-host（会留痕）',
+      ));
     } else {
       checks.push(check(
         'consumeBase', STATUS.PASS, expectConsumeBase, actualConsumeBase,
-        forbidHosts.length ? `未命中禁止域（${forbidHosts.join(' / ')}）` : null,
+        [
+          forbidHosts.length ? `未命中禁止域（${forbidHosts.join(' / ')}）` : null,
+          `主机 ${hostOf(actualConsumeBase) ?? '<非 URL>'} 在白名单内`,
+        ].filter(Boolean).join('；'),
       ));
     }
   }
@@ -903,8 +1217,19 @@ export function verifyReleaseApk(options) {
   }
   base.info = info;
 
+  // ── 版本号断言（可选参数）：`--expect-version-code` / `--expect-version-name` ─────────────
+  //
+  // 为什么单列成「断言」而不是第七行：这张表的六项判的是「包是不是按规矩打的」，行数被文档、
+  // 报告、测试钉死了；版本号判的是「这是不是**这一次**要发的那个包」—— 两件事都要判，但不是一回事。
+  // 不传参数时状态是 `skipped`，报告里会明写「未判」（不许让「没查」看起来像「查过没问题」）。
+  // 便宜的失败点在这里：`releases.json` / dl 上传侧（409 / VERSION_CONFLICT）要等到上传才红，
+  // 而「package.json 的 versionCode=41、包内是 40」在出包这一秒就能判。
+  base.versionAssert = judgeVersion(info, { expectVersionCode, expectVersionName });
+
   const failing = checks.filter((item) => item.status === STATUS.FAIL).map((item) => item.id);
   const unknown = checks.filter((item) => item.status === STATUS.UNKNOWN).map((item) => item.id);
+  if (base.versionAssert.status === STATUS.FAIL) failing.push('version');
+  if (base.versionAssert.status === STATUS.UNKNOWN) unknown.push('version');
   const exitCode = failing.length ? EXIT_FAIL : unknown.length ? EXIT_UNKNOWN : EXIT_OK;
   return {
     ...base,
@@ -918,6 +1243,82 @@ export function verifyReleaseApk(options) {
   };
 }
 
+/**
+ * 版本号断言：包内 versionName / versionCode 与调用者给的期望值逐个比对（给了哪个判哪个）。
+ *
+ * 三个结局与六项同一口径：`pass` / `fail`（读到值、值不对）/ `unknown`（判不出来），
+ * 外加 `skipped`（没传期望值 —— 报告里必须写「未判」，不能默认当通过）。
+ *
+ * @param {{versionName?: string|null, versionCode?: number|null}} info
+ * @param {{expectVersionCode?: number|null, expectVersionName?: string|null}} expect
+ * @returns {{enabled: boolean, status: 'skipped'|'pass'|'fail'|'unknown', expectVersionCode: number|null,
+ *            expectVersionName: string|null, actualVersionCode: number|null, actualVersionName: string|null,
+ *            detail: string|null}}
+ */
+export function judgeVersion(info, expect = {}) {
+  const expectVersionCode = Number.isInteger(expect.expectVersionCode) ? expect.expectVersionCode : null;
+  const expectVersionName = typeof expect.expectVersionName === 'string' && expect.expectVersionName.trim() !== ''
+    ? expect.expectVersionName.trim()
+    : null;
+  const actualVersionCode = Number.isInteger(info?.versionCode) ? info.versionCode : null;
+  const actualVersionName = typeof info?.versionName === 'string' && info.versionName !== '' ? info.versionName : null;
+  if (expectVersionCode === null && expectVersionName === null) {
+    return {
+      enabled: false,
+      status: 'skipped',
+      expectVersionCode,
+      expectVersionName,
+      actualVersionCode,
+      actualVersionName,
+      detail: '未传 --expect-version-code / --expect-version-name：这一项**没判**（不是通过）',
+    };
+  }
+  const missing = [];
+  if (expectVersionCode !== null && actualVersionCode === null) missing.push('versionCode');
+  if (expectVersionName !== null && actualVersionName === null) missing.push('versionName');
+  if (missing.length) {
+    return {
+      enabled: true,
+      status: STATUS.UNKNOWN,
+      expectVersionCode,
+      expectVersionName,
+      actualVersionCode,
+      actualVersionName,
+      detail: `读不出包内 ${missing.join(' / ')}（aapt2 dump badging 没给出）：判不出来，按禁止发布处理`,
+    };
+  }
+  const mismatch = [];
+  if (expectVersionCode !== null && actualVersionCode !== expectVersionCode) {
+    mismatch.push(`versionCode 包内 ${actualVersionCode} ≠ 期望 ${expectVersionCode}`);
+  }
+  if (expectVersionName !== null && actualVersionName !== expectVersionName) {
+    mismatch.push(`versionName 包内 ${actualVersionName} ≠ 期望 ${expectVersionName}`);
+  }
+  if (mismatch.length) {
+    return {
+      enabled: true,
+      status: STATUS.FAIL,
+      expectVersionCode,
+      expectVersionName,
+      actualVersionCode,
+      actualVersionName,
+      detail:
+        `${mismatch.join('；')} —— 这个包不是本次要发的那个版本（拿错包 / 忘了改 package.json 的 `
+        + '`androidVersionCode` / 复用了上一份 dist）。'
+        + 'versionCode 不大于线上 latest 时 dl 会 409、用户也收不到更新，所以必须在出包这一秒红',
+    };
+  }
+  return {
+    enabled: true,
+    status: STATUS.PASS,
+    expectVersionCode,
+    expectVersionName,
+    actualVersionCode,
+    actualVersionName,
+    detail: `包内 versionName=${actualVersionName ?? '—'} / versionCode=${actualVersionCode ?? '—'} 与期望一致`,
+  };
+}
+
 /** 结论行尾的来源标注（期望指纹是哪来的，复核的人要看得见） */
 const certSourceSuffix = (result) => `（期望指纹来源：${result.expectCertSource ?? '未确定'}）`;
 
@@ -925,7 +1326,7 @@ const certSourceSuffix = (result) => `（期望指纹来源：${result.expectCer
  * `failing` 里的 id → 结论行里的人话。五项检查直接用 id（`cert` / `insecure` …，与 `--json` 对齐），
  * 唯一例外是前门那条 `certSources` —— 它不是 APK 的某一项，而是「期望值本身不健康」。
  */
-const FAILING_LABEL = { certSources: '期望证书指纹的来源/断言' };
+const FAILING_LABEL = { certSources: '期望证书指纹的来源/断言', version: '版本号断言' };
 const failingLabel = (result) => result.failing.map((id) => FAILING_LABEL[id] ?? id).join(' / ');
 
 /** 表格 + 附加信息 → 人看的报告 */
@@ -948,6 +1349,11 @@ export function formatReport(result) {
       + `  来源=${result.expectConsumeBaseSource ?? '未确定'}`
       + `  禁止域=${(result.forbidHosts ?? []).length ? result.forbidHosts.join(' / ') : '（无）'}`,
   );
+  // 允许的主机白名单（第 6 项的第三个维度）：来源是配置，不是命令行 —— 复核的人要看得见
+  // 「这次是按哪份 allowedHosts 判的」，否则红了会以为闸门认死了某个域名。
+  lines.push(
+    `        允许的主机=${(result.allowedHosts ?? []).length} 个（配置派生${(result.allowHosts ?? []).length ? ` + --allow-host ${result.allowHosts.join(' / ')}` : ''}）`,
+  );
   lines.push('');
   const titleWidth = Math.max(...CHECKS.map((item) => displayWidth(item.title.replace(/^\d+ /, ''))));
   lines.push(`${pad('#', 1)}  ${pad('检查', titleWidth)}  结果     实际`);
@@ -955,6 +1361,23 @@ export function formatReport(result) {
   for (const item of result.checks) {
     const index = CHECKS.findIndex((meta) => meta.id === item.id) + 1;
     lines.push(`${pad(String(index), 1)}  ${pad(item.title.replace(/^\d+ /, ''), titleWidth)}  ${STATUS_LABEL[item.status]}  ${item.actual}`);
+  }
+  // 版本号断言（可选参数）：三种状态都要显式打出来 —— 尤其是「未判」，它不许看起来像通过
+  const versionAssert = result.versionAssert ?? null;
+  if (versionAssert) {
+    const label = versionAssert.status === STATUS.PASS
+      ? '一致'
+      : versionAssert.status === STATUS.FAIL
+        ? '不一致'
+        : versionAssert.status === STATUS.UNKNOWN
+          ? '判不出来'
+          : '未判';
+    const want = [
+      versionAssert.expectVersionName !== null ? `versionName=${versionAssert.expectVersionName}` : null,
+      versionAssert.expectVersionCode !== null ? `versionCode=${versionAssert.expectVersionCode}` : null,
+    ].filter(Boolean).join(' / ');
+    lines.push('');
+    lines.push(`版本号断言：${label}${want ? `（期望 ${want}）` : '（未传 --expect-version-code / --expect-version-name）'}`);
   }
   const info = result.info ?? {};
   lines.push('');
@@ -976,13 +1399,20 @@ export function formatReport(result) {
           + `${certSourceSuffix(result)}`,
       );
     } else {
-      lines.push(`结论：PASS（${result.checks.length}/${result.checks.length} 项通过）—— 可以发布。${certSourceSuffix(result)}`);
+      lines.push(
+        `结论：PASS（${result.checks.length}/${result.checks.length} 项通过）—— 可以发布。${certSourceSuffix(result)}`
+        + (result.versionAssert?.status === STATUS.PASS ? '（版本号断言也一致）' : ''),
+      );
     }
   } else if (result.conclusion === 'FAIL') {
     const detail = result.checks.filter((item) => item.status === STATUS.FAIL);
     lines.push(`结论：FAIL（${failingLabel(result)} 不通过）—— 禁止发布。${certSourceSuffix(result)}`);
     for (const item of detail) {
       if (item.detail) lines.push(`  · ${item.title}：${item.detail}`);
+    }
+    // 版本号断言不在六行表里，它的理由要自己补一行，否则会出现「红了但没说为什么」
+    if (result.versionAssert?.status === STATUS.FAIL && result.versionAssert.detail) {
+      lines.push(`  · 版本号断言：${result.versionAssert.detail}`);
     }
     // 前门拦下时（配置与已发布断言不等 / gradle 第二份副本不等）五项一项都没判，
     // 红的理由只在 result.error 里 —— 不抄出来就等于「红了但不说是哪两个值」。
@@ -997,6 +1427,9 @@ export function formatReport(result) {
       for (const item of result.checks.filter((entry) => entry.status === STATUS.UNKNOWN)) {
         lines.push(`  · ${item.title}：${item.detail}`);
       }
+      if (result.versionAssert?.status === STATUS.UNKNOWN && result.versionAssert.detail) {
+        lines.push(`  · 版本号断言：${result.versionAssert.detail}`);
+      }
     }
   }
   return lines.join('\n');
@@ -1005,7 +1438,8 @@ export function formatReport(result) {
 function usage() {
   return [
     `用法: node scripts/${SCRIPT} <apk> [--variant standard|internal] [--expect-cert <sha256>]`,
-    '       [--expect-consume-base <url>] [--forbid-host <host>]... [--allow-insecure] [--json]',
+    '       [--expect-consume-base <url>] [--forbid-host <host>]... [--allow-host <host>]... [--allow-insecure]',
+    '       [--expect-version-code <n>] [--expect-version-name <v>] [--json]',
     '',
     '前门（碰 APK 之前，任何情况下都先跑）：期望证书指纹的配置完整性 —— 配置存在 / 64 位 hex /',
     '        与已发布断言一致 / gradle 里没有第二份不等的副本；不健康就 exit≠0。',
@@ -1042,8 +1476,17 @@ function usage() {
     '--expect-consume-base <url>  只覆盖第 6 项「拿哪个值与 APK 比对」：不传时从配置派生；',
     '                  来源会写进报告与 --json 的 expectConsumeBaseSource。',
     '--forbid-host <host>  禁止域，可重复（如 --forbid-host sub2api.rose7.cn）：包里的地址命中就 exit 1。',
+    '--allow-host <host>   显式把一台主机加进允许名单（临时联调域名），可重复；会进报告与 --json（不是静默放行）。',
+    '                      **默认**允许的主机来自配置（config/endpoints.json / endpoints.staging.json 的',
+    '                      allowedHosts 并集）：包内地址的主机不在这份名单里 → exit 1，不需要谁记得传参。',
+    '                      另外「明文 http + 生产主机」是**不允许的组合**：带了 --allow-insecure 也 exit 1。',
     '',
-    '退出码: 0 六项全过 / 1 有项目明确不过（报告点名；含配置与已发布断言不等） /',
+    '--expect-version-code <n> / --expect-version-name <v>  版本号断言：包内 versionCode / versionName 必须等于',
+    '                  这两个值（只给哪个判哪个）。不给就**不判**，报告里会明写「未判」（不许看起来像通过）。',
+    '                  这是「线上发的是不是这次构建的包」最便宜的失败点：不传就得等 dl 的 409 才红。',
+    '',
+    '退出码: 0 六项全过（且版本号断言不是 fail/unknown） /',
+    '        1 有项目明确不过（报告点名；含配置与已发布断言不等、主机不在白名单、明文+生产主机、版本号不符） /',
     '        2 判不出来（缺 SDK 工具、配置读不到、--expect-cert 非法、build-info 读不出等，同样禁止发布）',
   ].join('\n');
 }
@@ -1056,6 +1499,9 @@ function parseArgs(argv) {
     // 第 6 项（#763）：期望的包内 consume.baseUrl（不传则从 config/endpoints.json 派生）+ 禁止域（可重复）
     expectConsumeBase: null,
     forbidHosts: [],
+    allowHosts: [],
+    expectVersionCode: null,
+    expectVersionName: null,
     json: false,
     help: false,
     buildToolsVersion: null,
@@ -1077,6 +1523,16 @@ function parseArgs(argv) {
     else if (arg === '--expect-cert') options.expectCert = value();
     else if (arg === '--expect-consume-base') options.expectConsumeBase = value();
     else if (arg === '--forbid-host') options.forbidHosts.push(value());
+    else if (arg === '--allow-host') options.allowHosts.push(value());
+    else if (arg === '--expect-version-code') {
+      const raw = value();
+      const parsed = Number(raw);
+      // 版本号是数字（Android versionCode 是整数）：写成 41a / 4.1 一律当用法错误，不许 parseInt 截断
+      if (!/^[0-9]+$/.test(raw.trim()) || !Number.isSafeInteger(parsed)) {
+        throw new Error(`--expect-version-code 必须是十进制整数，收到 '${raw}'`);
+      }
+      options.expectVersionCode = parsed;
+    } else if (arg === '--expect-version-name') options.expectVersionName = value();
     else if (arg === '--build-tools') options.buildToolsVersion = value();
     else if (arg === '-h' || arg === '--help') options.help = true;
     else if (arg.startsWith('-')) throw new Error(`未知参数: ${arg}`);
@@ -1110,6 +1566,9 @@ function main(argv) {
     expectCert: options.expectCert ?? undefined,
     expectConsumeBase: options.expectConsumeBase ?? undefined,
     forbidHosts: options.forbidHosts,
+    allowHosts: options.allowHosts,
+    expectVersionCode: options.expectVersionCode ?? undefined,
+    expectVersionName: options.expectVersionName ?? undefined,
     buildToolsVersion: options.buildToolsVersion,
     allowInsecure: options.allowInsecure,
   });
@@ -1124,6 +1583,10 @@ function main(argv) {
     const reason = result.conclusion === 'FAIL'
       ? (result.failing.includes('insecure') && !result.allowInsecure
         ? '发布校验不通过：insecure —— 这是明文联调包，禁止公开分发（确认只做 staging 联调请加 --allow-insecure）'
+        : result.failing.includes('insecure')
+          // 已带 --allow-insecure 还被判红 = 只有一种可能：明文打的是**生产主机**（不允许的组合），
+          // 或者产物自证标记与地址事实不符。归因必须说清「这两个不是同一件事」。
+          ? '发布校验不通过：insecure —— 明文地址与生产主机组合，或产物自证标记与包内地址不符（--allow-insecure 只给内网联调主机放行，两点见报告）'
         : result.failing.includes('certSources')
           // 前门拦下（#705 收尾）：措辞要说清「不是 APK 的问题，是期望值本身不可信」，两个值在报告里
           ? '发布校验不通过：期望证书指纹的来源/断言不一致（配置 ≠ 已发布，或 gradle 里还有第二份副本）—— 两个值见上面的报告'

@@ -202,3 +202,48 @@ test('⑤ 陈旧 textarea 不触发滚动：不在 editingIds / 未连接 / 没�
   )
   assert.deepEqual(stalePlan, { shift: 0, keepSticky: true }, '陈旧目标 → centerEditor 写入次数必须是 0')
 })
+
+/* ------------------------------------------------------- #610 钳位修复的收敛性 */
+//
+// 修复前（纯内容坐标）在钳位帧上算出来的量是这样的（390×844 实测，D=120）：
+//   展开 → 补 +1850（写成功）；收起 → 浏览器先钳掉 1730，再按内容坐标补 −1850。
+// 也就是说**同一对操作给出两个反号的量**，收敛器（反号即判自激）本来是拦它的；
+// 但用户点标题这一下 pointerdown 会把收敛状态清账（`resetAnchorGuard`），于是没拦住，
+// 而钳位损失就永久留在落点上（−1730px）。
+//
+// 修复后（视口坐标 + 记账）钳位帧给出的量是 −120 / +81 这类**已经把钳位算进去**的小量，
+// 与前一帧不再构成「补了又弹回来」的反号序列 —— 所以收敛器**不需要放宽**（ANCHOR_SHIFT_MIN /
+// ANCHOR_STREAK_MAX / 反号判据一个字都不改），钳位场景也不会被判成 sign-flip / blocked。
+// 下面用真实几何把这条链走一遍，钉住「口径没被放宽、场景也不误判」。
+
+const { anchorShiftViewport } = await import('../../src/utils/scrollAnchor.ts')
+
+test('⑨ 钳位场景不被误判成 sign-flip / blocked，且收敛器口径没放宽', () => {
+  // 390×844 / D=120 实测：收起时内容缩短 1850，浏览器把 st 9929 钳到 8199（吞 1730）
+  const expandFrame = decideAnchorCorrection({ ...idle, shift: 1850, previousShift: 0, streak: 0 })
+  assert.equal(expandFrame.apply, true, '展开补 +1850 照常落地')
+
+  const clamped = anchorShiftViewport({
+    // 记录时：行顶内容坐标 20000、scrollTop 9929 → 该行离视口顶 10071
+    anchor: { id: 'a29', top: 20000, scrollTop: 9929, viewportTop: 10071 },
+    rows: [{ id: 'a29', top: 20000 - 1850, height: 900 }],
+    scrollTop: 8199,
+    maxScrollTop: 8199,
+  })
+  assert.equal(clamped.clampLoss, 1730, '账上记着浏览器吞掉的 1730')
+  assert.equal(clamped.shift, -120, '视口差 = 内容位移 + 钳位量，不再是 −1850')
+  // 用户点标题 → pointerdown 清账（组件里 resetAnchorGuard），因此 previousShift 为 0
+  const collapseFrame = decideAnchorCorrection({ ...idle, shift: clamped.shift, previousShift: 0, streak: 0 })
+  assert.equal(collapseFrame.apply, true, '钳位帧必须放行')
+  assert.notEqual(collapseFrame.reason, 'sign-flip')
+  assert.notEqual(collapseFrame.reason, 'blocked')
+
+  // 对照：旧口径（−1850）与钳位补偿（+1730）拼在一起才是真的反号自激，收敛器照旧拦
+  const staleFlip = decideAnchorCorrection({ ...idle, shift: -1850, previousShift: 1730 })
+  assert.equal(staleFlip.apply, false, '口径没被放宽：反号照样拒')
+  assert.equal(staleFlip.reason, 'sign-flip')
+
+  // 付欠账那一帧与它前面的位移同号 → 不触发反号
+  assert.equal(decideAnchorCorrection({ ...idle, shift: 54, previousShift: 0 }).reason, 'apply')
+  assert.equal(decideAnchorCorrection({ ...idle, shift: 54, previousShift: 81 }).apply, true)
+})

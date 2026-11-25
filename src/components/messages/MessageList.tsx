@@ -10,10 +10,11 @@ import type { Session } from '../../services/chat/types.js'
 import { closeSearchPanel } from '../search/searchPanelState.js'
 import { prefersReducedMotion } from '../../utils/usePresence.js'
 import {
-  anchorShift,
+  CLAMP_EPS,
+  anchorShiftViewport,
   pickAnchor,
   type RowSpan,
-  type ScrollAnchor,
+  type ViewportAnchor,
 } from '../../utils/scrollAnchor.js'
 import { AssistantMessage } from './AssistantMessage.js'
 import { ScrollToBottomContext, ScrollToBottomStateContext } from './scrollContext.js'
@@ -50,6 +51,12 @@ const STICKY_THRESHOLD = 40
  * 这时候弹按钮只会挡住正文；翻上去一两屏才是真的需要它。
  */
 const TO_BOTTOM_THRESHOLD = 200
+/**
+ * #610 钳位修复：用户自己滚过之后多久内不再用「旧锚点的视口快照」。
+ * 视口快照记的是「那一刻这一行在屏幕上哪」，用户滚过它就作废了 —— 这条时间窗只是兜底，
+ * 真正的判据是 `anchorShiftViewport` 里的「位置变化能不能归因于钳位」。
+ */
+const USER_SCROLL_WINDOW = 500
 const EMPTY_VERSIONS: MessageVersions = { ids: [], index: -1 }
 
 /**
@@ -140,8 +147,18 @@ export const MessageList = ({
    * #610：上一次提交时「第一条可见行」的锚点（id + 内容坐标系偏移）。
    * 行高实测回填 / 估值变化会改动上方占位，靠它把阅读位置钉住，见文件末尾那条 layout effect。
    */
-  const measureAnchorRef = useRef<(ScrollAnchor & { index: number }) | null>(null)
-  const anchorRef = useRef<(ScrollAnchor & { index: number; scrollTop: number }) | null>(null)
+  const measureAnchorRef = useRef<(ViewportAnchor & { index: number }) | null>(null)
+  const anchorRef = useRef<(ViewportAnchor & { index: number; scrollTop: number }) | null>(null)
+  /**
+   * #610 钳位修复的账本：锚点校正的目标点偶尔落在内容之外（内容缩短得比「距底距离」还多），
+   * `[0, maxScrollTop]` 夹掉的那一截记在这里，等正文长出来再付 —— 否则这一截照样是
+   * 「钳位丢多少落点错多少」，只是换了个地方丢。
+   */
+  const clampOwedRef = useRef(0)
+  /** 我们自己最后一次写 scrollTop 的值与时间：滚动事件里要把「自己的写」与「用户滚」分开 */
+  const ownWriteRef = useRef({ value: Number.NaN, at: 0 })
+  /** 用户自己滚动的最近时刻（非钳位、非我们自己的写）；超过 `USER_SCROLL_WINDOW` 视为没动 */
+  const userScrolledAtRef = useRef(0)
   /** #610：本帧的滚动位置是「故意挪的」（版本切换定位），不要被锚点修正拉回去。 */
   const skipAnchorRef = useRef(false)
   const sessionIdRef = useRef(session.id)
@@ -167,6 +184,9 @@ export const MessageList = ({
   const anchorGuardRef = useRef({ previousShift: 0, streak: 0, blocked: false })
   const resetAnchorGuard = useCallback(() => {
     anchorGuardRef.current = { previousShift: 0, streak: 0, blocked: false }
+    // 用户动手了：欠账与「用户滚过」的标记一起作废 —— 位置归用户说了算
+    clampOwedRef.current = 0
+    userScrolledAtRef.current = 0
   }, [])
   const onEditingChange = useCallback(
     (id: string, editing: boolean, textarea?: HTMLTextAreaElement | null) => {
@@ -236,6 +256,8 @@ export const MessageList = ({
       centeredEditorRef.current = target.id
       scroll.scrollTop += plan.shift
       scrollTopRef.current = scroll.scrollTop
+      // 这也是「我们自己写的位置」：滚动事件里不许记成「用户自己滚」（#610 钳位修复）
+      ownWriteRef.current = { value: scroll.scrollTop, at: Date.now() }
     }
     if (!plan.keepSticky) {
       stickyRef.current = false
@@ -269,6 +291,8 @@ export const MessageList = ({
     if (stickyRef.current) {
       el.scrollTop = el.scrollHeight
       scrollTopRef.current = el.scrollTop
+      // 跟随式写入同样是「我们写的」，滚动事件里不许记成用户手势（#610 钳位修复）
+      ownWriteRef.current = { value: el.scrollTop, at: Date.now() }
     }
   }, [])
 
@@ -409,14 +433,23 @@ export const MessageList = ({
         const content = contentRef.current
         if (scroll && content && !stickyRef.current && !jumpRef.current) {
           const previous = anchorRef.current
-          if (previous && previous.scrollTop === scroll.scrollTop) {
+          // 位置被浏览器钳过：上一帧记的可达位置现在已越过新 max（用户自己滚动做不到这件事）。
+          // 这种情况同样要用**旧锚点** —— 钳位把锚点行在视口里挪了，视口坐标差里记着它（#610）。
+          const clamped = previous !== null && (previous.scrollTop ?? 0) > scroll.scrollHeight - scroll.clientHeight + CLAMP_EPS
+          if (previous && (previous.scrollTop === scroll.scrollTop || clamped)) {
             // 用户停在原处时用上次布局的坐标，保留上方行自身长高之前的阅读位置。
             measureAnchorRef.current = previous
           } else {
             const rows = readRowSpans(scroll, content, null)
-            measureAnchorRef.current = rows.find(row =>
-              row.top + row.height > scroll.scrollTop && row.top < scroll.scrollTop + scroll.clientHeight
-            ) ?? null
+            const row = rows.find(
+              item =>
+                item.top + item.height > scroll.scrollTop &&
+                item.top < scroll.scrollTop + scroll.clientHeight
+            )
+            // 重新取的锚点也要带视口快照，否则下一次校正会退回内容坐标（丢了钳位那一段）
+            measureAnchorRef.current = row
+              ? { ...row, scrollTop: scroll.scrollTop, viewportTop: row.top - scroll.scrollTop }
+              : null
           }
         }
         setMeasureVersion((version) => version + 1)
@@ -552,13 +585,24 @@ export const MessageList = ({
     }
     syncMetrics(el)
     const onScroll = () => {
-      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < STICKY_THRESHOLD
+      const max = el.scrollHeight - el.clientHeight
+      const previous = scrollTopRef.current
+      const nearBottom = max - el.scrollTop < STICKY_THRESHOLD
+      // 这一次位置变化的来源：我们自己的写入 / 浏览器钳位 / 用户自己滚。
+      // 前两者都**不是**「用户想跟到底部」或「用户改了阅读位置」的意思：
+      //  - 有欠账（钳位把我们顶到了底部）时不许把贴底打开，否则流式内容一长高就把刚恢复的位置拽走；
+      //  - 用户自己滚的定义收紧成「位置变了 + 上一帧位置本来是可达的（没被钳过）+ 不是我们写的」。
+      const own = Math.abs(el.scrollTop - ownWriteRef.current.value) < 1 && Date.now() - ownWriteRef.current.at < 500
+      const clampedBefore = previous > max + CLAMP_EPS
+      if (!own && !clampedBefore && el.scrollTop < previous) {
+        userScrolledAtRef.current = Date.now()
+      }
       // 仅在用户向上滚动时停止跟随底部，布局或内容增高时保持跟随状态。
-      if (nearBottom) {
+      if (nearBottom && clampOwedRef.current === 0) {
         stickyRef.current = true
         // 平滑滚动落地（或用户自己滑回底部）：跟随逻辑可以正常写位置了
         jumpRef.current = false
-      } else if (el.scrollTop < scrollTopRef.current) {
+      } else if (el.scrollTop < previous) {
         stickyRef.current = false
         jumpRef.current = false
       }
@@ -602,8 +646,19 @@ export const MessageList = ({
     const rows = readRowSpans(scroll, content, anchor?.id ?? null)
     if (!skip && !positionOpeningEditor() && !stickyRef.current && !jumpRef.current) {
       const guard = anchorGuardRef.current
+      // A：视口坐标（差值里天然含钳位）；量不到锚点行时才用 B（记账的钳位量）。
+      // 两条路互斥，plan 只出一个 shift —— 见 `anchorShiftViewport` 的注释，这里不会补两遍。
+      const plan = anchorShiftViewport({
+        anchor,
+        rows,
+        scrollTop: scroll.scrollTop,
+        maxScrollTop: scroll.scrollHeight - scroll.clientHeight,
+        userMoved:
+          userScrolledAtRef.current > 0 && Date.now() - userScrolledAtRef.current < USER_SCROLL_WINDOW,
+        owed: clampOwedRef.current,
+      })
       const decision = decideAnchorCorrection({
-        shift: anchorShift(anchor, rows),
+        shift: plan.shift,
         previousShift: guard.previousShift,
         sticky: stickyRef.current,
         jump: jumpRef.current,
@@ -613,25 +668,39 @@ export const MessageList = ({
       if (decision.apply) {
         guard.previousShift = decision.shift
         guard.streak += 1
-        scroll.scrollTop += decision.shift
+        // 落点用 plan.target（已夹到 [0, scrollHeight − clientHeight]），别把自己顶出范围
+        const max = scroll.scrollHeight - scroll.clientHeight
+        const target = Math.max(0, Math.min(plan.target, max))
+        ownWriteRef.current = { value: target, at: Date.now() }
+        scroll.scrollTop = target
         scrollTopRef.current = scroll.scrollTop
+        // 目标被内容边界夹住的那一截记成欠账（不是不补，是现在没地方补）
+        clampOwedRef.current = plan.owed
         // 合并到下一帧，绝不在这里同步 setState（否则又是一条自激环）
         syncMetricsSoon(scroll)
       } else if (decision.reason === 'sign-flip' || decision.reason === 'streak-limit') {
         // 判自激：本条链到此为止，等到用户下一次手势才解封
         guard.blocked = true
         guard.streak += 1
+        clampOwedRef.current = plan.owed
       } else {
         // 位置已经对上了（位移不到阈值 / 贴底 / 平滑滚动在路上）：链清零重数
         guard.previousShift = 0
         guard.streak = 0
+        // 位移不到阈值但目标仍被夹住（例如欠账这一帧付了 0px）：欠账必须留着
+        clampOwedRef.current = plan.owed
       }
     }
-    // 下一次提交的参照：本帧第一条可见行（内容坐标，滚动不会让它失效）
+    // 下一次提交的参照：本帧第一条可见行（内容坐标 + 视口坐标快照）
     const first = pickAnchor(rows, scroll.scrollTop)
     const visible = rows.find(row => row.id === first?.id)
     anchorRef.current = visible && visible.top < scroll.scrollTop + scroll.clientHeight
-      ? { ...visible, scrollTop: scroll.scrollTop }
+      ? {
+          ...visible,
+          scrollTop: scroll.scrollTop,
+          // 视口坐标 = 行顶相对滚动视口顶的偏移（与 readRowSpans 的内容坐标同一原点减 scrollTop）
+          viewportTop: visible.top - scroll.scrollTop,
+        }
       : null
   })
 

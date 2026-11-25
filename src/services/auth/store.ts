@@ -70,10 +70,26 @@ export type AuthSnapshot = {
   sendingCode: boolean
 }
 
+/**
+ * 注册动作的选项。
+ *
+ * `autoSignIn`（默认 `true`，`#803` 的既有契约）：注册成功后**就地建立会话**。
+ *
+ * 产品口径（2026-11-25）要求注册成功后回到登录表单、由用户自己登录一次，所以**界面的两个注册入口
+ * （`SettingsAuthCard` / `AuthGate`）一律传 `false`**：服务端回的 token 客户端不接管 —— 不落盘、
+ * 不进 store、不触发会话建立钩子。默认值保持 `true` 是为了不改变 `#803` 那条「注册即触发自动领 Key」
+ * 的既有契约（`tests/unit/managed-key-autoauth-803.test.mjs` 直接调 `signUp(input)`）。
+ * 也就是说：**默认值只服务于既有契约，没有任何界面路径再用它**（`tests/unit/auth-after-success.test.mjs`
+ * 钉住了界面这两个入口的行为）。
+ */
+export type SignUpOptions = {
+  autoSignIn?: boolean
+}
+
 /** store 同时挂动作：界面只调动作，状态只经 `setState` 改（别在别处写状态） */
 export type AuthStore = AuthSnapshot & {
   signIn: (input: AuthLoginInput) => Promise<AuthResult<AuthUser>>
-  signUp: (input: AuthRegisterInput) => Promise<AuthResult<AuthUser>>
+  signUp: (input: AuthRegisterInput, options?: SignUpOptions) => Promise<AuthResult<AuthUser>>
   signOut: () => Promise<void>
   /** 发注册验证码：只影响 `sendingCode`，不动登录态 */
   sendCode: (input: AuthSendCodeInput) => Promise<AuthResult<AuthDone>>
@@ -364,8 +380,20 @@ const signIn = async (input: AuthLoginInput): Promise<AuthResult<AuthUser>> => {
   return { ok: true, data: result.data.user }
 }
 
-/** 注册：sub2api 注册即登录，成功体与 login 同形 —— 所以直接复用同一个落地逻辑 */
-const signUp = async (input: AuthRegisterInput): Promise<AuthResult<AuthUser>> => {
+/**
+ * 注册：sub2api 注册即登录，成功体与 login 同形。
+ *
+ * **但「注册成功」在产品上不等于「用户要登录」**（2026-11-25 的产品口径：注册结束后回到登录表单，
+ * 让用户自己登录一次）。所以这里有一个选项：
+ *  - `autoSignIn: true`（默认，`#803` 的既有契约）：直接复用 `applySession`，与 `signIn` 同一条落地逻辑；
+ *  - `autoSignIn: false`（界面的两个注册入口都传它）：**丢弃服务端回的 token** —— 不落盘、不进 store、
+ *    不通知会话钩子，只把界面放回未登录态。token 是服务端给的副产物，客户端**不接管**它，
+ *    也就不存在「静默自动登录」；真正的会话只由 `signIn` 建立。
+ */
+const signUp = async (
+  input: AuthRegisterInput,
+  options: SignUpOptions = {}
+): Promise<AuthResult<AuthUser>> => {
   if (!transport) {
     const error = transportMissing()
     useAuthStore.setState({ error, submitting: false })
@@ -383,6 +411,19 @@ const signUp = async (input: AuthRegisterInput): Promise<AuthResult<AuthUser>> =
   if (!result.ok) {
     useAuthStore.setState({ state: 'unauthenticated', submitting: false, error: result.error })
     return result
+  }
+  if (options.autoSignIn === false) {
+    // 注册成功、但不建立会话（不写 `tokenStorage`、不 setState token、不 notifySessionEstablished）。
+    // `token` 字段刻意不动：这条路径只可能从未登录态进入（登录卡只在未登录时渲染），
+    // 而「不动」比「先写再清」少一次落盘 —— 落盘就会留下一个我们马上要丢掉的凭据。
+    useAuthStore.setState({
+      state: 'unauthenticated',
+      user: null,
+      error: null,
+      submitting: false,
+      restored: true,
+    })
+    return { ok: true, data: result.data.user }
   }
   applySession(result.data, 'register')
   return { ok: true, data: result.data.user }

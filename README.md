@@ -42,33 +42,13 @@
 
 ## 使用
 
-```bash
-pnpm install
-pnpm dev            # 本地开发
-./build-apk.sh      # 构建 debug APK
-./build-apk.sh release   # 构建 release APK
-# 发布：按 docs/RELEASE-CHECKLIST.md 逐步执行（无一键脚本；可脚本化的三段是 pnpm run release:check / release:upload / release:verify）
-```
+### 导入 DeepSeek 分享会话
 
-设置页填写：
+在侧栏选择「导入会话」，粘贴 DeepSeek 官方生成的 HTTPS 分享链接。成功后会打开导入的会话；
+再次导入同一链接会打开本地已有版本，保留后续编辑。
 
-| 配置项 | 说明 |
-| --- | --- |
-| Service URL | 兼容 OpenAI 协议的 API 根地址，例如 `https://api.deepseek.com` |
-| Model | 模型名，例如 `deepseek-chat` |
-| API Key | 你的密钥，仅保存在本机 |
-
-### 配置存储位置
-
-配置仅保存在浏览器 / WebView 的 `localStorage`（三个 key），不上传任何服务器：
-
-- `chat-demo:base-url` — 服务地址（Service URL）
-- `chat-demo:model` — 模型名
-- `chat-demo:api-key` — API Key
-
-> 键名沿用上游 `chat-demo:` 前缀，以便与旧版本数据兼容，因此升级后无需重新填写配置。
-
-清除应用数据或卸载应用会一并清除，需重新填写。
+**仅 Android 端提供该入口**：网页端读 `chat.deepseek.com` 的分享接口会被 CORS 挡住，需要一个
+服务端代转；产品决定不为这个低频功能增加中转服务，所以网页端**不显示该入口**（不是提示不支持）。
 
 ## 目录结构
 

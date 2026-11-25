@@ -155,7 +155,11 @@ test('T1 `{registration_enabled:true}` → enabled，注册真的发得出去', 
   const { calls, source } = fakeSource()
   const events = await submitFromStore(source)
   assert.equal(calls.signUp.length, 1, 'enabled 时必须真的发出注册请求')
-  assert.deepEqual(events, [{ type: 'form-submitted' }])
+  // 产品口径 2026-11-25：注册成功回登录表单（不是停在注册 tab）—— 本用例只关心「发得出去」，
+  // 事件的具体形状由 `tests/unit/auth-after-success.test.mjs` 负责
+  assert.deepEqual(events, [
+    { type: 'back-to-login', notice: 'authRegisterDonePleaseLogin', email: 'tri-state@example.com' },
+  ])
 
   // 视图侧：没有「注册暂未开放」，也没有「读取失败」
   const markup = renderCard({ gate: state.registration, readFailed: state.readFailed })
@@ -231,7 +235,10 @@ test('T3 字段缺失 / data:null / 错误信封 → unknown：不出现该文�
       const { calls, source } = fakeSource()
       const events = await submitFromStore(source)
       assert.equal(calls.signUp.length, 1, `${row.label} 时注册必须照常发出去（不能本地拦）`)
-      assert.deepEqual(events, [{ type: 'form-submitted' }])
+      // 注册成功 → 回登录表单（产品口径 2026-11-25），见 `tests/unit/auth-after-success.test.mjs`
+      assert.deepEqual(events, [
+        { type: 'back-to-login', notice: 'authRegisterDonePleaseLogin', email: 'tri-state@example.com' },
+      ])
 
       // 视图层：没有「注册暂未开放」，只有一行可重试提示
       const markup = renderCard({ gate: state.registration, readFailed: state.readFailed })

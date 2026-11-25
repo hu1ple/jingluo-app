@@ -16,6 +16,11 @@ import {
   type ErrorNoticeContext,
 } from './errorNotice.js'
 import { buildReplyErrorReport, buildUpstreamSnippet } from './replyErrorReport.js'
+import {
+  receivedCharsOf,
+  streamBreakoutTone,
+  type StreamBreakoutSoftTone,
+} from './streamBreakout.js'
 import type { AssistantMessage } from './types.js'
 
 export type Notice = {
@@ -55,6 +60,12 @@ export type Notice = {
    * 但「完全看不到上游说了什么」正是 #347 / #353 的问题 —— 折起来让用户主动展开。
    */
   upstream?: string
+  /**
+   * 提示的**视觉语气**（`chat/streamBreakout.ts`）：只有断流两档（连接断掉 / 上游不动）会落这个字段。
+   * `undefined` = 沿用改前的红色错误条（鉴权 / 额度 / 参数 / 网关……都是真错误，语气不该被放宽）；
+   * `soft` = 中性状态行（用户什么都还没看到）；`warn` = 警示状态行（内容已收到，点一下就好）。
+   */
+  tone?: StreamBreakoutSoftTone
   /**
    * 要不要给「重新生成」按钮（#771）。`undefined` = 给（沿用改前行为）；
    * `false` = 终态错误（Key 失效 / 额度不足 / 参数错 / 内容拦截 / 打到了网关），
@@ -249,15 +260,40 @@ export const describeReply = (reply: AssistantMessage): Notice | null => {
     const row = pickErrorNotice(noticeCtx)
     /** 终态档不给「重新生成」：同样的请求再发一次还是同一个结果（#771 表格的最后一列） */
     const regenerate = errorNoticeRegenerate(noticeCtx)
+    /**
+     * 断流两档的**视觉语气**（`chat/streamBreakout.ts`）：用户报「流式中断时前端报错」，
+     * 复现看到的是三种断流形态全都穿红色错误条 —— 可其中两种其实已经收到了内容，
+     * 用报错语气说「已经收到的都在」等于自己打自己。语气按「收到过多少字」判：
+     * 一个字都没有 → 软状态行；已经看到内容 → 警示状态行（仍不是红色报错）。
+     *
+     * 文案**不动**（仍是 replyStreamInterrupted / replyWaitingStalled），只换视觉。
+     */
+    const breakout = (breakKind: 'interrupted' | 'idle') =>
+      streamBreakoutTone({
+        receivedChars: receivedCharsOf(reply),
+        // 能走到渲染这一层，说明自动重试的口径已经收敛了（预算用完或本来就不许重发）
+        retried: true,
+        kind: breakKind,
+      })
     // 流断在 message_stop 之前：明说连接中断（已收到的内容照常展示），不要混进「网络异常」
     if (kind === 'interrupted') {
       // 断流 / 卡住 / 断网这三档以前不给「复制诊断信息」，恰恰是最需要反馈的场景
       // （2026-11-24：文案定稿后界面不再显示 {seconds} 这类数字，它们只能从这里带出去）
-      return { text: localized || translate('replyStreamInterrupted'), regenerate, diagnostics: diagnosticsOf() }
+      return {
+        text: localized || translate('replyStreamInterrupted'),
+        regenerate,
+        diagnostics: diagnosticsOf(),
+        tone: breakout('interrupted'),
+      }
     }
     // 正文阶段长时间没有新数据（#150）：连接还在，只是上游不动了，说「等待时间过长」而不是「断网」
     if (kind === 'idle') {
-      return { text: localized || translate('replyWaitingStalled'), regenerate, diagnostics: diagnosticsOf() }
+      return {
+        text: localized || translate('replyWaitingStalled'),
+        regenerate,
+        diagnostics: diagnosticsOf(),
+        tone: breakout('idle'),
+      }
     }
     if (kind === 'network') {
       // 网络不可达 / DNS / 跨域（#771 第 2 类）：明说「不是上游慢」，再给下一步

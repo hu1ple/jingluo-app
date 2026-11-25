@@ -577,6 +577,18 @@ const EXTRA_KEYS: readonly string[] = [
   'view',
   'configured',
   'storageBytes',
+  // 本机写失败（P0「清后台后聊天记录消失」）：这四个键回答「哪一类失败、哪几个 store、
+  // 这条会话有多大、附件占多少字节」。**只有元数据** —— 会话正文 / 附件正文一个字符都不进日志。
+  // 键名故意用点号族（`storage.*`）而不是往结构化 `MetaInput` 里加：它们是排查事故的一次性诊断维度，
+  // 不属于「可长期切片的业务指标」，加进 `MetaInput` 会把 `META_KEYS` 的长度契约（24）一起改掉。
+  'storage.kind',
+  'storage.stores',
+  'storage.messages',
+  'storage.attachmentBytes',
+  'storage.stripped',
+  // `navigator.storage.persisted()` 的结果：整库有没有被批准「持久化」。
+  // false 表示随时可能被系统整体淘汰（此时界面可能一条错都没有，只是列表空了）。
+  'storage.persisted',
   'action',
   // 续传标记：urlImport 早就在写 `resume: 'yes' | 'no'`，但一直不在白名单里 —— 生产日志里
   // 这个键被整条丢掉，「这次是不是从断点接着下」查不出来（#313 的「续传」要求）

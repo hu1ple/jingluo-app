@@ -1,11 +1,12 @@
 import clsx from 'clsx'
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate } from '../../i18n/index.js'
 import { getSpec } from '../../services/api/providers.js'
 import { useApiConfig } from '../../services/api/apiConfig.js'
 import { setChatMode, useSettings, type ChatMode } from '../../services/settings.js'
 import { ChatInput } from '../chatInput/ChatInput.js'
+import { PersonaButton, PersonaDrawer } from './PersonaDrawer.js'
 import { MobileHeader } from './MobileHeader.js'
 import styles from './Welcome.module.css'
 
@@ -95,9 +96,13 @@ const ModeSwitch = () => {
 export const Welcome = () => {
   const t = useTranslate()
   const isMobile = useIsMobile()
+  const [personaOpen, setPersonaOpen] = useState(false)
+  const personaButton = <PersonaButton onClick={() => setPersonaOpen(true)} />
   return (
     <div className={styles.container}>
-      {isMobile ? <MobileHeader /> : null}
+      {isMobile ? <MobileHeader personaButton={personaButton} /> :
+        <div className={styles.personaAction}>{personaButton}</div>}
+      {personaOpen && <PersonaDrawer onClose={() => setPersonaOpen(false)} />}
       <div className={styles.welcome}>
         <div className={styles.hero}>
           <div className={styles.greeting}>{t('welcomeMessageChat250808')}</div>

@@ -8,12 +8,41 @@ export const en = {
   modeExpert: 'Expert mode',
   expandSiderbarButton: 'Open sidebar',
   collapseSiderbarButton: 'Close sidebar',
+  promptTitle: 'Custom prompt',
+  promptDescription: 'Set characters, worldbuilding, writing rules, or other preferences for future replies.',
+  promptPlaceholder: 'Enter your custom prompt…',
+  promptScope: 'Applies to this chat only. The AI will not edit it.',
+  promptCount: '{count} / {max} characters used',
+  promptTooLong: 'Over {max} characters. Please shorten it before saving.',
+  promptSaved: 'Saved',
+  promptConfirm: 'Save this prompt?',
+  personaSave: 'Save',
+  personaDiscard: 'Discard',
+  personaSaveFailed: 'Could not save. Please try again.',
   newChat: 'New chat',
+  shareImport: 'Import shared conversation',
+  shareImportDescription:
+    'Paste a DeepSeek share link — you can keep editing it locally afterwards.',
+  shareImportAction: 'Import',
+  shareLink: 'Official DeepSeek conversation share link',
+  shareLoading: 'Importing…',
+  shareInvalid: 'Enter a complete HTTPS link with the path /share/share-id.',
+  shareUnofficial: 'Only official share links from chat.deepseek.com are supported.',
+  shareUnavailable: 'This share does not exist or has been withdrawn.',
+  shareUnreadable: 'The shared conversation could not be read. Its format may have changed.',
+  shareFetchFailed: 'Could not retrieve the share. Check your connection and try again.',
+  shareBusy: 'Wait for the current reply or history import to finish.',
+  shareSaveFailed: 'Could not save the conversation. Check local storage and try again.',
   untitledChat: 'New chat',
   sessionLoading: 'Loading chats...',
   sessionListLoadFailed: 'Unable to load the chat list. Please try again.',
   sessionLoadFailed: 'Unable to load this chat. Please try again.',
-  sessionSaveFailed: 'Not saved to your phone yet (っ °Д °;)っ closing the page now might lose it',
+  sessionSaveFailedRetryable: "This chat didn't save to this device. Tap retry.",
+  sessionSaveFailedQuota: 'Not enough local storage. Free up space or export a backup, then retry.',
+  sessionSaveFailedUnavailable: "This environment can't save to this device. Use the app instead.",
+  attachmentSaveFailed: "Attachments didn't save to this device and may be missing after a refresh (retry).",
+  storageBlockedByOtherTab: 'Another tab is holding local storage. Close the other pages and try again.',
+  storageVersionTooNew: 'Local data comes from a newer version of the app. Please update.',
   sessionDeleteFailed: 'Unable to delete this chat. Please try again.',
   settings: 'Settings',
   appName: '鲸落',
@@ -285,6 +314,8 @@ export const en = {
   settingsAnnouncementExpand: 'Show full text',
   settingsAnnouncementCollapse: 'Show less',
   settingsAnnouncementPopupDismiss: 'Got it',
+  // Forced-read countdown (disabled "Got it" while the 5s gate is running; `{seconds}` = seconds left)
+  settingsAnnouncementPopupDismissCount: 'Got it ({seconds}s)',
   // Relative times (picked by `components/announcements/relativeTime.ts`)
   announceTimeJustNow: 'Just now',
   announceTimeMinutesAgo: '{count} min ago',
@@ -297,7 +328,7 @@ export const en = {
   confirm: 'Confirm',
   apiKeyInvalid: 'That key looks a bit off (｡•́︿•̀｡)',
   apiKeyVerificationFailed: 'Verification failed: {message}',
-  historyImport: 'Import chat history',
+  historyImport: 'Import past conversations',
   historyImportConfirm: 'Import',
   historyImportConfirmTitle: 'Import chat history?',
   historyImportConfirmDescription:
@@ -320,12 +351,15 @@ export const en = {
   historyImportSummaryDetail: ' (added {added} / replaced {overwritten} / skipped {skipped})',
   historyImportConflictSkippedTitle: 'Chats where the local version was kept (same ID, newer locally)',
   historyExportEmptySelection: 'No chats selected — nothing to export',
+  // Sider 「history」row title + 「N selected」counter (multi-select footer, 2026-11 design)
+  historySiderTitle: 'Chat history',
   historyExportSelectedCount: '{count} selected',
   historyExportSelectedEmpty: 'Select at least one chat to export',
   historySelectModeEnter: 'Select',
-  historySelectModeExit: 'Exit selection',
   historySelectAll: 'Select all',
-  historySelectInvert: 'Invert',
+  historyDeleteSelected: 'Delete selected',
+  historyDeleteSelectedWarning: 'The selected conversations ({count}) and their messages will be permanently deleted. This cannot be undone.',
+  historyConfirmDelete: 'Confirm deletion',
   historyExportSelected: 'Export selected',
   historyExportSelectedSaved: 'Exported {count} chats — file: {name}',
   historyImportedOne: 'Imported 1 chat',
@@ -802,6 +836,11 @@ export const en = {
   settingDialogReadingFontSize: 'Font size',
   settingDialogReadingFontWeight: 'Font weight',
   settingDialogReadingLineHeight: 'Line height',
+  settingDialogReadingSizeXXLarge: 'Extra extra large',
+  settingDialogReadingSizeXSmall: 'Extra small',
+  settingDialogReadingReset: 'Reset to default',
+  settingDialogReadingSample: 'Font size preview',
+  settingDialogReadingSampleReply: 'Drag or tap the slider to change the text size in your conversations.',
   settingDialogReadingSizeSmall: 'Small',
   settingDialogReadingSizeStandard: 'Standard',
   settingDialogReadingSizeLarge: 'Large',
@@ -975,8 +1014,17 @@ export const en = {
   settingsAuthResetRateLimited: 'Too many attempts — try again in a minute',
   /** Other 4xx/5xx: no guessing, just a retryable sentence */
   settingsAuthResetFailed: 'Reset failed. Please try again.',
-  /** Shown on the sign-in card once the reset flow finished (shared by AuthGate notice and the settings card) */
-  settingsAuthResetDone: 'Password reset. Sign in with your new password.',
+  /**
+   * Shown on the sign-in card once **sign-up** finished: sign-up returns to the sign-in form
+   * (product decision 2026-11-25) and the user signs in explicitly.
+   */
+  authRegisterDonePleaseLogin: 'Registration complete — please sign in.',
+  /**
+   * Shown on the sign-in card once the **reset** flow finished (shared by the settings card notice and
+   * the `AuthGate` sign-in page). "with your new password" is not decorative: an anonymous reset has no
+   * verifiable session, so signing in with the new password is the only real confirmation.
+   */
+  authResetDonePleaseLogin: 'Password reset — please sign in with your new password.',
   /**
    * The line under the sign-up card when `settings/public` could not be read (tap to retry).
    * Must NOT say "sign-up is not open" — "we failed to read the flag" is not "the server turned sign-up off".

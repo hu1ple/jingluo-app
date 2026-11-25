@@ -1,7 +1,7 @@
 import clsx from 'clsx'
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
-import { IconPanelLeftOutline16, IconSettingsOutline16, NewChatIcon } from '../base/icons.js'
+import { IconPanelLeftOutline16, IconSettingsOutline16, IconTrashOutline16, NewChatIcon } from '../base/icons.js'
 import { setSiderCollapsed } from '../../services/settings.js'
 import { groupSessions } from '../../services/chat/sessionGroups.js'
 import { parentTitleOf } from '../../services/chat/sessionBranch.js'
@@ -9,7 +9,6 @@ import { BackupError, exportHistory } from '../../services/chat/backup.js'
 import { saveHistoryArchive } from '../../services/chat/history/saveArchive.js'
 import { newChat, removeSession, useChatStore } from '../../services/chat/store.js'
 import { sweepOrphanAttachmentsAfterDelete } from '../attachments/index.js'
-import type { SessionSummary } from '../../services/chat/types.js'
 import { MOTION_EXIT, usePresence } from '../../utils/usePresence.js'
 import { Button } from '../base/Button.js'
 import { IconButton } from '../base/IconButton.js'
@@ -49,7 +48,7 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
     }
     return titles
   }, [sessions])
-  const [deleting, setDeleting] = useState<SessionSummary | null>(null)
+  const [deleting, setDeleting] = useState<string[] | null>(null)
   const [deletePending, setDeletePending] = useState(false)
   // #390 选择性导出：进入「选择」模式后逐条勾选，只导出勾中的会话（包格式与全量导出一致）。
   const [selecting, setSelecting] = useState(false)
@@ -66,10 +65,6 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
       current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
     )
   const selectAll = () => setSelected(sessions.map((session) => session.id))
-  const invertSelection = () =>
-    setSelected(
-      sessions.filter((session) => !selectedSet.has(session.id)).map((session) => session.id)
-    )
 
   /**
    * 导出勾选的会话：空选择要给明确提示，不能静默什么都不发生。
@@ -119,6 +114,30 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
     }
   }
 
+  const confirmDelete = async () => {
+    if (!deleting || deletePending) {
+      return
+    }
+    setDeletePending(true)
+    try {
+      const failed: string[] = []
+      for (const id of deleting) {
+        if (!(await removeSession(id))) {failed.push(id)}
+      }
+      if (failed.length < deleting.length) {void sweepOrphanAttachmentsAfterDelete()}
+      if (failed.length > 0) {
+        setDeleting(failed)
+        if (selecting) {setSelected(failed)}
+        showToast({ key: 'sessionDeleteFailed', type: 'error' })
+      } else {
+        setDeleting(null)
+        if (selecting) {exitSelection()}
+      }
+    } finally {
+      setDeletePending(false)
+    }
+  }
+
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>
     const refresh = () => {
@@ -144,7 +163,7 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
   }, [])
 
   return (
-    <div className={clsx(styles.sider, mobile && styles.mobile)}>
+    <div className={clsx(styles.sider, mobile && styles.mobile)} data-testid="sider">
       <div className={styles.top}>
         <div className={styles.appName}>{t('appName')}</div>
         <IconButton
@@ -155,9 +174,12 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
           onClick={() => (mobile ? closeMobileSider() : setSiderCollapsed(true))}
         />
       </div>
+      {/* 多选态下「开启新对话」禁用（设计稿右图第一项）：视觉与语义都得是不可点状态 */}
       <button
         type="button"
         className={styles.newChat}
+        data-testid="sider-new-chat"
+        disabled={selecting}
         onClick={() => {
           newChat()
           closeMobileSider()
@@ -168,20 +190,48 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
         </span>
         {t('newChat')}
       </button>
+      {/*
+        「历史对话」那一行：默认态 = 标题 + 右侧蓝色「选择」；多选态整行换成「全选 + 取消」。
+        两个态共用同一个容器，行高一致，切换时列表不跳动。
+      */}
       {sessions.length > 0 ? (
-        <div className={styles.selectionToggleRow}>
-          <button
-            type="button"
-            className={styles.selectionToggle}
-            data-testid="sider-select-toggle"
-            onClick={() => (selecting ? exitSelection() : setSelecting(true))}
-          >
-            {t(selecting ? 'historySelectModeExit' : 'historySelectModeEnter')}
-          </button>
+        <div className={styles.listHeader} data-testid="sider-list-header">
+          {selecting ? (
+            <>
+              <button
+                type="button"
+                className={styles.listHeaderLink}
+                data-testid="sider-select-all"
+                onClick={selectAll}
+              >
+                {t('historySelectAll')}
+              </button>
+              <button
+                type="button"
+                className={styles.listHeaderCancel}
+                data-testid="sider-selection-cancel"
+                onClick={exitSelection}
+              >
+                {t('cancel')}
+              </button>
+            </>
+          ) : (
+            <>
+              <span className={styles.listHeaderTitle}>{t('historySiderTitle')}</span>
+              <button
+                type="button"
+                className={styles.listHeaderLink}
+                data-testid="sider-select-toggle"
+                onClick={() => setSelecting(true)}
+              >
+                {t('historySelectModeEnter')}
+              </button>
+            </>
+          )}
         </div>
       ) : null}
       <div className={styles.listWrap}>
-        <div className={styles.list}>
+        <div className={styles.list} data-testid="sider-list">
           {groups.map((group) => (
             <div key={group.key} className={styles.section}>
               <div className={styles.sectionHeader}>{group.label}</div>
@@ -194,7 +244,7 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
                   selecting={selecting}
                   selected={selectedSet.has(session.id)}
                   onToggle={toggleSelected}
-                  onDelete={() => setDeleting(session)}
+                  onDelete={() => setDeleting([session.id])}
                 />
               ))}
             </div>
@@ -202,33 +252,42 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
         </div>
       </div>
       {selecting ? (
-        // 选择模式的底栏：已选 N 条 + 全选 / 反选 / 导出选中（移动端也在同一处，不另做一套）
-        <div className={styles.selectionBar}>
-          <div className={styles.selectionCount} data-testid="sider-selection-count">
-            {t('historyExportSelectedCount', { count: selectedSet.size })}
-          </div>
-          <div className={styles.selectionActions}>
+        /*
+         * 多选态底部操作条（设计稿右图第 4 项）：与列表之间一条分隔线，左「已选 N 项」+ 次要的「导出选中」，
+         * 右红色「🗑 删除」为主操作。它是 `.sider` 的 flex 子项、在滚动容器 `.listWrap` **之外**，
+         * 所以列表滚到哪一行它都在屏幕底部可见（不需要 sticky，也不会因滚动被推走）。
+         */
+        <div className={styles.selectionBar} data-testid="sider-selection-footer">
+          <div className={styles.selectionFooterLeft}>
+            <span className={styles.selectionCount} data-testid="sider-selection-count">
+              {t('historyExportSelectedCount', { count: selectedSet.size })}
+            </span>
+            {/* 功能保留：「导出选中」降级为操作条左侧的次要文字按钮（主视觉仍是计数 + 红色删除） */}
             <button
               type="button"
-              className={styles.selectionAction}
-              data-testid="sider-select-all"
-              onClick={selectAll}
-            >
-              {t('historySelectAll')}
-            </button>
-            <button type="button" className={styles.selectionAction} onClick={invertSelection}>
-              {t('historySelectInvert')}
-            </button>
-            <Button
-              variant="outlined"
-              size="m"
+              className={styles.selectionExport}
               disabled={exporting}
               data-testid="sider-export-selected"
               onClick={() => void exportSelected()}
             >
               {t('historyExportSelected')}
-            </Button>
+            </button>
           </div>
+          <button
+            type="button"
+            className={styles.selectionDelete}
+            disabled={exporting || selected.length === 0}
+            data-testid="sider-delete-selected"
+            onClick={() => {
+              const ids = sessions.filter((session) => selectedSet.has(session.id)).map((session) => session.id)
+              if (ids.length > 0) {setDeleting(ids)}
+            }}
+          >
+            <span className={styles.selectionDeleteIcon} aria-hidden="true">
+              <IconTrashOutline16 />
+            </span>
+            {t('delete')}
+          </button>
         </div>
       ) : null}
       <div className={styles.bottom}>
@@ -247,7 +306,7 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
       </div>
       {deleting ? (
         <Modal
-          title={t('deleteSessionModalContentTitle')}
+          title={t(selecting ? 'historyDeleteSelected' : 'deleteSessionModalContentTitle')}
           onClose={() => {
             if (!deletePending) {
               setDeleting(null)
@@ -261,31 +320,14 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
               <Button
                 variant="danger"
                 disabled={deletePending}
-                onClick={async () => {
-                  setDeletePending(true)
-                  try {
-                    if (await removeSession(deleting.id)) {
-                      setDeleting(null)
-                      /**
-                       * 文档附件孤儿清扫（#480 / #527）：会话删除事务提交**之后**再扫，
-                       * 先收集「当前仍被任一消息引用的附件 id」，再连元数据 / 全文 / 原件一起回收。
-                       * 不 await：清理失败不该让「删除会话」这条主流程看起来失败（失败会自己 toast）。
-                       */
-                      void sweepOrphanAttachmentsAfterDelete()
-                    } else {
-                      showToast({ key: 'sessionDeleteFailed', type: 'error' })
-                    }
-                  } finally {
-                    setDeletePending(false)
-                  }
-                }}
+                onClick={() => void confirmDelete()}
               >
-                {t('delete')}
+                {t(selecting ? 'historyConfirmDelete' : 'delete')}
               </Button>
             </>
           }
         >
-          {t('deleteSessionWithFilesDescription')}
+          {selecting ? t('historyDeleteSelectedWarning', { count: deleting.length }) : t('deleteSessionWithFilesDescription')}
         </Modal>
       ) : null}
     </div>

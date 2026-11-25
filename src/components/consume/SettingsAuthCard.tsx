@@ -27,6 +27,11 @@
  *     才会被本地拦下并给一句文案；`'unknown'`（那次 502 / 超时 / 空壳回包）时注册**照常提交**，
  *     由服务端判（真关了它回 `403 REGISTRATION_DISABLED`），卡片底部只多一行「功能开关读取失败，点此重试」。
  *
+ * 第四条（产品口径 2026-11-25「注册或者忘记密码结束后回到登录界面」）：**注册成功**与
+ * **重置密码成功**的终点都是同一张**登录表单** —— 邮箱预填、密码清空、挂一句成功提示
+ * （`authRegisterDonePleaseLogin` / `authResetDonePleaseLogin`），注册不回主界面。
+ * 注册成功也不建立会话：`signUp` 传 `{ autoSignIn: false }`，登录这件事留给用户自己点一次。
+ *
  * 本文件只做三件事：订阅 store、跑计时器、把「事件 → reducer」「点击 → 发请求」接上。
  */
 
@@ -147,7 +152,9 @@ export const SettingsAuthCard = ({ consume, onSkip }: SettingsAuthCardProps) => 
   const source = useMemo<AuthCardSource>(
     () => ({
       signIn: (input) => signIn(input),
-      signUp: (input) => signUp(input),
+      // 注册成功**不**建立会话（产品口径 2026-11-25）：服务端回的 token 客户端不接管，
+      // 卡片接着切回登录表单，由用户自己登一次（见 `store.signUp` 的 `autoSignIn`）
+      signUp: (input) => signUp(input, { autoSignIn: false }),
       forgotPassword: (input) => consume.auth.forgotPassword(input),
     }),
     [signIn, signUp, consume]
@@ -219,17 +226,17 @@ export const SettingsAuthCard = ({ consume, onSkip }: SettingsAuthCardProps) => 
   // 这里只留「进 / 出 + 回执」三件事：
   //  · 进：`model` 那边的 `settings-auth-forgot` 按钮照旧派 `{type:'step', step:'forgot'}`；
   //  · 出：`onBack` 回表单页（邮箱带回去，用户不用重打）；
-  //  · 回执：走完两步 → 回表单页 + 复用 model 的 `notice`（`settings-auth-notice` 那块），
-  //    说「密码已重置，请用新密码登录」—— **不**在这张卡里替他登录。
+  //  · 回执：走完两步 → **回登录表单**（`back-to-login`，不是只切 `step`）——
+  //    从**注册** tab 点进来的用户也一样落在登录 tab，邮箱用重置页里那个（用户可能改过），
+  //    并挂「密码已重置，请用新密码登录」。**不**在这张卡里替他登录。
   if (state.step === 'forgot') {
     return (
       <ResetPasswordPage
         embedded
         initialEmail={state.email}
         onBack={() => dispatch({ type: 'step', step: 'form' })}
-        onReset={() => {
-          dispatch({ type: 'step', step: 'form' })
-          dispatch({ type: 'notice', notice: 'settingsAuthResetDone' })
+        onReset={(email) => {
+          dispatch({ type: 'back-to-login', notice: 'authResetDonePleaseLogin', email })
         }}
       />
     )

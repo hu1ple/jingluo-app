@@ -170,7 +170,10 @@ test('N4-A 会话增删改 + 持久化矩阵（表驱动 15 行）', async (t) =
     chat.renameSession('a', '改了但存不下')
     await settle()
     assert.equal(chat.useChatStore.getState().sessionCache.a.title, '改了但存不下', '内存里先生效')
-    assert.equal(chat.useChatStore.getState().sessionSaveErrors.a, true, '失败必须可见，不能静默丢数据')
+    // P0 起 `sessionSaveErrors` 的值从布尔改成结构化分类（`{ kind }`）：
+    // 抛的是普通 `Error`（name 不是 QuotaExceededError / DataCloneError）→ 归 `unknown`（可重试档）。
+    // 「失败必须可见」这条断言本身没变，只是取值形状跟着契约变了。
+    assert.equal(chat.useChatStore.getState().sessionSaveErrors.a?.kind, 'unknown', '失败必须可见，不能静默丢数据')
     assert.equal(globalThis.__db.errors.at(-1).action, 'save session')
   })
 

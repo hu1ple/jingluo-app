@@ -110,7 +110,12 @@ test('① 同一 tick 连点两次（模拟双击）→ 只发出 1 次注册请
   assert.deepEqual(await second, [], '被挡下的那次「什么都不做」，不派任何事件')
 
   release({ ok: true })
-  assert.deepEqual(await first, [{ type: 'form-submitted' }], '抢到闩的那一次照常提交')
+  // 注册成功 → 回登录表单（产品口径 2026-11-25）；这条用例只关心「抢到闩的那一次照常提交」
+  assert.deepEqual(
+    await first,
+    [{ type: 'back-to-login', notice: 'authRegisterDonePleaseLogin', email: 'double@click.test' }],
+    '抢到闩的那一次照常提交'
+  )
   assert.equal(calls.signUp.length, 1)
 })
 
@@ -126,7 +131,9 @@ test('② 请求结束后再调用 → 又能发（闩会释放，不是一次�
   const again = submitAuthCard(source, state, ctx())
   assert.equal(calls.signUp.length, 2, '第一次请求结束后，闩必须已经释放')
   release({ ok: true })
-  assert.deepEqual(await again, [{ type: 'form-submitted' }])
+  assert.deepEqual(await again, [
+    { type: 'back-to-login', notice: 'authRegisterDonePleaseLogin', email: 'double@click.test' },
+  ])
 })
 
 test('③ source 抛错也释放闩（finally）——下一次点击照常能发', async () => {

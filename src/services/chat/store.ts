@@ -47,6 +47,7 @@ import {
   recordAction,
   recordError,
   recordEvent,
+  reportStorageSaveFailure,
 } from '../diagnostics/collector.js'
 import { getApiKey, getBaseUrl, getCurrentSpec, getModel, getProviderKind } from '../api/apiConfig.js'
 import { buildMeta, endpointKeyFromUrl } from '../diagnostics/fields.js'
@@ -82,13 +83,17 @@ import {
   settleReply,
   toRequestMessages,
 } from './reply.js'
-import { buildMessageBody } from './requestBody.js'
+import { buildMessageBody, SYSTEM_PROMPT } from './requestBody.js'
 import { pickErrorNotice, rowKey } from './errorNotice.js'
 import { waitDeadlines } from './waitStage.js'
 import { composeWaitNotice, needsUpload, type WaitHint, type WaitStage } from './waitStage.js'
 import type { MergePlan, ImportMode } from './history/mergeSessions.js'
 import type { ImportSkip } from './history/toLocal.js'
 import { shouldRetryStreamTimeout, streamTimeoutStageOf } from './timeoutPolicy.js'
+import {
+  decideStreamBreakout,
+  isStreamBreakoutKind,
+} from './streamBreakout.js'
 import {
   toSessionSummary,
   type AssistantMessage,
@@ -99,8 +104,6 @@ import {
   type UserMessage,
 } from './types.js'
 
-/** 所有生成请求统一携带的助手身份说明 */
-const SYSTEM_PROMPT = '该助手为DeepSeek，由深度求索公司创造。'
 /** 保留最近打开的详情；当前会话、生成中及尚未成功保存的会话不淘汰。 */
 const SESSION_CACHE_LIMIT = 5
 /** 自动重试的最多次数（不含首次请求）：附件补传、断网、5xx、超时共用这一个上限 */
@@ -114,14 +117,15 @@ const RETRY_BASE_DELAY = LIMITS.retryBaseDelayMs
  * 不支持的协议把快照内容折进 system 前缀，并从 messages 里删掉这些行。
  */
 const toRequestBody = (
-  messages: ReturnType<typeof toRequestMessages>
+  messages: ReturnType<typeof toRequestMessages>,
+  system: string
 ): { system: string; messages: ReturnType<typeof toRequestMessages> } => {
   if (requestGates(getCurrentSpec()).latest_reminder) {
-    return { system: SYSTEM_PROMPT, messages }
+    return { system, messages }
   }
   const folded = foldReminders(messages)
   return {
-    system: [SYSTEM_PROMPT, ...folded.reminders].join('\n'),
+    system: [system, ...folded.reminders].join('\n'),
     messages: folded.messages,
   }
 }
@@ -140,13 +144,30 @@ const autoTitleTasks = new Map<string, AbortController>()
 type ChatState = {
   ready: boolean
   initError: boolean
+  /**
+   * 启动期读库失败的**具体档位**：`blocked`（另一个标签页攥着旧连接）/ `version`（库比代码新）。
+   * 这两种都**不该**复用「加载失败请重试」——前者要用户去关别的页面，后者要用户更新应用，
+   * 重试一万次都是同一个结果。`null` = 没有这一类失败。
+   */
+  initFailure: db.StorageInitFailure | null
   /** 历史导入或全部删除期间锁定交互，提交成功前仍展示原有记录。 */
   importingHistory: boolean
   /** 仅列表元数据，按 updatedAt 降序；流式消息更新不会改变此数组。 */
   sessions: SessionSummary[]
   sessionCache: Record<string, Session>
   sessionLoadErrors: Record<string, boolean>
-  sessionSaveErrors: Record<string, boolean>
+  /**
+   * 会话没存到本机的原因（P0）。**值从布尔改成结构化分类**（`quota` / `clone` / `unavailable` / `unknown`），
+   * 因为不同原因的文案与「要不要给重试按钮」完全不同；`boolean` 只为兼容旧值读取保留
+   * （旧值 `true` 一律当可重试档，见 `db.normalizeStorageFailure`）。
+   */
+  sessionSaveErrors: Record<string, db.StorageFailure | boolean>
+  /**
+   * 附件降级（事务 B 失败）：**会话已经落盘**，坏的只是这些附件的 blob。
+   * 与 `sessionSaveErrors` 分开存：混在一起会让「对话丢了」和「图看不清」用同一句话提示，
+   * 而这两件事对用户的后果完全不同（前者丢内容，后者丢的是原件）。
+   */
+  degradedAttachments: Record<string, DegradedAttachments>
   /** null 表示新对话（欢迎页） */
   activeId: string | null
   /** 正在生成回复的会话 */
@@ -162,14 +183,23 @@ type ChatState = {
   waitHints: Record<string, WaitHint>
 }
 
+/** 附件降级：会话在、原件不在（只记 id / 字节数 / 分类，不存正文） */
+export type DegradedAttachments = {
+  failure: db.StorageFailure
+  ids: string[]
+  bytes: number
+}
+
 export const useChatStore = create<ChatState>(() => ({
   ready: false,
   initError: false,
+  initFailure: null,
   importingHistory: false,
   sessions: [],
   sessionCache: {},
   sessionLoadErrors: {},
   sessionSaveErrors: {},
+  degradedAttachments: {},
   activeId: null,
   streaming: {},
   importSkipped: [],
@@ -431,43 +461,295 @@ const updateReply = (sessionId: string, reply: AssistantMessage) =>
     ),
   }))
 
+const attachmentBytesOf = (files: db.StoredFile[] | undefined): number =>
+  (files ?? []).reduce(
+    (sum, file) => sum + (typeof file.blob?.size === 'number' ? file.blob.size : 0),
+    0
+  )
+
+/** 还在排队等着写进去的原件 id：清理孤儿 blob 时必须避开它们（否则等于用腾空间制造新丢数据） */
+const keepFileIds = (): string[] =>
+  Array.from(pendingFiles.values()).flatMap((files) => files.map((file) => file.id))
+
+/**
+ * 同一个失败重复上报会刷爆日志（流式收尾会反复 persist）：
+ * 只有「会话 + 分类 + 步骤」变了才再报一条，保存成功后清空。
+ */
+const reportedSaveFailures = new Set<string>()
+const reportedDegradations = new Set<string>()
+/** 「兜底剔除救回来了」只报一次：这个事实不会随保存成功而失效，同一个坏字段不该每次落盘都报 */
+const reportedRecoveries = new Set<string>()
+
+const failureAsError = (failure: db.StorageFailure): Error => {
+  const error = new Error(failure.message ?? failure.kind)
+  error.name = failure.name ?? 'StorageFailure'
+  return error
+}
+
+const clearSaveFailure = (sessionId: string) =>
+  set((state) => ({
+    sessionSaveErrors: Object.fromEntries(
+      Object.entries(state.sessionSaveErrors).filter(([id]) => id !== sessionId)
+    ),
+  }))
+
+const clearDegraded = (sessionId: string) =>
+  set((state) => ({
+    degradedAttachments: Object.fromEntries(
+      Object.entries(state.degradedAttachments).filter(([id]) => id !== sessionId)
+    ),
+  }))
+
+/**
+ * 会话没存到本机：**内存状态 + 诊断包一起记**（P0 治「下次还查不出来」）。
+ *
+ * 改造前只有 `sessionSaveErrors[id] = true`，而且只活在内存里 —— 进程一结束，
+ * 数据丢了、连「丢过」这件事都没了。现在：
+ *  · store 里留结构化分类（`kind`），横幅据此分档；
+ *  · `reportStorageSaveFailure()` 写一条 error 级日志（kind / error.name / store / 消息条数 / 附件字节数）。
+ */
+const markSaveFailure = (
+  sessionId: string,
+  failure: db.StorageFailure,
+  step: string,
+  stats: { messages: number; attachmentBytes: number; strippedFields?: readonly string[] }
+) => {
+  const key = `${sessionId}|${failure.kind}|${step}`
+  if (!reportedSaveFailures.has(key)) {
+    reportedSaveFailures.add(key)
+    reportStorageSaveFailure(
+      {
+        kind: failure.kind,
+        stores: failure.stores ?? 'sessions,sessionSummaries',
+        messages: stats.messages,
+        attachmentBytes: stats.attachmentBytes,
+        strippedFields: stats.strippedFields,
+        step,
+      },
+      failureAsError(failure)
+    )
+  }
+  set((state) => ({
+    sessionSaveErrors: { ...state.sessionSaveErrors, [sessionId]: failure },
+  }))
+}
+
+/**
+ * 附件降级（会话已落盘、blob 没写进去）：单独一条状态 + 单独一条诊断。
+ *
+ * 「只降级该附件」的落点就在这里 —— 会话记录已经在事务 A 提交了，这里连回滚的念头都不该有。
+ * 原件引用留在 `pendingFiles` 里，用户点「重试」时会再写一次。
+ */
+const markDegradedAttachments = (
+  sessionId: string,
+  degraded: db.FileDegradation[],
+  messages: number
+) => {
+  const bytes = degraded.reduce((sum, item) => sum + item.bytes, 0)
+  const failure = degraded[0]?.failure ?? { kind: 'unknown' as const }
+  const key = `${sessionId}|${failure.kind}|${degraded.map((item) => item.id).join(',')}|${bytes}`
+  if (!reportedDegradations.has(key)) {
+    reportedDegradations.add(key)
+    reportStorageSaveFailure(
+      {
+        kind: failure.kind,
+        stores: failure.stores ?? 'files',
+        messages,
+        attachmentBytes: bytes,
+        step: 'save attachments',
+      },
+      failureAsError(failure)
+    )
+  }
+  set((state) => ({
+    degradedAttachments: {
+      ...state.degradedAttachments,
+      [sessionId]: { failure, ids: degraded.map((item) => item.id), bytes },
+    },
+  }))
+}
+
+/**
+ * 读库失败的档位：只读错误对象上的 `initFailure` 标记 / 类名，**不 import 错误类** ——
+ * 测试替身（`tests/fixtures/**` 的假 db）不必为实现两个错误类埋单，而真实现的
+ * `StorageBlockedError` / `StorageVersionTooNewError` 自带 `initFailure`（见 `db.ts`）。
+ */
+const initFailureOf = (error: unknown): db.StorageInitFailure | null => {
+  const bag = (typeof error === 'object' && error !== null ? error : {}) as {
+    initFailure?: unknown
+    name?: unknown
+  }
+  if (bag.initFailure === 'blocked' || bag.initFailure === 'version') {
+    return bag.initFailure
+  }
+  if (bag.name === 'StorageBlockedError') {
+    return 'blocked'
+  }
+  if (bag.name === 'StorageVersionTooNewError') {
+    return 'version'
+  }
+  return null
+}
+
+/** `saveSession()` 的兜底形状：替身 / 老实现可能什么都不返回 */
+const EMPTY_OUTCOME: db.SaveSessionOutcome = { failure: null, degradedFiles: [], strippedFields: [] }
+
+/** 落盘过程本身抛出（不是 `outcome.failure`）时的兜底分类：只可能是替身或未预料的代码路径 */
+const failureOfThrown = (error: unknown, stores: string): db.StorageFailure => {
+  const bag = (typeof error === 'object' && error !== null ? error : {}) as {
+    name?: unknown
+    message?: unknown
+  }
+  const name = typeof bag.name === 'string' ? bag.name : undefined
+  const message = typeof bag.message === 'string' ? bag.message : undefined
+  return {
+    kind: 'unknown',
+    ...(name === undefined ? {} : { name }),
+    ...(message === undefined ? {} : { message: message.slice(0, 200) }),
+    stores,
+    at: Date.now(),
+  }
+}
+
 const persist = (sessionId: string) => {
-  const session = getSession(sessionId)
-  if (session) {
-    unsavedSessions.add(sessionId)
-    if (deletingSessions.has(sessionId)) {
-      return
+  const cached = getSession(sessionId)
+  unsavedSessions.add(sessionId)
+  if (deletingSessions.has(sessionId)) {
+    return undefined
+  }
+  const epoch = historyEpoch
+  const files = pendingFiles.get(sessionId)
+
+  /** 落盘之后的状态收敛：缓存路径与「从库里读回来再写」路径共用这一份 */
+  const settled = (session: Session, fromCache: boolean, outcome: db.SaveSessionOutcome) => {
+    if (epoch !== historyEpoch) {
+      return undefined
     }
-    const epoch = historyEpoch
-    const files = pendingFiles.get(sessionId)
-    void db
-      .saveSession(session, files)
-      .then(() => {
-        if (epoch !== historyEpoch || !getSession(sessionId)) {
-          return
-        }
-        if (pendingFiles.get(sessionId) === files) {
-          pendingFiles.delete(sessionId)
-        }
-        if (getSession(sessionId) === session) {
-          unsavedSessions.delete(sessionId)
-          set((state) => ({
-            sessionSaveErrors: Object.fromEntries(
-              Object.entries(state.sessionSaveErrors).filter(([id]) => id !== sessionId)
-            ),
-          }))
-          trimSessionCache()
-        }
+    // 事务 A 失败：会话**没**落盘。这才是「这段对话没存到本机」那一档，附件降级不走这里。
+    if (outcome.failure) {
+      markSaveFailure(sessionId, outcome.failure, 'save session', {
+        messages: session.messages.length,
+        attachmentBytes: attachmentBytesOf(files),
+        strippedFields: outcome.strippedFields,
       })
+      return false
+    }
+    if (outcome.strippedFields.length > 0) {
+      // 兜底救回来了：会话落了盘，但「这次剔掉了哪些字段」必须留痕（不是用户的错，也不该无声）。
+      // 同一个会话的同一次剔除只报一次：一个坏字段会被后续每次落盘都命中，全报就是刷屏。
+      const recoveryKey = `${sessionId}|clone|${outcome.strippedFields.join(',')}`
+      if (!reportedRecoveries.has(recoveryKey)) {
+        reportedRecoveries.add(recoveryKey)
+        recordError(
+          'storage.saveFailure: recovered by stripping fields',
+          {
+            'storage.kind': 'clone',
+            'storage.stores': 'sessions,sessionSummaries',
+            'storage.messages': session.messages.length,
+            'storage.attachmentBytes': attachmentBytesOf(files),
+            'storage.stripped': outcome.strippedFields.join(','),
+          },
+          failureAsError({ kind: 'clone', name: 'DataCloneError' })
+        )
+      }
+    }
+    if (outcome.degradedFiles.length === 0) {
+      if (pendingFiles.get(sessionId) === files) {
+        pendingFiles.delete(sessionId)
+      }
+      clearDegraded(sessionId)
+    } else {
+      markDegradedAttachments(sessionId, outcome.degradedFiles, session.messages.length)
+    }
+    if (!fromCache) {
+      // 从库里读回来的：内存里没有正文，不存在「还有新改动没落盘」的可能
+      unsavedSessions.delete(sessionId)
+    } else if (getSession(sessionId) === session) {
+      unsavedSessions.delete(sessionId)
+      clearSaveFailure(sessionId)
+      reportedSaveFailures.clear()
+      trimSessionCache()
+    }
+    // 附件降级时**留在待保存集合里**：点「重试」会再写一次这批 blob
+    if (outcome.degradedFiles.length > 0) {
+      unsavedSessions.add(sessionId)
+    }
+    return true
+  }
+
+  const save = (session: Session, fromCache: boolean) => {
+    // 同步发起落盘（与改造前一致：调用方在同一 tick 里就能看到写请求），同步抛出也转成 rejection
+    const invoked = (() => {
+      try {
+        return db.saveSession(session, files, { keepFileIds: keepFileIds() })
+      } catch (error) {
+        return Promise.reject(error)
+      }
+    })()
+    return Promise.resolve(invoked)
+      .then((raw) => settled(session, fromCache, raw ?? EMPTY_OUTCOME))
       .catch((error: unknown) => {
         db.reportStorageError('save session')(error)
-        if (epoch === historyEpoch && getSession(sessionId)) {
-          set((state) => ({
-            sessionSaveErrors: { ...state.sessionSaveErrors, [sessionId]: true },
-          }))
+        if (epoch === historyEpoch && (!fromCache || getSession(sessionId) !== undefined)) {
+          markSaveFailure(sessionId, failureOfThrown(error, 'sessions,sessionSummaries'), 'save session', {
+            messages: session.messages.length,
+            attachmentBytes: attachmentBytesOf(files),
+          })
         }
+        return false
       })
   }
+
+  if (cached !== undefined) {
+    return save(cached, true)
+  }
+  /**
+   * **缓存未命中不再静默 return**（改造前的 bug：`sessionCache` 里没有这条会话时直接返回，
+   * 既不写库也不报错 —— 内存里看着一切正常，其实什么都没落盘）。现在改成从库里读回来再写；
+   * 读不回来才标失败 —— 「读不回来」与「本来就没事」必须能分开。
+   */
+  return Promise.resolve(db.loadSession(sessionId))
+    .catch((error: unknown) => {
+      db.reportStorageError('read session for persist')(error)
+      return undefined
+    })
+    .then((session) => {
+      if (epoch !== historyEpoch) {
+        return undefined
+      }
+      if (session === undefined) {
+        markSaveFailure(
+          sessionId,
+          {
+            kind: 'unknown',
+            name: 'SessionMissingFromCache',
+            message: 'session body is neither in memory nor readable from IndexedDB',
+            stores: 'sessions',
+            at: Date.now(),
+          },
+          'persist read-back',
+          { messages: 0, attachmentBytes: attachmentBytesOf(files) }
+        )
+        return false
+      }
+      return save(session, false)
+    })
+}
+
+export const saveSessionPrompt = async (id: string, draft: string) => {
+  const session = getSession(id)
+  if (!session || deletingSessions.has(id) || get().importingHistory) {
+    return false
+  }
+  const prompt = draft || undefined
+  updateSession(id, current => ({ ...current, customSystemPrompt: prompt }))
+  if (await persist(id)) {
+    return true
+  }
+  updateSession(id, current => current.customSystemPrompt === prompt
+    ? { ...current, customSystemPrompt: session.customSystemPrompt }
+    : current)
+  return false
 }
 
 export const retrySaveSessions = () => {
@@ -551,7 +833,7 @@ export const initChat = (): Promise<void> => {
     return initTask
   }
   const epoch = historyEpoch
-  set({ initError: false })
+  set({ initError: false, initFailure: null })
   initTask = (async () => {
     try {
       const summaries = await db.loadSessionSummaries()
@@ -560,7 +842,7 @@ export const initChat = (): Promise<void> => {
       }
     } catch (error) {
       if (epoch === historyEpoch) {
-        set({ initError: true })
+        set({ initError: true, initFailure: initFailureOf(error) })
         db.reportStorageError('read local sessions')(error)
       }
     } finally {
@@ -813,10 +1095,12 @@ export const importHistoryInto = async (
       set({
         ready: true,
         initError: false,
+        initFailure: null,
         sessions: sortSessions(summaries),
         sessionCache: {},
         sessionLoadErrors: {},
         sessionSaveErrors: {},
+        degradedAttachments: {},
         importSkipped: skipped,
         importSummary: summary,
         activeId: null,
@@ -830,10 +1114,12 @@ export const importHistoryInto = async (
       set({
         ready: true,
         initError: false,
+        initFailure: null,
         sessions: sortSessions(summaries),
         sessionCache: {},
         sessionLoadErrors: {},
         sessionSaveErrors: {},
+        degradedAttachments: {},
         importSkipped: skipped,
         importSummary: summary,
         // 当前打开的会话本地还在就继续停在它上面，别把用户从正在看的那条会话上踢走。
@@ -1033,6 +1319,9 @@ const removeSessionData = async (id: string): Promise<boolean> => {
       sessionSaveErrors: Object.fromEntries(
         Object.entries(state.sessionSaveErrors).filter(([key]) => key !== id)
       ),
+      degradedAttachments: Object.fromEntries(
+        Object.entries(state.degradedAttachments).filter(([key]) => key !== id)
+      ),
       activeId: state.activeId === id ? null : state.activeId,
     }))
     return true
@@ -1119,6 +1408,7 @@ export const sendMessage = (targetSessionId: string | null) => {
   }
   if (sessionId === null) {
     const session: Session = {
+      customSystemPrompt: getDraft(null).customSystemPrompt,
       id: createId(),
       title: '',
       createdAt: now,
@@ -1840,8 +2130,19 @@ export const decideStreamRetry = ({
   return isRetryableApiError(error) || fileRecovered ? 'retry' : 'final'
 }
 
-/** 重传前的退避等待；停止生成时立即返回，由调用方按已停止收尾 */
-const waitForRetry = (attempt: number, signal: AbortSignal) =>
+/** #105 通用档的退避：`基值 × 2^attempt`（断流档**不用**这个，见下面的 waitForRetry） */
+const genericRetryDelayMs = (attempt: number) => RETRY_BASE_DELAY * 2 ** attempt
+
+/**
+ * 重传前的退避等待；停止生成时立即返回，由调用方按已停止收尾。
+ *
+ * 等多久由**调用方**给（`delayMs`），本函数只负责「等」与「可被停止打断」：
+ * - 断流两档的退避是 1s / 2s / 4s / 8s 封顶，由 `chat/streamBreakout.ts` 的
+ *   `retryDelayMs` 算（那一档最多 5 次，一路翻倍会把用户晾半分钟）；
+ * - 其余档仍是 `genericRetryDelayMs(attempt)`（#105 的 1s / 2s）。
+ * 把档位算法收在判定里，这里就不再复制一份 `2 ** attempt`。
+ */
+const waitForRetry = (delayMs: number, signal: AbortSignal) =>
   new Promise<void>((resolve) => {
     function onAbort() {
       clearTimeout(timer)
@@ -1852,7 +2153,7 @@ const waitForRetry = (attempt: number, signal: AbortSignal) =>
         signal.removeEventListener('abort', onAbort)
         resolve()
       },
-      RETRY_BASE_DELAY * 2 ** attempt
+      delayMs
     )
     signal.addEventListener('abort', onAbort, { once: true })
   })
@@ -1928,7 +2229,8 @@ const scheduleAutoTitle = (sessionId: string) => {
  */
 const withRequestDocuments = async (
   messages: ChatMessage[],
-  kind: ProviderKind
+  kind: ProviderKind,
+  system: string
 ): Promise<{ messages: ChatMessage[]; notice: string }> => {
   // 本函数只被文本注入渠道调用；能力表这里再问一次，是给「将来有人从别处调」兜底
   if (!docInjectionFor(kind).textInjection) {
@@ -1948,7 +2250,7 @@ const withRequestDocuments = async (
        * 这与 issue §9 的公式同形；两边取小（`docBudgetTokens` 也会再取一次小）。
        */
       contextWindowTokens: LIMITS.contextBudget.maxTokens,
-      reservedTokens: estimateTokens(estimateChars(messages) + SYSTEM_PROMPT.length),
+      reservedTokens: estimateTokens(estimateChars(messages) + system.length),
     })
     const notice = [...result.warnings, formatDocumentInjection(result)].join('；')
     return { messages: result.messages, notice }
@@ -1968,11 +2270,34 @@ const withRequestDocuments = async (
 }
 
 /**
+ * 把一条回复**已经展示给用户的内容**清空，回到「还没出字」的待生成态。
+ *
+ * 只服务于断流的 `discardPartial`（首字节后断开、内容不足 150 字）：那一档要求「丢弃重来」，
+ * 旧内容必须跟着一起消失 —— 否则同一条回复里会同时出现前一版和新一版的正文（用户看到两份、
+ * 上游重复计费）。清的是**这一条回复本身**：不新建回复、不动 `id` / 分支结构、不调
+ * `regenerateReply`，所以 `updateReply`（按 `message.id` 整条替换）与 `persist`
+ * 写进 IndexedDB 的仍是同一个 `session.messages` 项，库里不会多出一份。
+ *
+ * 思考块一起清：`receivedCharsOf` 把思考也算作「用户已看到的内容」，留着思考而清正文
+ * 一样是「两份」。
+ */
+const discardReplyContent = (reply: AssistantMessage): AssistantMessage => ({
+  ...reply,
+  status: 'pending',
+  blocks: [],
+  stopReason: undefined,
+  stopDetails: undefined,
+})
+
+/**
  * 请求并消费流：先补齐附件的 serverId，再发请求；流式增量按动画帧刷新内存，完成、失败或停止后落盘。
  * 补传失败时回复记为 upload 错误，可重试。
  * 服务端判定 file_id 失效时重新补传后重发，退避重试且次数有上限，超过则按原始报错收尾。
  */
 const streamReply = async (sessionId: string, initial: AssistantMessage, request: Request) => {
+  const session = getSession(sessionId)
+  const prompt = session?.customSystemPrompt
+  const systemPrompt = typeof prompt === 'string' && prompt ? SYSTEM_PROMPT + '\n\n' + prompt : SYSTEM_PROMPT
   const controller = new AbortController()
   /** 本轮开始时间：chat_first_token / chat_done / 中止都用它算耗时（老口径，保持不变） */
   const startedAt = Date.now()
@@ -1984,6 +2309,14 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
   const meter = createStreamMeter()
   /** 本轮是第几次尝试（重试会递增）：第一次就慢 与 重试后才成 必须分得开 */
   let attemptNo = 1
+  /**
+   * 断流两档**自己**已经重试过几次（`chat/streamBreakout.ts` 的 `retriedCount`）。
+   *
+   * 为什么不用 `attempt`：那个计数器把 #105 通用档（弱网 / 5xx / 附件失效补传）的重试
+   * 也算进去了，而两档的**上限不同**（断流 5 次 / 1 次，通用 2 次）。混算会让
+   * 「先 5xx 重试过一次、再断流」的轮次提前判成预算用完 —— 用户无感的那几次补救就白丢了。
+   */
+  let breakoutRetries = 0
   /** 端点键（只写 config/endpoints.json 的键，不写完整 URL） */
   const endpointKey = () => endpointKeyFromUrl(getBaseUrl())
   /** 是否已记过第一个 token（只记一次） */
@@ -2012,6 +2345,15 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
       /** 附件补齐前出错属于上传失败，请求还没有发出 */
       let preparing = true
       let receivedContent = false
+      /**
+       * 这一轮**已经展示给用户**的字符数（正文 + 思考）：断流后「要不要静默重发」看它。
+       *
+       * 与 `receivedContent` 的分工：那个是布尔（有没有出过内容块），这里要的是量 ——
+       * 产品口径按「首字节前 / 首字节后」分档（见 `chat/streamBreakout.ts`），
+       * 而 `content_block_start` 到达时正文可能还是空的（思考块先到），按块判会把
+       * 「用户已经看着思考在滚」当成「什么都没看到」。
+       */
+      let receivedChars = 0
       try {
         setWaitStage(sessionId, needsUpload(roundFiles(request)) ? 'uploading' : 'preparing')
         const prepared = await prepareFiles(sessionId, request, controller.signal)
@@ -2050,7 +2392,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           // 裁剪边界跟着会话走（#345）：同一会话的后续轮次沿用同一个边界，
           // 请求前缀逐字节稳定，上游上下文缓存才会命中
           // vision：本渠道图片走 file_id 还是 base64 内联（#551）；deepseek 仍只认 file_id
-          { anchorKey: sessionId, attachmentRefs: documentInjection, vision: visionFor(spec.kind) }
+          { anchorKey: sessionId, personaChars: systemPrompt.length - SYSTEM_PROMPT.length, attachmentRefs: documentInjection, vision: visionFor(spec.kind) }
         )
         /**
          * 注入正文（#480 §9）：`buildWithDocuments()` 是**唯一入口** —— 它按预算挑正文、
@@ -2060,7 +2402,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
          * 提问照发；真抛错时这里兜一次，剥掉引用键继续发（文档是增强项，不是发送前置条件）。
          */
         const injected = documentInjection
-          ? await withRequestDocuments(preparedMessages, spec.kind)
+          ? await withRequestDocuments(preparedMessages, spec.kind, systemPrompt)
           : { messages: preparedMessages, notice: '' }
         if (injected.notice) {
           recordEvent('chat_send', injected.notice, {
@@ -2068,7 +2410,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
             model: initial.model ?? getModel(),
           })
         }
-        const { system, messages } = toRequestBody(injected.messages)
+        const { system, messages } = toRequestBody(injected.messages, systemPrompt)
         // 附件已补齐、请求即将发出：prepMs 到此为止，后面的耗时才是「等上游」
         meter.markRequest()
         // 字段发不发由 requestBody.ts 里的 REQUEST_GATES 决定，这里只把本轮信息传进去
@@ -2096,6 +2438,14 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
         const blockIndexes = new Map<number, number>()
         for await (const event of events) {
           receivedContent ||= event.type === 'content_block_start'
+          // 「用户看到了多少字」：正文与思考增量都算（见 receivedChars 的注释）
+          if (event.type === 'content_block_delta') {
+            if (event.delta.type === 'text_delta') {
+              receivedChars += event.delta.text.length
+            } else if (event.delta.type === 'thinking_delta') {
+              receivedChars += event.delta.thinking.length
+            }
+          }
           if (
             event.type === 'message_delta' &&
             (event.delta.stop_reason === 'end_turn' || event.delta.stop_reason === 'max_tokens') &&
@@ -2338,20 +2688,76 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           mayRetry &&
           !isRetryableApiError(error) &&
           reuploadInvalidatedFiles(sessionId, request, error)
-        const decision = decideStreamRetry({
-          error,
-          attempt,
-          receivedContent,
-          aborted: controller.signal.aborted,
-          fileRecovered,
+        /**
+         * 断流两档（interrupted / idle）走**自己那套口径**（`chat/streamBreakout.ts`）：
+         * - 首字节前断开 → 静默重试 **5** 次（1s/2s/4s/8s 封顶，60s 总预算优先于次数）；
+         * - 首字节后有内容且 **< 150 字** → 补 1 次，且**丢弃已收到内容重来**（`discardPartial`）；
+         * - 首字节后有内容且 **>= 150 字** → 0 次，软提示 + 「重新生成」，内容保留。
+         *
+         * `decideStreamRetry` 的口径**不动**：它服务的是弱网 / 5xx / 连接超时 / 首字超时、
+         * 以及附件失效补传，那些档位有自己的上限与提示。这里只是在断流两档上做一次收口，
+         * 两者不重叠（`isStreamBreakoutKind` 只认 interrupted / idle）。
+         */
+        const errorKind = error instanceof ApiError ? error.kind : undefined
+        const breakoutKind = isStreamBreakoutKind(errorKind) ? errorKind : undefined
+        const breakout = decideStreamBreakout({
+          receivedChars,
+          // 只数断流档自己的重试（见 breakoutRetries 的注释：不能和 #105 通用档混算）
+          retriedCount: breakoutRetries,
+          // 总预算从点发送算起（含附件补齐与前面几次退避的等待）：超了立刻停，不再重发
+          elapsedMs: Date.now() - startedAt,
+          kind: errorKind,
         })
+        const decision = breakoutKind
+          ? controller.signal.aborted
+            ? 'aborted'
+            : breakout.retry
+              ? 'retry'
+              : 'final'
+          : decideStreamRetry({
+              error,
+              attempt,
+              receivedContent,
+              aborted: controller.signal.aborted,
+              fileRecovered,
+            })
         if (decision === 'retry') {
+          if (breakoutKind) {
+            breakoutRetries += 1
+          }
+          /**
+           * 丢弃半截内容重来（`discardPartial`）：首字节后断开、内容不足 150 字时，
+           * 判定要求「重发前把已收到内容清干净」，否则同一条回复里会同时有前一版和新一版
+           * 的正文 —— 用户看到两遍、上游重复计费，这就是「绝不出现两份」的执行点。
+           *
+           * 三件事一起做，缺一不可：
+           * 1. `reply` 置空（正文 / 思考块全清、状态回到 pending）—— 内存里只剩这一份；
+           * 2. `updateReply` 立刻把清空后的回复写回会话（不等 rAF，避免一帧的旧内容回闪）；
+           * 3. `persist` 落盘：库里存的也是同一个 `session.messages` 项（按 `message.id`
+           *    整条替换），**不新增版本、不调 regenerateReply**，所以持久化层面不会有两份。
+           */
+          if (breakout.discardPartial) {
+            reply = discardReplyContent(reply)
+            updateReply(sessionId, reply)
+            void persist(sessionId)
+            /**
+             * 首字到达时 `clearWaitHints` 已经把 `waitStates` 删掉了，这时候 `setWaitStage`
+             * 是 no-op —— 「正在重新生成」这条既有提示（`chatRetrying`）根本不会出现。
+             * 丢弃重来等于重新开始一次等待，所以在这里重新挂表（秒数仍从点发送累计，不归零）。
+             */
+            armWaitHints(sessionId, startedAt)
+          }
           // 让用户看见「正在第 N 次重试」，而不是静默卡住；秒数从点发送累计，不因重试归零（#328 G6）
+          // 「共 N 次」用这一档自己的预算（断流 5 次 / 1 次），不能照抄 #105 的 2
           setWaitStage(sessionId, 'retrying', {
-            attempt: attempt + 1,
-            limit: STREAM_RETRY_LIMIT,
+            attempt: breakoutKind ? breakoutRetries : attempt + 1,
+            limit: breakout.maxRetries > 0 ? breakout.maxRetries : STREAM_RETRY_LIMIT,
           })
-          await waitForRetry(attempt, controller.signal)
+          // 退避时长也由判定给：断流档 1s/2s/4s/8s 封顶，其余档仍是 #105 的 base × 2^attempt
+          await waitForRetry(
+            breakoutKind ? breakout.retryDelayMs : genericRetryDelayMs(attempt),
+            controller.signal
+          )
           if (controller.signal.aborted) {
             reply = settleReply(reply, 'stopped', Date.now())
             break

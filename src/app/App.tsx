@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
-import { useTranslate } from '../i18n/index.js'
+import { useTranslate, type TranslationKey } from '../i18n/index.js'
 import { useSettings } from '../services/settings.js'
 import { useIsMobile, useMobileViewport, usePreventPageScroll } from './viewport.js'
 import {
@@ -9,6 +9,13 @@ import {
   selectSession,
   useChatStore,
 } from '../services/chat/store.js'
+import {
+  SAVE_BANNER_MESSAGE,
+  saveBannerRetryable,
+  selectSaveBannerTier,
+  type SaveBannerTier,
+  type StorageInitFailure,
+} from '../services/chat/db.js'
 import { SearchPanel } from '../components/search/SearchPanel.js'
 import { closeSearchPanel } from '../components/search/searchPanelState.js'
 import { SessionView } from '../components/session/SessionView.js'
@@ -39,6 +46,35 @@ import { bundledApp } from '../services/appUpdate.js'
 import styles from './App.module.css'
 
 /**
+ * 读库失败的文案（P0）：`blocked`（另一个标签页攥着旧连接）与 `version`（库比代码新）**各有专属说法**。
+ *
+ * 为什么不能统一成「加载失败请重试」：这两种情况下重试永远是同一个结果 ——
+ * 前者要用户去关掉其它页面，后者要用户更新应用。把重试按钮摆在最显眼处只会让用户反复点。
+ */
+const loadFailureKey = (ready: boolean, initFailure: StorageInitFailure | null): TranslationKey => {
+  if (ready) {
+    return 'sessionLoadFailed'
+  }
+  if (initFailure === 'blocked') {
+    return 'storageBlockedByOtherTab'
+  }
+  if (initFailure === 'version') {
+    return 'storageVersionTooNew'
+  }
+  return 'sessionListLoadFailed'
+}
+
+/**
+ * 附件降级的文案：**配额不足就用配额那句话**（用户的动作同样是「清理 / 导出备份后重试」），
+ * 其余原因用「附件没能存进本机」。
+ *
+ * 为什么不能复用「这段对话没存到本机」：拆事务之后，会话确实已经落盘了，
+ * 跟用户说对话没存上是**假话**，而且会让人以为要重发整轮问答。
+ */
+const degradedMessageKey = (tier: SaveBannerTier): TranslationKey =>
+  tier === 'quota' ? 'sessionSaveFailedQuota' : 'attachmentSaveFailed'
+
+/**
  * 公告的调试开关（产品方边看边提要求时反复看弹窗效果用）：
  * URL 带 `?ann-reset` 就清掉「已读 / 已弹过」两个标记，没带就什么都不做。
  *
@@ -55,7 +91,23 @@ export const App = () => {
   const siderCollapsed = useSettings((state) => state.siderCollapsed) && !isMobile
   const ready = useChatStore((state) => state.ready)
   const initError = useChatStore((state) => state.initError)
-  const saveError = useChatStore((state) => Object.values(state.sessionSaveErrors).some(Boolean))
+  /**
+   * 保存失败横幅的**档位**（P0）：`unavailable` > `quota` > 可重试。
+   * 选档与文案映射都是纯函数（`db.selectSaveBannerTier` / `db.SAVE_BANNER_MESSAGE`），L0 直接可测。
+   */
+  const saveTier = useChatStore((state) => selectSaveBannerTier(state.sessionSaveErrors))
+  /**
+   * 附件降级（会话已落盘、blob 没写进去）：单独提示，绝不冒充「这段对话没存到本机」。
+   * 档位与文案：配额不足时说「本机存储空间不足…」（用户的动作就是清理后重试），
+   * 其余原因说「附件没能存进本机（可重试）」—— 两种情况都不许说「这段对话没存到本机」。
+   */
+  const degradedAttachments = useChatStore((state) => state.degradedAttachments)
+  const degradedTier = selectSaveBannerTier(
+    Object.fromEntries(
+      Object.entries(degradedAttachments).map(([id, item]) => [id, item.failure])
+    )
+  )
+  const initFailure = useChatStore((state) => state.initFailure)
   const importingHistory = useChatStore((state) => state.importingHistory)
   const session = useChatStore((state) =>
     state.activeId !== null && Object.hasOwn(state.sessionCache, state.activeId)
@@ -158,17 +210,35 @@ export const App = () => {
               : undefined
           }
         >
-          {saveError ? (
+          {saveTier ? (
             <div className={styles.saveError} role="alert">
-              <span>{t('sessionSaveFailed')}</span>
-              <Button
-                variant="outlined"
-                size="s"
-                disabled={importingHistory}
-                onClick={retrySaveSessions}
-              >
-                {t('retry')}
-              </Button>
+              <span>{t(SAVE_BANNER_MESSAGE[saveTier])}</span>
+              {/* `unavailable`（这个环境根本写不进去）**不给重试**：点了也是同一个结果 */}
+              {saveBannerRetryable(saveTier) ? (
+                <Button
+                  variant="outlined"
+                  size="s"
+                  disabled={importingHistory}
+                  onClick={retrySaveSessions}
+                >
+                  {t('retry')}
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+          {degradedTier ? (
+            <div className={styles.saveError} role="status">
+              <span>{t(degradedMessageKey(degradedTier))}</span>
+              {saveBannerRetryable(degradedTier) ? (
+                <Button
+                  variant="outlined"
+                  size="s"
+                  disabled={importingHistory}
+                  onClick={retrySaveSessions}
+                >
+                  {t('retry')}
+                </Button>
+              ) : null}
             </div>
           ) : null}
           <div className={styles.content}>
@@ -179,10 +249,12 @@ export const App = () => {
                 <div className={styles.loadingState} role="status" aria-live="polite">
                   <span>
                     {(!ready ? initError : sessionLoadError)
-                      ? t(!ready ? 'sessionListLoadFailed' : 'sessionLoadFailed')
+                      ? t(loadFailureKey(ready, initFailure))
                       : t('sessionLoading')}
                   </span>
-                  {(!ready ? initError : sessionLoadError) ? (
+                  {/* 库比代码新时重试一万次也一样：只留「请更新应用」这句话，不给假的出口 */}
+                  {(!ready ? initError : sessionLoadError) &&
+                  loadFailureKey(ready, initFailure) !== 'storageVersionTooNew' ? (
                     <Button
                       variant="outlined"
                       size="m"

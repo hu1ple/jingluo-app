@@ -6,12 +6,40 @@ export const zh = {
   modeExpert: '专家模式',
   expandSiderbarButton: '打开边栏',
   collapseSiderbarButton: '收起边栏',
+  promptTitle: '自定义提示词',
+  promptDescription: '在这里设置人物、世界观、创作规则或其他要求。AI 将在后续对话中持续参考这些内容。',
+  promptPlaceholder: '输入你的自定义提示词……',
+  promptScope: '仅对当前聊天生效，AI 不会自动修改。',
+  promptCount: '已用 {count} / {max} 字',
+  promptTooLong: '当前内容超过 {max} 字，请删减后保存。',
+  promptSaved: '已保存',
+  promptConfirm: '是否保存提示词？',
+  personaSave: '保存',
+  personaDiscard: '不保存',
+  personaSaveFailed: '保存失败，请重试。',
   newChat: '开启新对话',
+  shareImport: '导入分享会话',
+  shareImportDescription: '粘贴 DeepSeek 官方分享链接，导入后可在本机继续编辑',
+  shareImportAction: '导入',
+  shareLink: 'DeepSeek 官方会话分享链接',
+  shareLoading: '正在导入…',
+  shareInvalid: '请输入完整的 HTTPS 会话分享链接，路径应为 /share/分享编号。',
+  shareUnofficial: '仅支持 chat.deepseek.com 的官方分享链接。',
+  shareUnavailable: '分享不存在或已取消。',
+  shareUnreadable: '无法读取分享内容，格式可能已变更。',
+  shareFetchFailed: '未能读取分享，请检查网络或稍后重试。',
+  shareBusy: '请等待当前回复或历史导入完成后再试。',
+  shareSaveFailed: '会话保存失败，请检查本地存储后重试。',
   untitledChat: '新对话',
   sessionLoading: '正在加载对话...',
   sessionListLoadFailed: '对话列表加载失败，请重试',
   sessionLoadFailed: '对话加载失败，请重试',
-  sessionSaveFailed: '还没存到手机上 (っ °Д °;)っ 现在关掉页面可能会丢哦',
+  sessionSaveFailedRetryable: '这段对话没存到本机，点重试',
+  sessionSaveFailedQuota: '本机存储空间不足，清理或导出备份后重试',
+  sessionSaveFailedUnavailable: '当前环境无法保存到本机，建议用 App 打开',
+  attachmentSaveFailed: '附件没能存进本机，刷新后可能看不到（可重试）',
+  storageBlockedByOtherTab: '另一个标签页占用了本机存储，请关闭其它页面后重试',
+  storageVersionTooNew: '本机数据版本比当前应用新，请更新应用',
   sessionDeleteFailed: '删除对话失败，请重试',
   settings: '设置',
   appName: '鲸落',
@@ -280,6 +308,8 @@ export const zh = {
   settingsAnnouncementExpand: '展开全文',
   settingsAnnouncementCollapse: '收起',
   settingsAnnouncementPopupDismiss: '知道了',
+  // 强制阅读倒计时（`AnnouncementPopup` 5 秒内按钮禁用时用它，`{seconds}` 是剩余秒数）
+  settingsAnnouncementPopupDismissCount: '知道了（{seconds}s）',
   // 相对时间（`components/announcements/relativeTime.ts` 按档位挑一条）
   announceTimeJustNow: '刚刚',
   announceTimeMinutesAgo: '{count} 分钟前',
@@ -292,12 +322,12 @@ export const zh = {
   confirm: '确定',
   apiKeyInvalid: 'Key 好像不对呢 (｡•́︿•̀｡)',
   apiKeyVerificationFailed: '校验失败：{message}',
-  historyImport: '导入历史对话',
+  historyImport: '导入历史会话',
   historyImportConfirm: '确认导入',
   historyImportConfirmTitle: '确认导入历史对话？',
   historyImportConfirmDescription: '导入前请先选择导入方式：合并会保留本地会话，整包覆盖会清除本地全部会话。',
   historyImportDescription:
-    '导入历史对话时会先选择导入方式（合并 / 跳过已存在 / 整包覆盖），支持 DeepSeek 导出的 ZIP 文件。',
+    '导入历史会话时会先选择导入方式（合并 / 跳过已存在 / 整包覆盖），支持 DeepSeek 导出的 ZIP 文件。',
   historyImportModeLabel: '导入方式',
   historyImportModeMerge: '合并（推荐）',
   historyImportModeMergeHint: '保留本地全部会话；同一会话按更新时间取舍，包内更新的才覆盖',
@@ -312,12 +342,15 @@ export const zh = {
   historyImportSummaryDetail: '（新增 {added} / 覆盖 {overwritten} / 跳过 {skipped}）',
   historyImportConflictSkippedTitle: '保留了本地版本的会话（同 ID 且本地更新）',
   historyExportEmptySelection: '没有勾选任何会话，无法导出',
-  historyExportSelectedCount: '已选 {count} 条',
+  // 侧栏「历史对话」那一行的标题与「已选 N 项」计数（多选态底部操作条，设计稿 2026-11）
+  historySiderTitle: '历史对话',
+  historyExportSelectedCount: '已选 {count} 项',
   historyExportSelectedEmpty: '请先勾选要导出的会话',
   historySelectModeEnter: '选择',
-  historySelectModeExit: '退出选择',
   historySelectAll: '全选',
-  historySelectInvert: '反选',
+  historyDeleteSelected: '删除选中',
+  historyDeleteSelectedWarning: '将彻底删除选中的 {count} 个会话及其聊天记录。删除后无法恢复。',
+  historyConfirmDelete: '确认删除',
   historyExportSelected: '导出选中',
   // #536：选中导出改为和老出口同一个落盘函数后，提示要带上**真正写下去的文件名**
   // （Android 的 SAF 面板可能按重名规则改名；只报条数的话，用户无从确认文件到底落没落盘）。
@@ -796,6 +829,11 @@ export const zh = {
   settingDialogReadingFontSize: '字号',
   settingDialogReadingFontWeight: '字重',
   settingDialogReadingLineHeight: '行高',
+  settingDialogReadingSizeXXLarge: '超大',
+  settingDialogReadingSizeXSmall: '特小',
+  settingDialogReadingReset: '恢复默认',
+  settingDialogReadingSample: '预览字体大小',
+  settingDialogReadingSampleReply: '拖动或点击下方滑块，调整对话中的文字大小。',
   settingDialogReadingSizeSmall: '小',
   settingDialogReadingSizeStandard: '标准',
   settingDialogReadingSizeLarge: '大',
@@ -967,8 +1005,17 @@ export const zh = {
   settingsAuthResetRateLimited: '操作太频繁，请稍后再试',
   /** 其它 4xx/5xx（参数被拒、5xx、表外码）：不猜原因，只给一句可重试的话 */
   settingsAuthResetFailed: '重置失败，请稍后重试',
-  /** 重置成功后挂在登录页上的那句（`AuthGate` 的 notice / 登录卡的 notice 共用） */
-  settingsAuthResetDone: '密码已重置，请用新密码登录',
+  /**
+   * 注册成功后回到登录表单时挂的那句（产品口径 2026-11-25：注册结束后回登录界面，用户自己登录一次）。
+   * 与新加的 `authResetDonePleaseLogin` 成对；**不复用**任何登录失败 / 会话过期语义的旧 key。
+   */
+  authRegisterDonePleaseLogin: '注册成功，请登录',
+  /**
+   * 重置密码成功后回到登录表单时挂的那句（设置卡的 notice / `AuthGate` 的登录页 notice 共用）。
+   * 「请用新密码登录」这句不是客套：匿名重置没有可回查的会话，重置成功只等于服务端受理了，
+   * 真正的确认就是用户用新密码登一次。
+   */
+  authResetDonePleaseLogin: '密码已重置，请用新密码登录',
   /**
    * `settings/public` 没读到时注册卡底部那一行（可点重试，`data-testid="settings-auth-flags-retry"`）。
    *

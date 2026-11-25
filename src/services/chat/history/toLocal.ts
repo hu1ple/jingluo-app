@@ -48,6 +48,19 @@ export type LocalSessionResult =
   | { ok: true; session: LocalSession; skipped: ImportSkip[] }
   | { ok: false; reason: TranslationKey; skipped: ImportSkip[] }
 
+export type LocalConvertOptions = {
+  /**
+   * 附件路径对不上时**降级**而不是判死（分享导入用，见 deepseekShare.ts）。
+   *
+   * 归档导入（importArchive）保持原口径：图片的 `export_path` 必须落在本会话目录下，
+   * 越界说明归档被改过，整条会话按 `backupInvalidFiles` 跳过（#49）。
+   * 但分享导入里的路径来自**对方设备**的会话目录（`chat_sessions/<对方的会话 id>_files/…`），
+   * 本机用合成 id（`deepseek-share-<shareId>`）必然对不上 —— 那不是损坏，只是「附件没跟过来」。
+   * 打开这一项后，越界的图片只留一条 skipped 提示（该会话的附件未迁移），正文照常导入。
+   */
+  degradeFiles?: boolean
+}
+
 const time = (value: string) => Date.parse(value)
 
 /** 链接会渲染成 href，只接受 HTTP / HTTPS。 */
@@ -363,7 +376,10 @@ const deepest = (messages: Message[], byId: Map<number, Message>): Message => {
  * 转换单个会话并收集被跳过的条目，坏数据不抛错（#49）。
  * 整个会话无法构造时返回 ok=false，由调用方把它记进 skipped 后继续处理其余会话。
  */
-export const toLocalSessionResult = (file: SessionFile): LocalSessionResult => {
+export const toLocalSessionResult = (
+  file: SessionFile,
+  options: LocalConvertOptions = {}
+): LocalSessionResult => {
   const tree = buildTree(file)
   if (tree.messages.length === 0) {
     tree.skipped.push({
@@ -400,6 +416,8 @@ export const toLocalSessionResult = (file: SessionFile): LocalSessionResult => {
   }
   const images = new Map<string, string>()
   let filesBroken = false
+  // 降级口径（options.degradeFiles）：附件对不上只提示「未迁移」，不占死整条会话。
+  let filesDegraded = false
   for (const message of file.messages) {
     for (const item of message.fragments) {
       if (item.type !== 'FILE') {
@@ -419,7 +437,11 @@ export const toLocalSessionResult = (file: SessionFile): LocalSessionResult => {
           !path.startsWith(sessionFilesDir(file.id)) ||
           (images.get(path) ?? entry.id) !== entry.id
         ) {
-          filesBroken = true
+          if (options.degradeFiles) {
+            filesDegraded = true
+          } else {
+            filesBroken = true
+          }
           continue
         }
         images.set(path, entry.id)
@@ -436,6 +458,17 @@ export const toLocalSessionResult = (file: SessionFile): LocalSessionResult => {
       reason: 'backupInvalidFiles',
     })
     return { ok: false, reason: 'backupInvalidFiles', skipped: tree.skipped }
+  }
+  if (filesDegraded) {
+    // 会话照常导入，只是附件没跟过来（分享导入：路径属于对方设备的会话目录）。
+    tree.skipped.push({
+      scope: 'session',
+      sessionId: file.id,
+      sessionTitle: file.title ?? '',
+      messageId: null,
+      parentId: null,
+      reason: 'backupInvalidFiles',
+    })
   }
   return { ok: true, session: { session, images }, skipped: tree.skipped }
 }

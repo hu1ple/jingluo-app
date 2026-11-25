@@ -1746,6 +1746,166 @@
   box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
 }
 
+
+
+.sizePanel {
+  padding: 10px 0 8px;
+}
+
+.sizeHeading, .sizeControl, .sizeReset {
+  display: flex;
+  align-items: center;
+}
+
+.sizeHeading {
+  justify-content: space-between;
+  font-size: 16px;
+}
+
+.sizeReset {
+  padding: 8px 0 8px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-brand-text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.sizeReset svg {
+  margin-right: 4px;
+}
+
+.sizeReset:disabled {
+  color: var(--dsw-alias-label-tertiary);
+  cursor: default;
+}
+
+.sizePreview {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  margin: 10px 0 16px;
+  font: var(--dsw-font-markdown-base);
+  color: var(--dsw-alias-label-primary);
+}
+
+.sizePreview span {
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 8px 14px;
+  border-radius: 15px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  overflow-wrap: break-word;
+}
+
+.sizePreview span:first-child {
+  align-self: flex-end;
+  margin-bottom: 10px;
+  color: white;
+  background: var(--dsw-static-blue-500);
+}
+
+/* 作用范围说明：12px 三级色，跟滑块拉开层次，但不抢「预览」的注意力 */
+.sizeHint {
+  margin-top: 10px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.sizeControl {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.sizeControl strong {
+  font-size: 18px;
+}
+
+.sizeTrack {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  margin: 0 10px;
+}
+
+.sizeTicks {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: calc(50% - 5px);
+  height: 10px;
+  padding: 0 3px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-radius: 10px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  pointer-events: none;
+}
+
+.sizeTicks i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--dsw-alias-label-tertiary);
+}
+
+.sizeTrack input {
+  display: block;
+  position: relative;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: 44px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.sizeTrack input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: white;
+  border: 1px solid rgba(0, 0, 0, .12);
+  box-shadow: 0 2px 7px rgba(0, 0, 0, .18);
+}
+
+.sizeTrack input::-moz-range-thumb {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: white;
+  border: 1px solid rgba(0, 0, 0, .12);
+  box-shadow: 0 2px 7px rgba(0, 0, 0, .18);
+}
+
+.sizeTrack input::-moz-range-track {
+  background: transparent;
+}
+
+/* DeepSeek 分享链接输入框（从侧栏搬进「数据管理」后归到这里）。
+   「从链接导入」与「导入分享会话」两行共用这一个类：改它就等于同时改两行，
+   两行的输入框因此天然同高同宽（`linkCell` + `linkInput` 负责宽度分配）。
+   这里不再带 `margin-top`：那是给已退役的 `ShareImportDialog` 竖排标签留的间距，
+   行内布局由 `.linkActions` 的 `align-items: center` 对齐。 */
+.shareLinkInput {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  min-height: 44px;
+  font: inherit;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-3);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 10px;
+}
+
 /* #173-fallback:start —— 由 node scripts/gen-flex-gap-fallback.mjs 生成，勿手改（issue #173） */
 :global(html[data-flex-gap-fallback]) .row > *:not(:last-child) {
   margin-right: 8px;

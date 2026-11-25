@@ -40,10 +40,15 @@ setupDom()
 
 const realSetTimeout = globalThis.setTimeout
 /**
- * 退避等待压缩到 1ms：只压 `retryBaseDelay × 2^attempt` 的 1000 / 2000 两档。
+ * 退避等待压缩到 1ms：压 `retryBaseDelay × 2^attempt`（1000 / 2000）与断流档的
+ * 1s/2s/4s/8s 序列（`chat/streamBreakout.ts` 的 `STREAM_BREAK_RETRY_DELAYS_MS`）。
+ *
+ * 2026-11-25 起「首字节前断开」最多静默重试 5 次，退避 1+2+4+8+8 = 23s —— 不压缩的话
+ * 单是一轮就要真等 23s，先撞 `awaitIdle` 的 20s 上限（那是用例失败，不是实现失败），
+ * 而这条用例要断言的是**请求次数**，与「等多久」无关。
  * 其余定时器（首字分级提示、请求超时预算）原样不动 —— 压它们会改变被测语义。
  */
-const RETRY_BACKOFF_MS = new Set([1000, 2000])
+const RETRY_BACKOFF_MS = new Set([1000, 2000, 4000, 8000])
 globalThis.setTimeout = (fn, ms, ...args) =>
   realSetTimeout(fn, RETRY_BACKOFF_MS.has(ms) ? 1 : ms, ...args)
 
@@ -150,6 +155,17 @@ const { pinLocale } = await import('../helpers/locale.mjs')
 const store = await import('../../src/services/chat/store.ts')
 
 const { STREAM_RETRY_LIMIT, initChat, sendMessage, useChatStore } = store
+/**
+ * 断流两档的重试预算是**独立**的（`chat/streamBreakout.ts` 的 `STREAM_BREAK_RETRY_LIMIT`）：
+ * 2026-11-25 起「首字节前断开」只静默重试 1 次（用户无感的一次补救），
+ * 与 #105 那道面向弱网 / 5xx / 连接超时的 `STREAM_RETRY_LIMIT`（2 次）分开算。
+ * 这里从实现里取，不写死数字 —— 改口径时这行断言会跟着一起动。
+ */
+const { STREAM_BREAK_RETRY_LIMIT } = await import('../../src/services/chat/streamBreakout.ts')
+assert.ok(
+  Number.isInteger(STREAM_BREAK_RETRY_LIMIT) && STREAM_BREAK_RETRY_LIMIT >= 1,
+  `断流的静默重试也要有明确上限且至少 1 次（实际 ${STREAM_BREAK_RETRY_LIMIT}）`
+)
 
 // 本文件断言的是中文文案，语言必须钉死（否则 LANG=en_US 的机器上整片红，见 #366）
 assert.equal(pinLocale(useSettings), 'zh-CN', '界面语言必须钉在中文，不能跟随 shell 的 LANG')
@@ -225,6 +241,7 @@ const runRound = async ({ onRespond, text = '这条会失败' }) => {
  * 表驱动两行，列就是断言口径：
  *   respond       本轮的失败形态（会作用在**每一次**尝试上）
  *   calls         回答请求的准确次数（= 1 + 重试次数；这是「有上限」的唯一硬证据）
+ *   hintLimit     「正在第 N 次重试（共 N 次）」里的上限：断流行用断流预算，其余用 #105 的通用上限
  *   kind          终态 error.kind
  *   expectText    界面必须出现的终态文案（整句比对，认的是这一档的原文）
  *   retryable     这一档是否可重试（**行为**口径：由 calls 次数与 errorNotice 表决定；
@@ -236,11 +253,18 @@ const C1_ROWS = [
     id: 'C1 行 1 断流（空响应）每次都在首字前断掉',
     covers: ['F2-07', 'F2-09'],
     respond: () => emptyStream(),
-    calls: 1 + STREAM_RETRY_LIMIT,
+    /**
+     * 2026-11-25：断流改走**断流自己的**重试预算（`STREAM_BREAK_RETRY_LIMIT` = 1 次静默重试）。
+     * 口径变化的原因不是「放宽/收紧容错」，而是产品要的体验：「中断」不是「报错」——
+     * 首字节前断开时静默重试一次，成了用户无感，不成才给软提示；多轮静默重发只会放大请求量。
+     * 「有上限」这条断言本身没变：期望值仍从实现里取，改成无限重试照样会红。
+     */
+    calls: 1 + STREAM_BREAK_RETRY_LIMIT,
     kind: 'interrupted',
     expectText: zh.replyEmptyStream,
     retryable: true,
-    hintAttempts: Array.from({ length: STREAM_RETRY_LIMIT }, (_, index) => index + 1),
+    hintAttempts: Array.from({ length: STREAM_BREAK_RETRY_LIMIT }, (_, index) => index + 1),
+    hintLimit: STREAM_BREAK_RETRY_LIMIT,
   },
   {
     id: 'C1 行 2 不可重试档（403 被拒）只发 1 次',
@@ -289,7 +313,11 @@ for (const row of C1_ROWS) {
       `重试提示的 attempt 序列应为 ${JSON.stringify(row.hintAttempts)}`
     )
     for (const hint of result.hints) {
-      assert.equal(hint.params?.limit, STREAM_RETRY_LIMIT, '重试提示里的上限必须与实现一致')
+      assert.equal(
+        hint.params?.limit,
+        row.hintLimit ?? STREAM_RETRY_LIMIT,
+        '重试提示里的上限必须与实现一致（断流行用断流预算，其余用通用上限）'
+      )
     }
   })
 }

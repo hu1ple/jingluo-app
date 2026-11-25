@@ -39,15 +39,25 @@
 }
 
 .selectable {
-  /* 选择模式：整行都能点，勾选状态用左侧方框表达（#390）。
-     勾选框与标题的间距用 margin 而不是 flex gap：Chromium 83 上没有 flex gap，
-     而这个类总是和 .item 一起用，写成 gap 会让 `check:gap` 看不见、也给不出兜底。 */
+  /* 多选态：整行都能点（`role="checkbox"`），行高沿用 `.item` 的固定高度，切进来列表不跳动。
+     勾选控件与标题的间距用 margin 而不是 flex gap：Chromium 83 上没有 flex gap。 */
 }
 
-.selected {
-  background-color: var(--dsw-specific-sidebar-nav-item-hover);
+/* 键盘焦点环：行是 `role="checkbox"`，div 没有 UA 默认焦点样式，这里给勾选控件一圈可见蓝环。
+   不写 `:focus-visible`（Chromium 83 会整条丢弃，见 #215），鼠标点击也出环是可接受降级。 */
+.selectable:focus {
+  outline: none;
+
+  .check {
+    box-shadow: 0 0 0 2px var(--dsw-alias-button-primary-fill);
+  }
 }
 
+/*
+ * 圆形勾选控件（设计稿：选中 = 蓝色实心圆 + 白色对勾；未选中 = 灰色实心圆）。
+ * 纯 CSS 画的圆：`border-radius: 50%`；对勾是内联 SVG（`.check` 的 currentColor），不引新依赖。
+ * 尺寸 18×18 与默认态行内图标同档，行高不变。
+ */
 .check {
   display: inline-flex;
   flex-shrink: 0;
@@ -57,15 +67,22 @@
   box-sizing: border-box;
   width: 18px;
   height: 18px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 6px;
-  /* 勾选态是品牌蓝底，勾必须用「品牌底上的前景色」（浅色主题里 brand-primary-invert 也是蓝，
-     勾会看不见，与主按钮的文字色同源） */
+  border-radius: 50%;
+  /* 未选中：灰色实心圆（不是描边圆环、不是方框）。用会随主题翻转的交互灰，深色主题下也看得见 */
+  background-color: var(--dsw-alias-interactive-bg-hover-accent);
+  /* 对勾用「品牌底上的前景色」（白）——浅色主题里 brand-primary-invert 也是蓝，勾会看不见 */
   color: var(--dsw-alias-label-primary-foreground);
+  transition: background-color var(--motion-duration-fade) var(--motion-ease-ios);
+
+  svg {
+    /* 16 的图标塞进 18 的圆里留一圈边，别顶到圆边 */
+    width: 12px;
+    height: 12px;
+  }
 }
 
 .checkOn {
-  border-color: var(--dsw-alias-brand-primary);
+  /* 选中：品牌蓝实心圆 */
   background-color: var(--dsw-alias-brand-primary);
 }
 

@@ -1,6 +1,8 @@
 import { testSeamEnabled } from '../../utils/testSeam.js'
 import { MOCK_ANNOUNCEMENTS, SEED_SEEN } from './mock.js'
+import { parseReadGate, withFinished } from './readGate.js'
 import { fetchAnnouncements, parseAnnouncementItem } from './remote.js'
+import type { ReadGateMap } from './readGate.js'
 import type {
   Announcement,
   AnnouncementList,
@@ -17,10 +19,12 @@ import type {
  *    → 排序 + 已读 + 未读数（`buildAnnouncementList`）
  *    → `useAnnouncements()`（`useSyncExternalStore`）。
  *
- * 三件事，全在这个文件里，界面只读不算：
+ * 四件事，全在这个文件里，界面只读不算：
  *  1. 已读表落 `localStorage`（`chat-demo:announcements-seen`，值 `{ [id]: timestamp }`）；
  *  2. 排序（`publishedAt` 倒序）与 `unreadCount` 在这里算完，界面拿到的就是最终形状；
- *  3. 订阅用 `useSyncExternalStore` 那一套（`subscribe` + 取快照），与 `src/app/viewport.ts`
+ *  3. **读出门禁**（`chat-demo:announcements-read-gate`，值 `{ [id]: finishedAt }`）也在这里读写 ——
+ *     「这条公告已经强制读过 5 秒，永远不再强制」按 **id** 记账，纯逻辑在 `./readGate.ts`；
+ *  4. 订阅用 `useSyncExternalStore` 那一套（`subscribe` + 取快照），与 `src/app/viewport.ts`
  *     的写法同形 —— 但这层**不 import React**，纯 Node 里可直接 import 做单测。
  *
  * 刷新与失败口径（公告特有的两条，版本清单不需要）：
@@ -38,8 +42,24 @@ import type {
 /** 已读表：`{ [announcementId]: 读到的那一刻（毫秒） }` */
 export const SEEN_STORAGE_KEY = 'chat-demo:announcements-seen'
 
-/** 「首次进入的公告弹窗已经弹过」的标记（有值即弹过，值本身不参与判断） */
+/**
+ * 「首次进入的公告弹窗已经弹过」的标记（有值即弹过，值本身不参与判断）。
+ *
+ * **弹窗出现的那一刻就写**（不是关闭时写）：用户切后台被系统杀掉时，`dismiss` 根本没机会执行，
+ * 等关闭再写就等于「每次被杀都重弹一次」。它现在只剩两个作用：
+ *  1. 老用户兼容 —— 门禁键（`READ_GATE_STORAGE_KEY`）从没写过时，有它就是「本机弹过」；
+ *  2. 排查问题时能看出「这台机器到底弹过没有」。
+ */
 export const POPUP_SHOWN_STORAGE_KEY = 'chat-demo:announcements-popup-shown'
+
+/**
+ * 读出门禁：`{ [announcementId]: 读满 5 秒的那一刻（毫秒时间戳） }`。
+ *
+ * 它是「这条公告**永远不再强制**」的唯一来源 —— 与 `POPUP_SHOWN`（一次性的「弹过没有」）不同，
+ * 它按 **id** 记账，所以「换新公告 → 重新强制 5 秒」和「同一条公告永不重强制」能同时成立。
+ * 读写的纯逻辑在 `./readGate.ts`（零 React、零 localStorage，可直接单测）。
+ */
+export const READ_GATE_STORAGE_KEY = 'chat-demo:announcements-read-gate'
 
 /** 远程列表缓存：`{ version, fetchedAt, items }`（冷启动先渲染它，再异步换上新的） */
 export const CACHE_STORAGE_KEY = 'chat-demo:announcements-cache'
@@ -486,21 +506,75 @@ export const markAllRead = (): void => {
   publish()
 }
 
-/** 最新的一条**未读**公告（弹窗只弹它）；全读完了返回 `null` */
-export const latestUnreadAnnouncement = (
+/**
+ * 列表里**最新的一条**公告（弹窗的候选）；没有公告返回 `null`。
+ *
+ * 为什么是「最新」而不是「最新的未读」（改前的 `latestUnreadAnnouncement`）：强制阅读的门禁按
+ * **id** 记账，如果候选是「最新的未读」，用户读完 A 之后列表里更老的未读 B 就成了候选，
+ * 下次启动会被 B 再强制 5 秒 —— 那就成了「每次开机都要读一条老公告」。
+ * 「同一条只强制一次」+「换新公告才重新强制」两句话要同时成立，候选必须是**最新那条**。
+ */
+export const latestAnnouncement = (
   list: AnnouncementList = snapshot
-): AnnouncementWithReadState | null => list.items.find((item) => !item.read) ?? null
+): AnnouncementWithReadState | null => list.items[0] ?? null
 
 /** 首次进入的公告弹窗弹过没有 */
 export const hasShownPopup = (): boolean => readRaw(POPUP_SHOWN_STORAGE_KEY) !== null
 
-/** 记「弹过了」（点「知道了」/ Esc / 点遮罩关掉都算看过一次，刷新后不再自动弹） */
+/**
+ * 记「弹过了」。**展示即调**（不是关闭时调）：
+ * 用户看到公告后切后台、被系统杀进程，`dismiss` 永远不会执行；写在这里才不会下次启动又弹一遍。
+ */
 export const markPopupShown = (): void => {
   writeRaw(POPUP_SHOWN_STORAGE_KEY, new Date().toISOString())
 }
 
 /**
- * 清掉「已读」与「已弹过」两个标记 + **列表缓存**（调试用，见 `RESET_PARAM`）。
+ * 读门禁表。`null` = **这个键从没被写过**（老用户 / 刚 `?ann-reset`）—— 与空表 `{}` 的语义不同：
+ *   · `null` + `POPUP_SHOWN` 有值 → 老用户，视为已读、不强制（不破坏既有「弹过一次」的判定）；
+ *   · `{}` → 新版本已经接管过门禁（说明这是新语义的用户），照常按 id 强制。
+ * 键在、内容坏了（手改 / 半截 JSON）→ 当空表：宁可多强制一次，也不要永久跳过强制阅读。
+ */
+export const readReadGate = (): ReadGateMap | null => {
+  const raw = readRaw(READ_GATE_STORAGE_KEY)
+  if (raw === null) {
+    return null
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return {}
+  }
+  return parseReadGate(parsed)
+}
+
+/**
+ * 初始化门禁键（写空表 `{}`）。**弹窗展示时立刻调**：
+ * 它把「这台机器由新版本接管门禁」这件事落盘，从此老标记 `POPUP_SHOWN` 不再豁免强制 ——
+ * 否则「展示即写 POPUP_SHOWN」会让没读满 5 秒就被杀进程的用户永久逃掉强制阅读。
+ */
+export const initReadGate = (): void => {
+  if (readRaw(READ_GATE_STORAGE_KEY) !== null) {
+    return
+  }
+  writeRaw(READ_GATE_STORAGE_KEY, '{}')
+}
+
+/**
+ * 记「这条已经强制读完」（满 5 秒 / 用户点掉弹窗）。之后同一条公告**永远不再弹、也不再强制**；
+ * 换新 id 才重新强制 5 秒。写入门禁是幂等的：重复写只是刷新时间戳。
+ */
+export const markReadGate = (id: string): void => {
+  const gate = readReadGate() ?? {}
+  writeRaw(READ_GATE_STORAGE_KEY, JSON.stringify(withFinished(gate, id, Date.now())))
+}
+
+/**
+ * 清掉「已读」与「已弹过」两个标记 + **读出门禁** + **列表缓存**（调试用，见 `RESET_PARAM`）。
+ *
+ * 门禁一起清的理由：带 `?ann-reset` 刷新时要能**重新看到强制阅读 5 秒**，这是产品方反复验收
+ * 这一条的唯一入口；留着门禁就会「reset 了却直接可关」，看起来像没生效。
  *
  * 为什么连缓存一起清：不清的话，带 `?ann-reset` 刷新后屏幕上仍是那份**旧列表**
  * （缓存优先渲染），「重置了但看起来什么都没变」，调试的人会以为开关没生效。
@@ -514,6 +588,7 @@ export const markPopupShown = (): void => {
 export const resetAnnouncementState = (): void => {
   removeRaw(SEEN_STORAGE_KEY)
   removeRaw(POPUP_SHOWN_STORAGE_KEY)
+  removeRaw(READ_GATE_STORAGE_KEY)
   removeRaw(CACHE_STORAGE_KEY)
   seenCache = null
   lastFetchedAt = null

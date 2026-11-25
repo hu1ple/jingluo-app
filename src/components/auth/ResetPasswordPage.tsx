@@ -20,8 +20,9 @@
  * ## 成功之后说什么（口径来自 `consume/confirmEffect.ts` 的 `resetPassword` 那条）
  *
  * 匿名重置流程**没有可回查的会话**，接口也不回实体，所以「重置成功」只等于「服务端受理了」。
- * 界面因此**不写**「密码已修改」，只写「密码已重置，请用新密码登录」（`settingsAuthResetDone`，
- * 由 `AuthGate` 挂到登录页的 notice 上）—— 真正的确认是用户自己用新密码登一次。
+ * 界面因此**不写**「密码已修改」，只写「密码已重置，请用新密码登录」
+ * （`authResetDonePleaseLogin`，由宿主 —— 设置卡的 `back-to-login` 事件或 `AuthGate` ——
+ * 挂到**登录表单**的 notice 上）—— 真正的确认是用户自己用新密码登一次。
  */
 
 import { useEffect, useRef, useState, type FormEvent } from 'react'
@@ -64,8 +65,11 @@ export type ResetPasswordPageProps = {
   initialEmail?: string
   /** 左上「‹ 返回登录」：切回登录页（**不是**关弹层，弹层归宿主） */
   onBack: () => void
-  /** 两步都走完：`AuthGate` 据此回登录页并挂「密码已重置，请用新密码登录」 */
-  onReset: () => void
+  /**
+   * 两步都走完（服务端受理了重置）。**带上这次用的邮箱**：宿主据此回**登录表单**并预填它 ——
+   * 重置页里的邮箱用户可能改过（忘记密码的人常常记不清注册邮箱），所以不能沿用表单里的旧值。
+   */
+  onReset: (email: string) => void
 }
 
 /** 发码失败 → 上屏文案（每种一句，不合并） */
@@ -258,7 +262,7 @@ export const ResetPasswordPage = ({
         return
       }
       resetPasswordDemoState()
-      onReset()
+      onReset(email.trim())
     } finally {
       submitInFlight.current = false
       if (alive.current) {

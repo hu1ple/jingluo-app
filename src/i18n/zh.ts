@@ -1291,7 +1291,12 @@ export const zh = {
   attachPickTooLarge: '「{name}」太大啦，我抱不动 (っ °Д °;)っ',
   attachPickEmpty: '「{name}」是空文件，没有可解析的内容',
   attachPickTooMany: '一条消息最多 {limit} 个文档，已拒绝多出的 {count} 个',
-  attachUnavailable: '附件管理器尚未就绪，本次没有添加任何文档',
+  attachAddReadFailed: '无法读取「{name}」，请重新选择文件。如果来自网盘，可以先下载到本机再添加。',
+  attachAddPrepareFailed: '已读取「{name}」，但未能准备好附件，请重试。',
+  attachAddStorageFull: '本地附件库可用空间不足，无法保存「{name}」。请释放空间后重试。',
+  attachAddStorageFailed: '已读取「{name}」，但保存到本地附件库失败，请重试。',
+  attachAddFailed: '无法添加「{name}」，请重试。',
+  attachUnavailable: '附件管理器尚未就绪，请稍后再试。',
   attachChannelUnsupported:
     '当前渠道不支持文档附件：本渠道既没有可用的原生文件上传，也不做文本注入，请切换到其他渠道',
   // #813：卡在「草稿里有别的渠道留下的文档」时，不只说「不支持」，还要给出可操作出路

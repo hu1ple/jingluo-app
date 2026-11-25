@@ -5,15 +5,12 @@
  * 同一份文件在不同内核、不同版本上算出来的值要一致，否则缓存永远命不中。
  *
  * 两条路径：
- *  1. `crypto.subtle.digest('SHA-256', …)`：基线 Chromium 83 就有（WebCrypto 是 Chrome 37+
- *     的能力，非安全上下文也可用），是首选；
+ *  1. 首选 `crypto.subtle.digest('SHA-256', …)`；
  *  2. 纯 JS 兜底：`crypto.subtle` 缺失（老 WebView 的裁剪内核、某些嵌入式壳把它裁掉）或
  *     调用抛错（例如非预期的不支持算法实现）时使用。**两条路径的输出必须逐字节一致**，
  *     否则同一个文件在两种内核上会算成两个指纹、缓存和去重同时失效。
  *
- * 只处理内存里的 Blob：调用方（AttachmentManager）已经做过体积校验，最大一档是 50 MiB 的 PDF，
- * 一次性读进 `ArrayBuffer` 是可接受的；不引入流式实现，避免为了省内存把代码复杂度抬到
- * 无法被 review 的程度。
+ * 调用方校验体积后读出原件，两种算法使用同一份字节。
  */
 
 /** 每 32 bit 字（word）用大端序写进输出 */
@@ -35,8 +32,6 @@ const K = new Uint32Array([
   0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
   0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ])
-
-const hexOfWordsFromBuffer = (buffer: ArrayBuffer): string => hexOfWords(new Uint32Array(buffer))
 
 const rotateRight = (value: number, bits: number): number =>
   ((value >>> bits) | (value << (32 - bits))) >>> 0
@@ -127,19 +122,17 @@ export const sha256HexFallback = (bytes: Uint8Array): string => {
 }
 
 /**
- * 计算 Blob 的 sha256（64 位小写十六进制）。
- * WebCrypto 可用时用它；缺失或抛错时降级到纯 JS —— 降级是**静默成功**，两条路径结果一致，
- * 不需要调用方区分来源。
+ * 计算已读取字节的 SHA-256，两种实现均按摘要字节顺序编码。
  */
-export const sha256Hex = async (blob: Blob): Promise<string> => {
+export const sha256Hex = async (bytes: ArrayBuffer): Promise<string> => {
   const subtle = typeof crypto === 'undefined' ? undefined : crypto.subtle
   if (subtle && typeof subtle.digest === 'function') {
     try {
-      const digest = await subtle.digest('SHA-256', await blob.arrayBuffer())
-      return hexOfWordsFromBuffer(digest)
+      const digest = await subtle.digest('SHA-256', bytes)
+      return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
     } catch {
       // 老内核可能把 digest 挂在原型上但实现缺失（如不支持 SHA-256）：直接落兜底路径
     }
   }
-  return sha256HexFallback(new Uint8Array(await blob.arrayBuffer()))
+  return sha256HexFallback(new Uint8Array(bytes))
 }

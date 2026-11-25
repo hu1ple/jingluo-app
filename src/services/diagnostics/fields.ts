@@ -52,6 +52,9 @@ export type Stage =
   | 'chat.request'
   | 'chat.stream'
   | 'chat.settle'
+  | 'attachment.read'
+  | 'attachment.prepare'
+  | 'attachment.store'
   // 导入：体积检查 → 格式检查 → 暂存写入 → 下载（链接导入） → 提交
   | 'import.size'
   | 'import.check'
@@ -97,6 +100,9 @@ export const STAGES: readonly Stage[] = [
   'chat.request',
   'chat.stream',
   'chat.settle',
+  'attachment.read',
+  'attachment.prepare',
+  'attachment.store',
   'import.size',
   'import.check',
   'import.stage',

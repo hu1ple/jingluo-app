@@ -13,6 +13,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { formatSize } from '../../services/attachments.js'
+import { AttachmentAddError } from '../../services/attachments/addError.js'
 import type { DocumentAttachment } from '../../services/attachments/types.js'
 import type { LinkedMessage } from '../../i18n/index.js'
 import { showToast } from '../base/toastState.js'
@@ -99,8 +100,23 @@ const rejectionToast = (item: AttachmentReject, maxFiles?: number): LinkedMessag
   }
 }
 
-/** manager.addFile() 抛出的 `AttachmentError` → 一句人话 */
+/** 按添加失败的步骤或校验原因选择提示。 */
 const addFailureToast = (file: File, error: unknown): LinkedMessage => {
+  const params = { name: file.name }
+  if (error instanceof AttachmentAddError) {
+    switch (error.stage) {
+      case 'attachment.read':
+        return { key: 'attachAddReadFailed', params }
+      case 'attachment.prepare':
+        return { key: 'attachAddPrepareFailed', params }
+      case 'attachment.store':
+        return {
+          key:
+            error.causeName === 'QuotaExceededError' ? 'attachAddStorageFull' : 'attachAddStorageFailed',
+          params,
+        }
+    }
+  }
   const reason = rejectReasonOf(error)
   if (reason === 'unsupported-format') {
     return { key: 'attachPickUnsupported', params: { name: file.name } }
@@ -122,7 +138,7 @@ const addFailureToast = (file: File, error: unknown): LinkedMessage => {
   if (reason === 'mime-mismatch') {
     return { key: 'attachFailMimeMismatch' }
   }
-  return { key: 'attachUnavailable' }
+  return { key: 'attachAddFailed', params }
 }
 
 export const useAttachmentDrafts = (options?: {

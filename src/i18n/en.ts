@@ -1270,7 +1270,12 @@ export const en = {
   attachPickTooLarge: '“{name}” is too big, I can’t lift it (っ °Д °;)っ',
   attachPickEmpty: '"{name}" is empty, so there is nothing to parse',
   attachPickTooMany: 'A message can hold at most {limit} documents; {count} extra were rejected',
-  attachUnavailable: 'The attachment manager is not ready, so no document was added',
+  attachAddReadFailed: 'Could not read “{name}”. Select the file again. For a cloud file, try downloading it to your device first.',
+  attachAddPrepareFailed: 'Read “{name}” but could not prepare it as an attachment. Try again.',
+  attachAddStorageFull: 'There is not enough local attachment storage to save “{name}”. Free up space and try again.',
+  attachAddStorageFailed: 'Read “{name}” but could not save it to local attachment storage. Try again.',
+  attachAddFailed: 'Could not add “{name}”. Try again.',
+  attachUnavailable: 'The attachment manager is not ready. Try again shortly.',
   attachChannelUnsupported:
     'This channel does not support document attachments: it has no working native file upload and does not use text injection. Switch to another channel',
   // #813: when the draft still holds documents added on another channel, name the way out

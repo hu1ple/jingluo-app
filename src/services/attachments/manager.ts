@@ -14,8 +14,11 @@
  *     解析器实现改变输出时必须递增 `PARSER_VERSIONS` 里的版本号，否则会命中旧缓存。
  */
 import { createId } from '../../utils/id.js'
+import { readBlobBuffer } from '../../utils/readBlob.js'
 import { estimateTokens } from '../chat/contextBudget.js'
 import { openChatTransaction, reportStorageError } from '../chat/db.js'
+import { recordError } from '../diagnostics/collector.js'
+import { AttachmentAddError, type AttachmentAddStage } from './addError.js'
 import { ATTACHMENT_LIMITS, SUPPORTED_EXTENSIONS, type SupportedExtension } from './limits.js'
 import { parseDocxFile } from './parsers/docx.js'
 import { isPdfParseError, parsePdfFile } from './parsers/pdf.js'
@@ -30,7 +33,7 @@ import {
   readAttachmentTextRecord,
   removeAttachment,
   removeUnreferencedAttachments,
-  saveAttachmentBlob,
+  saveNewAttachment,
   sweepOrphanStorage,
   writeAttachmentTextRecord,
 } from './store.js'
@@ -395,7 +398,7 @@ const parseRecord = async (
 
 export class AttachmentManager {
   /**
-   * 校验 → 算 sha256 → 落原件 → 建 `pending` 记录。
+   * 校验文件，读取原件并计算指纹，然后在一个事务里保存原件和 pending 附件记录。
    * 不合格的输入**抛 `AttachmentError`**（格式 / MIME / 空文件 / 超限），由调用方提示用户；
    * 不返回「被悄悄忽略」的空结果。
    */
@@ -411,22 +414,33 @@ export class AttachmentManager {
         `attachment ${file.name} is ${file.size} bytes, over the ${extension} limit of ${limit}`
       )
     }
-    const sha256 = await sha256Hex(file)
-    const localPath = await saveAttachmentBlob(sha256, file)
-    const record: DocumentAttachment = {
-      id: nextAttachmentId(),
-      filename: file.name,
-      // 浏览器给不出 MIME 时按扩展名补齐：卡片与后续校验都要一个确定的类型
-      mimeType:
-        file.type === '' ? (MIME_BY_EXTENSION[extension][0] ?? '') : file.type.toLowerCase(),
-      size: file.size,
-      sha256,
-      localPath,
-      status: 'pending',
-      createdAt: Date.now(),
+    let stage: AttachmentAddStage = 'attachment.read'
+    try {
+      const bytes = await readBlobBuffer(file)
+      stage = 'attachment.prepare'
+      const sha256 = await sha256Hex(bytes)
+      // 哈希和入库原件来自同一次读取，之后解析也只访问这份本地副本。
+      const source = new File([bytes], file.name, {
+        type: file.type,
+        lastModified: file.lastModified,
+      })
+      const draft: Omit<DocumentAttachment, 'localPath'> = {
+        id: nextAttachmentId(),
+        filename: file.name,
+        mimeType:
+          file.type === '' ? (MIME_BY_EXTENSION[extension][0] ?? '') : file.type.toLowerCase(),
+        size: file.size,
+        sha256,
+        status: 'pending',
+        createdAt: Date.now(),
+      }
+      stage = 'attachment.store'
+      return await saveNewAttachment(draft, source)
+    } catch (cause) {
+      const error = new AttachmentAddError(stage, cause)
+      recordError('document attachment add failed', { stage, 'error.name': error.causeName })
+      throw error
     }
-    await putAttachment(record)
-    return record
   }
 
   /** 解析：`pending → parsing → success | partial | failed`，异常一律落 `failed` + `errorMessage` */

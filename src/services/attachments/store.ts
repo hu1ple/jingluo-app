@@ -5,8 +5,8 @@
  *  1. `attachments`：附件元数据（`DocumentAttachment`），**与消息表分开**，消息里只留附件 id；
  *  2. `attachmentTexts`：解析全文，主键 `sha256:parserVersion` —— 内容寻址的缓存，
  *     同一份文件 + 同一个解析器版本只解析一次、只存一份；
- *  3. `files`：原始文件的 blob —— **复用**已有机制（`db.saveFiles` / `db.loadFile`），
- *     键用 `attachment-<sha256>`，与聊天图片共用同一个 store 和同一套读写代码，不另起一套。
+ *  3. `files`：原始文件的 blob，和聊天图片共用存储表，文档键为 `attachment-<sha256>`。
+ *     添加文档时在同一事务中写入原件与附件记录。
  *
  * 为什么原件键是 `attachment-<sha256>` 而不是附件 id：同一个文件被添加两次（改了名字、
  * 或同一文件进了两个会话）只应占一份空间。附件 id 是「引用」，sha256 是「内容」，
@@ -22,7 +22,6 @@ import {
   loadFile,
   openChatTransaction,
   runChatStoreRequest,
-  saveFiles,
   type StoredAttachmentText,
 } from '../chat/db.js'
 import { ATTACHMENT_BLOB_PREFIX, attachmentBlobKey, isAttachmentBlobKey } from './blobKeys.js'
@@ -46,20 +45,43 @@ const abortTransaction = (tx: { abort(): void }) => {
   }
 }
 
-/** 同内容原件是否已经存过：只查键，不把 blob 读进内存 */
-const hasBlob = async (key: string): Promise<boolean> =>
-  (await runChatStoreRequest('files', 'readonly', (store) => store.count(key))) > 0
-
-/**
- * 保存原始文件，返回它的 blob 键（即 `DocumentAttachment.localPath`）。
- * 同内容已存在时直接复用，不重写 —— 这是「同内容只存一份」的唯一入口。
- */
-export const saveAttachmentBlob = async (sha256: string, blob: Blob): Promise<string> => {
-  const key = attachmentBlobKey(sha256)
-  if (!(await hasBlob(key))) {
-    await saveFiles([{ id: key, blob }])
+/** 去重、写原件、创建引用共同提交。并发添加和删除也按相同的存储表串行执行。 */
+export const saveNewAttachment = async (
+  draft: Omit<DocumentAttachment, 'localPath'>,
+  blob: Blob
+): Promise<DocumentAttachment> => {
+  const tx = await openChatTransaction(['files', 'attachments'], 'readwrite')
+  // 提前监听事务终态。请求失败时要保留其具体原因，事务中止也可能只给 AbortError。
+  const settled = tx.done.catch(() => {})
+  try {
+    const files = tx.objectStore('files')
+    const attachments = tx.objectStore('attachments')
+    let sha256 = draft.sha256
+    let localPath = attachmentBlobKey(sha256)
+    if ((await files.count(localPath)) === 0) {
+      // 旧版 WebCrypto 在小端设备上按 32 位字反序编码摘要。沿用已有键才能共享原件、
+      // 解析缓存和删除时的引用计数。新内容始终使用标准 SHA-256。
+      const legacyHash = sha256.replace(/(..)(..)(..)(..)/g, '$4$3$2$1')
+      const legacyPath = attachmentBlobKey(legacyHash)
+      const legacyBlobExists = (await files.count(legacyPath)) > 0
+      // 若旧记录仍在但本地原件已丢失，重选同一文件也能补回它引用的原件。
+      if (legacyBlobExists || (await attachments.index('sha256').count(legacyHash)) > 0) {
+        sha256 = legacyHash
+        localPath = legacyPath
+      }
+      if (!legacyBlobExists) {
+        await files.add({ id: localPath, blob })
+      }
+    }
+    const record = { ...draft, sha256, localPath }
+    await attachments.add(record)
+    await tx.done
+    return record
+  } catch (error) {
+    abortTransaction(tx)
+    await settled
+    throw error
   }
-  return key
 }
 
 /**

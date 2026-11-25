@@ -50,6 +50,15 @@ const client = await import('../../src/services/api/client.ts')
 const errors = await import('../../src/services/api/errors.ts')
 const attachments = await import('../../src/services/attachments.ts')
 const { zh } = await import('../../src/i18n/zh.ts')
+const { useSettings } = await import('../../src/services/settings.ts')
+const { pinLocale } = await import('../helpers/locale.mjs')
+
+// [2] 断言的是中文文案（zh.uploadChannelUnsupported）——「不支持的渠道要给用户一句能读的话」，
+// 而 settings.ts 的 initialLocale() 跟随 navigator.language（Node 里来自 shell 的 LANG：
+// en_US / ja_JP → 'en-US'，zh_CN → 'zh-CN'）。不钉死就会同一份代码「本机绿、换台机器红」。
+// 这里用真实 settings store 把界面语言钉在中文（渲染仍走真实 translate），不依赖跑测机器，
+// 也不改 shell 环境变量（那只是把「这台绿」换成「那台绿」）。helper 见 tests/helpers/locale.mjs。
+assert.equal(pinLocale(useSettings), 'zh-CN', '界面语言必须钉在中文，不能跟随 shell 的 LANG')
 
 const { setApiKey, setProviderKind } = apiConfig
 const encoder = new TextEncoder()
@@ -104,7 +113,11 @@ test('[2] 没有 Files API 的渠道：本地判失败，一个请求都不发',
     (error) => {
       assert.equal(error.name, 'ApiError')
       assert.equal(error.status, undefined, '这是本地判定，不该有 HTTP 状态码')
-      assert.equal(error.message, zh.uploadChannelUnsupported)
+      assert.equal(
+        error.message,
+        zh.uploadChannelUnsupported,
+        '「这个渠道不能传文件」这一档必须给到用户：落到泛化的上传失败 / 英文正文就是没给出来'
+      )
       return true
     }
   )

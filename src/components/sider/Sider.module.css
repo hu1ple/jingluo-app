@@ -96,7 +96,13 @@
 
 /*
  * 「历史对话」那一行（默认态：标题 + 蓝色「选择」／多选态：蓝色「全选」+「取消」）。
- * 两态共用同一个容器与同一个行高，切换时列表不跳动。
+ * 两态共用同一个容器与同一个行高（12 + 22 + 6 = 40px，两态都由这组值决定），切换时列表不跳动。
+ *
+ * 上内边距 20px：4px 时几乎贴在「开启新对话」按钮下面、12px 仍嫌挤（产品两轮反馈），
+ * 现在按 iOS 分组列表的分区标题间距处理。
+ * 左右不再留内边距：左缘由子元素对齐（标题裸文字 / 左侧按钮用负外边距抵消自身内边距），
+ * 右缘则让右侧按钮的盒子右边界与列表行盒子的右边界重合（行的 `padding-right` 是 6px，
+ * 按钮自身也有 6px 内边距 → 文字右缘正好落在行的内容右缘上）。
  */
 .listHeader {
   display: flex;
@@ -104,53 +110,86 @@
   align-items: center;
   justify-content: space-between;
   box-sizing: border-box;
-  min-height: 30px;
-  padding: 4px 6px 2px 10px;
+  /* 高度写死 48px（20 padding-top + 22 行高 + 6 padding-bottom）：
+     两种状态（标题 22px / 按钮 22px）盒子必须等高，否则切进多选态会跳 2px。 */
+  height: 48px;
+  padding: 20px 0 6px 10px;
 }
 
+/*
+ * 分区标题（历史对话）：做成**分区小标题**而不是行标题 ——
+ * 产品两轮反馈「字体太大太夺目」：14px/600/primary 会和会话行标题抢层级。
+ * 现在 12px / 500 / label-tertiary，与分组标题（今天）同族但略强一档；
+ * `line-height` 仍保 22px，盒子高度不变 → 多选态（按钮 22px）表头高度与默认态相等，切换不跳。
+ */
 .listHeaderTitle {
   min-width: 0;
   overflow: hidden;
-  font-size: 14px;
+  font-size: 12px;
   line-height: 22px;
   font-weight: 500;
+  letter-spacing: 0.02em;
   white-space: nowrap;
   text-overflow: ellipsis;
-  color: var(--dsw-alias-label-primary);
+  color: var(--dsw-alias-label-tertiary);
 }
 
-/* 蓝色文字链接（选择 / 全选）：按钮元素但按链接长相呈现 */
+/*
+ * 蓝色文字链接（选择 / 全选）：按钮元素但按文字按钮呈现。
+ * 13px + 6px 左右内边距 + 8px 圆角，`height` 写死 22px 与标题行同高 → 表头两态等高；
+ * hover / active 有可见底色（原来只有下划线，点上去没有反馈面）。
+ */
 .listHeaderLink {
+  display: inline-flex;
   flex-shrink: 0;
-  padding: 2px 2px;
+  align-items: center;
+  box-sizing: border-box;
+  height: 22px;
+  padding: 0 6px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   background: none;
   color: var(--dsw-alias-brand-text);
   font: inherit;
   font-size: 13px;
-  line-height: 20px;
+  font-weight: 400;
+  line-height: 22px;
+  white-space: nowrap;
   cursor: pointer;
 
-  &:hover {
-    text-decoration: underline;
+  &:hover,
+  &:active {
+    background-color: var(--dsw-alias-interactive-bg-hover);
   }
 }
 
-/* 「取消」：右侧的次要动作，不着色（设计稿右图是中性文字） */
+/* 多选态里「全选」是表头的第一个子元素：抵消自身 6px 内边距，让它的文字左缘与行标题左缘齐 */
+.listHeader > .listHeaderLink:first-child {
+  margin-left: -6px;
+}
+
+/* 「取消」：右侧的次要动作，不着色（设计稿右图是中性文字），尺寸/圆角/hover 面与「选择」一致 */
 .listHeaderCancel {
+  display: inline-flex;
   flex-shrink: 0;
-  padding: 2px 2px;
+  align-items: center;
+  box-sizing: border-box;
+  height: 22px;
+  padding: 0 6px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 8px;
   background: none;
   color: var(--dsw-alias-label-secondary);
   font: inherit;
   font-size: 13px;
-  line-height: 20px;
+  font-weight: 400;
+  line-height: 22px;
+  white-space: nowrap;
   cursor: pointer;
 
-  &:hover {
+  &:hover,
+  &:active {
+    background-color: var(--dsw-alias-interactive-bg-hover);
     color: var(--dsw-alias-label-primary);
   }
 }

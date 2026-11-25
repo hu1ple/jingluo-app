@@ -33,8 +33,8 @@
 
 ```bash
 pnpm hooks:install                  # 一次性：接上 .githooks（见 2.4）
-pnpm dev-check                      # 改完那一刻：32 道内容门禁 + tsc + lint，实测 12~18s
-pnpm dev-check -- --content         # 只跑纯内容门禁（pre-commit 跑的就是这条），实测 ~7s
+pnpm dev-check                      # 改完那一刻：33 道门禁（27 内容 + 6 慢档）+ tsc + lint，实测 12~18s
+pnpm dev-check -- --content         # 只跑纯内容门禁（pre-commit 跑的就是这条），实测 ~3s
 pnpm dev-check -- --strict          # HEAD 上本来就红的也算红（修 main / 发版前自查）
 ```
 
@@ -44,17 +44,19 @@ pnpm dev-check -- --strict          # HEAD 上本来就红的也算红（修 mai
 
 | 档 | 命令 | 判什么 | 实测（4 核本机） |
 | --- | --- | --- | --- |
-| 提交档 | `pnpm dev-check -- --content` | 28 道纯内容门禁：行尾 / 仓库卫生 / 大小写撞车 / DB 版本 / 重复实现 / 写死 IP·端口 / 端点与超时来源 / 消费侧白名单 / 日志字段 / i18n / 应用身份 / 产物前缀 / 脱敏规则 / 守卫语法 / 兼容基线 / 四个 CSS 兜底 / 上限收敛 / 图标留白 / fixture 清单 / webroot / 私有根 / 文档引用 / 方向验收 / 静态审计自检（`check:audit-selftest`，~4s） | 实测 ~7s |
-| 默认档 | `pnpm dev-check` | 上面 27 道 + 5 道慢一点的内容门禁（截图引用 / 能力文档同步 / 能力盘点 / 测试布局 / 测试重复）+ **类型门 + lint** = 最多 34 条判据 | 12~18s |
+| 提交档 | `pnpm dev-check -- --content` | 27 道纯内容门禁：行尾 / 仓库卫生 / 大小写撞车 / DB 版本 / 重复实现 / 写死 IP·端口 / 端点与超时来源 / 消费侧白名单 / 日志字段 / i18n / 应用身份 / 产物前缀 / 脱敏规则 / 守卫语法 / 兼容基线 / 四个 CSS 兜底 / 上限收敛 / 图标留白 / fixture 清单 / webroot / 私有根 / 文档引用 / 方向验收 | 实测 ~3s（两跑 3.2s / 2.9s） |
+| 默认档 | `pnpm dev-check` | 上面 27 道 + 6 道慢一点的内容门禁（截图引用 / 能力文档同步 / 能力盘点 / 测试布局 / 测试重复 / 静态审计自检 `check:audit-selftest`）+ **类型门 + lint** = 最多 35 条判据 | 12~18s（4 核本机复测：只碰 `scripts/` 时 6.1s → 7.6s，多出的 ~1.5s 就是那道 3.7s 的自检挪过来的价） |
 | 厚档 | `pnpm test:fast` | 类型 + L0 快速子集（`tests/fast-subset.json` 减去最慢的 20 个文件）+ 黄金套件；**≤60s 是契约，超了 exit 1**（见第 10 节） | ~40-60s |
 
 并发 6 跑，所以默认档的墙钟是「最慢那一条」而不是「32 条相加」（实测 wall 12.3s / 串行 36.6s，4 核机器；
 机器上同时跑着别的 lane 时会到 18s 左右）。
 
-**深档那 5 道带 `scope`**：只有你的改动落在它的输入范围里才跑 ——
+**深档共 6 道，其中 5 道带 `scope`**：只有你的改动落在它的输入范围里才跑 ——
 `check:ui-shots` 只看 `docs/ui/`，`check:test-layout` / `check:test-duplication` 只看 `tests/`，
 `check:capabilities` / `check:capabilities-docs` 看 `src/` + `android/`。所以「只改了一个 src 文件」时
-默认档不会被截图扫描的 8 秒拖住。跳过的会**逐条打印原因**（`跳过的 4 道（你的改动没碰到它们的输入，不是「通过」）`），
+默认档不会被截图扫描的 8 秒拖住。唯一不带 `scope` 的是 `check:audit-selftest`（裁决 F）：它自检的是
+整个仓库的静态审计族，给了 `scope` 只会让它在大多数提交上被跳过 —— 而它恰恰是用来证明「平时绿不是
+因为它没扫到」的那条证据，跳过等于自废。跳过的会**逐条打印原因**（`跳过的 4 道（你的改动没碰到它们的输入，不是「通过」）`），
 不是静默省掉。工作区干净时（没有改动集可归因）同样按 scope 跳过 —— 那一刻你要的不是等 40 秒看仓库现状，
 要看现状用 `--deep` 全跑 / `--strict` 按「HEAD 上也不许红」的口径跑。
 
@@ -94,8 +96,8 @@ pnpm hooks:uninstall      # 永久关掉；`git commit --no-verify` 只跳过一
 
 | 钩子 | 跑什么 | 实测 |
 | --- | --- | --- |
-| `.githooks/pre-commit` | `dev-check --content --brief`（提交档） | ~7s |
-| `.githooks/pre-push` | `dev-check --brief`（默认档：内容 + 类型 + lint） | ~14s |
+| `.githooks/pre-commit` | `dev-check --content --brief`（提交档） | ~3s |
+| `.githooks/pre-push` | `dev-check --brief`（默认档：内容 + 类型 + lint） | ~8s |
 
 三条必须知道的口径：
 
@@ -877,7 +879,7 @@ CI 位置：`.github/workflows/ci.yml` 的 `checks` job，紧跟 `check:manifest
 | `where` | 含义 | 本地跑吗 |
 | --- | --- | --- |
 | `content` | 纯文本 / 仓库扫描：不依赖产物、网络、本机密钥 | 提交档 + 默认档 |
-| `deep` | 同上，但单条 ≥1s（截图引用 7.8s / 能力文档 2.5s…） | 只在默认档 |
+| `deep` | 同上，但单条 ≥1s（截图引用 7.8s / 能力文档 2.5s / 静态审计自检 3.9s…） | 只在默认档（pre-push）与 `--deep` |
 | `network` | 判据要**网络 + 凭据**（`gh` + token，如 `check:exemptions`） | 只在 `--deep`；跑不动报「判不了（环境）」，不报红 |
 | `dist` | 判据的输入是 `dist/` 里的产物 | 不跑，`--list` 里带 `reason` |
 | `release` | 要签名材料 / APK / 分发机 / tags 与 origin 历史 | 不跑，`--list` 里带 `reason` |
@@ -892,6 +894,14 @@ CI 位置：`.github/workflows/ci.yml` 的 `checks` job，紧跟 `check:manifest
 现状」那一刻）跑，跑不动时它 exit 2 = 它自己声明「环境不具备」→ 报**「判不了（环境）」而不是红**。
 「豁免条目真有问题」（exit 1）与「这条判据今天没在工作」（exit 2）必须分开说，混在一起以后谁也
 说不清该改条目还是该修凭据。
+
+**为什么 `check:audit-selftest` 归 `deep` 而不是 `content`（裁决 F）**：`deep` 的定义就是
+「不进 pre-commit（提交一次等待别超过 ~4s）」。这道门禁只跑六遍反例，实测 3.9s（2026-11-26 复测 3.7s），
+归 `content` 会把提交档从 ~3s 抬回 ~7s —— 等于让**每一次** `git commit` 都为一条「门禁自己还咬不咬」的
+元检查付 3.9s。而它证明的正是「我们的门禁真的会咬」，这件事该在**推送 / 合并前**（默认档、`--deep`）验，
+不该在每次提交时付：**摩擦要与风险成正比，也要与频次成正比**。它没有消失，只是从「每天上百次的提交」
+挪到了「每天十来次的推送」；代价是默认档从 6.1s 变成 7.6s（4 核本机、只碰 `scripts/` 的场景）—— 这笔账
+记在这里，别下次又挪回去。
 
 没归类 → `dev-check` 当场 **exit 2** 并点名是哪一道、该加哪一行。为什么这条要机械化：
 新加一道门禁却没进本地入口，它就只活在 CI 里 —— **写了、没人跑、不会红**（#368 那个坑的原形状）。

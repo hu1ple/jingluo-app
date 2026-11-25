@@ -30,42 +30,20 @@ import 'fake-indexeddb/auto'
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import * as fakeIdb from 'fake-indexeddb'
 import { openDB } from 'idb'
 import { installSessionMatrixEnv, loadTsModule, setupDom } from '../helpers/dom-env.mjs'
+import {
+  installFakeIdbGlobals,
+  installMinimalLocalStorage,
+  snapshotDatabase,
+} from '../helpers/fake-idb.mjs'
 
-/**
- * `fake-indexeddb/auto` 的副作用只在模块首次求值时装一次；合并批次跑完一个文件会把该文件
- * 新增的全局抹掉（#513）。所以每个文件自己幂等装一遍（与 `memory-session-scope-399` 同做法）。
- */
-const IDB_GLOBALS = [
-  'indexedDB',
-  'IDBCursor',
-  'IDBCursorWithValue',
-  'IDBDatabase',
-  'IDBFactory',
-  'IDBIndex',
-  'IDBKeyRange',
-  'IDBObjectStore',
-  'IDBOpenDBRequest',
-  'IDBRequest',
-  'IDBTransaction',
-  'IDBVersionChangeEvent',
-]
-for (const name of IDB_GLOBALS) {
-  if (globalThis[name] === undefined && fakeIdb[name] !== undefined) {
-    globalThis[name] = fakeIdb[name]
-  }
-}
-
-/** 最小 localStorage：`settings.ts` / `apiConfig.ts` 只做 get / set / remove */
-const storage = new Map()
-globalThis.localStorage = {
-  getItem: (key) => (storage.has(key) ? storage.get(key) : null),
-  setItem: (key, value) => storage.set(key, String(value)),
-  removeItem: (key) => storage.delete(key),
-  clear: () => storage.clear(),
-}
+// `fake-indexeddb/auto` 的副作用只在模块首次求值时装一次；run-layer 合并批次跑完一个文件会把该文件
+// 新增的全局抹掉（#513）。所以每个文件自己幂等装一遍 —— 与 `memory-session-scope-399` 共用
+// `helpers/fake-idb.mjs` 里的那份（同一段装配原来在两个文件里逐字抄了两遍）。
+installFakeIdbGlobals()
+// 最小 localStorage：`settings.ts` / `apiConfig.ts` 只做 get / set / remove
+installMinimalLocalStorage()
 
 // 装配顺序要紧：hook 必须先于任何 `src/**` 的动态 import（`.js→.ts` + 原生桥 / 诊断替身）
 installSessionMatrixEnv()
@@ -672,32 +650,8 @@ const seedLegacy = async () => {
   legacy.close()
 }
 
-/** 整库快照：store → 记录（Blob 折成 {type,size}，才能深比较） */
-const snapshotProbe = async () => {
-  const handle = await openDB(PROBE_DB)
-  try {
-    const stores = [...handle.objectStoreNames].sort()
-    const data = {}
-    const indexes = {}
-    for (const store of stores) {
-      const tx = handle.transaction(store, 'readonly')
-      indexes[store] = [...tx.store.indexNames].sort()
-      const rows = await tx.store.getAll()
-      data[store] = rows.map((row) => {
-        const copy = { ...row }
-        for (const [key, value] of Object.entries(copy)) {
-          if (value instanceof Blob) {
-            copy[key] = { __blob: true, type: value.type, size: value.size }
-          }
-        }
-        return copy
-      })
-    }
-    return { version: handle.version, stores, data, indexes }
-  } finally {
-    handle.close()
-  }
-}
+/** 整库快照（`helpers/fake-idb.mjs`，与 `memory-session-scope-399` 共用一份）：Blob 折成 `{__blob,type,size}` */
+const snapshotProbe = () => snapshotDatabase(PROBE_DB)
 
 test('⑦ DB 迁移 v14 → v15：可重复执行、老数据一条不丢、branchOf 索引就位', async () => {
   assert.equal(DB_VERSION > LEGACY_DB_VERSION, true, 'DB_VERSION 必须大于迁移起点（版本号不许往回改）')

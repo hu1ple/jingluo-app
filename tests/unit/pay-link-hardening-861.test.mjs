@@ -17,69 +17,26 @@
 //
 // 注意：这里的 HTTP 全是假 transport，不是对任何环境的真实请求。
 // 跑法：node tests/run-layer.mjs unit --only pay-link-hardening
-import { fixtureUrl, installTsResolve } from '../helpers/dom-env.mjs'
+import { fixtureUrl } from '../helpers/dom-env.mjs'
 import { createSelfCheck } from '../helpers/ours-check.mjs'
+import { createPayLinkHarness } from '../helpers/pay-link-harness.mjs'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 
-installTsResolve({
+const endpoints = await import('../../scripts/lib/consumeEndpoints.mjs')
+
+// 装配（ts 解析 + 原生浏览器替身 + 假 transport + buyFlow 编排）与 `pay-link-861` 共用一份：
+// `helpers/pay-link-harness.mjs`。替身表留在这里 —— run-layer 的 harnessKey() 靠扫本文件认替身家族。
+const { api, transport, zh, en, ROOT, cap, resetStubs, SHOP_URL, response, buyFlow } = await createPayLinkHarness({
   stubs: {
     '@capacitor/core': fixtureUrl('domain03-04/checkout-plugins.mjs'),
     '@capacitor/browser': fixtureUrl('domain03-04/checkout-browser.mjs'),
   },
 })
 
-globalThis.__cap = {
-  native: true,
-  browser: { opens: [], listeners: [], rejectOpen: false, removeCount: 0 },
-}
-
-const api = await import('../../src/services/ours/api.ts')
-const transport = await import('../../src/services/ours/transport.ts')
-const { zh } = await import('../../src/i18n/zh.ts')
-const { en } = await import('../../src/i18n/en.ts')
-const endpoints = await import('../../scripts/lib/consumeEndpoints.mjs')
-
-const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const { failures, checks, eq, truthy } = createSelfCheck({ countBad: true })
 
-const cap = () => globalThis.__cap
-const resetStubs = () => {
-  cap().native = true
-  cap().browser.opens.length = 0
-  cap().browser.listeners.length = 0
-  cap().browser.rejectOpen = false
-  cap().browser.removeCount = 0
-}
-const SHOP_URL = 'https://wzyp.cn/shop/DIWOOHLR'
-const response = (status, body) => ({
-  kind: 'response',
-  status,
-  text: typeof body === 'string' ? body : JSON.stringify(body),
-})
-const fakeTransport = (result) => {
-  const calls = []
-  return {
-    calls,
-    transport: async (request) => {
-      calls.push(request)
-      return result
-    },
-  }
-}
-/** 与 BuyTab.openCheckout 同一条编排：取地址 → 成功才打开；失败只给文案 */
-const buyFlow = async (result) => {
-  resetStubs()
-  const fake = fakeTransport(result)
-  const link = await api.fetchPayLink(fake.transport)
-  let opened = null
-  if (link.status === 'ok') {
-    opened = await transport.openPayLinkInApp(link.url, () => {})
-  }
-  return { link, opened, calls: fake.calls, opens: cap().browser.opens.length, listeners: cap().browser.listeners.length }
-}
 const keyOf = (link) => (link.status === 'error' ? link.messageKey : link.status)
 
 /** 不能被当成收款页打开的地址（任何一条被放行都是缺陷） */

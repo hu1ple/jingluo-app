@@ -53,7 +53,7 @@ export type DraftDocument = {
   mimeType: string
 }
 
-type Draft = { text: string; attachments: DraftAttachment[]; documents: DraftDocument[] }
+type Draft = { customSystemPrompt?: string; text: string; attachments: DraftAttachment[]; documents: DraftDocument[] }
 
 export const EMPTY_DRAFT: Draft = { text: '', attachments: [], documents: [] }
 
@@ -69,13 +69,16 @@ const updateDraft = (sessionId: string | null, update: (draft: Draft) => Draft) 
   useDrafts.setState((state) => {
     const draft = update(state.drafts.get(sessionId) ?? EMPTY_DRAFT)
     const drafts = new Map(state.drafts)
-    if (draft.text || draft.attachments.length > 0 || draft.documents.length > 0) {
+    if (draft.customSystemPrompt || draft.text || draft.attachments.length > 0 || draft.documents.length > 0) {
       drafts.set(sessionId, draft)
     } else {
       drafts.delete(sessionId)
     }
     return { drafts }
   })
+
+export const setNewChatPrompt = (prompt: string) =>
+  updateDraft(null, draft => ({ ...draft, customSystemPrompt: prompt || undefined }))
 
 export const setDraftText = (sessionId: string | null, text: string) =>
   updateDraft(sessionId, (draft) => ({ ...draft, text }))

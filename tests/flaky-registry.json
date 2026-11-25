@@ -92,6 +92,24 @@
       "lastGreen": null,
       "lastRedAt": null,
       "reason": "红：local:zzy-EQ.localdomain#normal / 绿：local:zzy-EQ.localdomain#busy"
+    },
+    "tests/unit/domain10-release-gate-matrix.test.mjs": {
+      "test": "tests/unit/domain10-release-gate-matrix.test.mjs",
+      "kind": "same-runner",
+      "firstSeen": "2026-11-25",
+      "count": 1,
+      "lastSeen": "2026-11-25",
+      "streak": 0,
+      "history": [
+        "2026-11-25T06:37:49.708Z"
+      ],
+      "runners": [],
+      "evidence": [],
+      "quarantinedAt": null,
+      "lastRemindedAt": null,
+      "lastGreen": "2026-11-25T06:39:12.735Z",
+      "lastRedAt": null,
+      "reason": "  ---\n  duration_ms: 798.441629\n  type: 'test'\n  location: '/home/ros/jingluo/deepseek-app/tests/unit/domain10-release-gate-matrix.test.mjs:269:3'\n  failureType: 'testCodeFailure'\n  error: |-\n    check:bundle-target 正例必须 exit=0（当前仓库自己是干净的）\n    --- 输出 ---\n    node:fs:440\n        return binding.readFi"
     }
   }
 }

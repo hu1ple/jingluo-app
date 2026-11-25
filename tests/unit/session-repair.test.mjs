@@ -150,3 +150,14 @@ test('branch sessions keep their own selection while being repaired', () => {
   assert.deepEqual(out.messages[0].files, [])
   assert.equal(damage.length, 1)
 })
+
+test('旧双栏设定合并一次，新版自由输入的空白和换行逐字保留', () => {
+  const prompt = '  第一行\n\n第二行  '
+  const current = { ...session([]), rootMessageId: null, customSystemPrompt: prompt }
+  assert.equal(normalizeSession(current), current)
+  const migrated = normalizeSession({ ...current, userIdentity: '小林' })
+  assert.equal(migrated.customSystemPrompt, prompt + '\n\n用户身份：小林')
+  assert.equal('userIdentity' in migrated, false)
+  assert.equal(normalizeSession(migrated), migrated)
+  assert.equal(normalizeSession({ ...session([]), userIdentity: '小林' }).customSystemPrompt, '用户身份：小林')
+})

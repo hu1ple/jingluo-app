@@ -1,5 +1,6 @@
 declare const styles: {
   readonly "container": string;
+  readonly "personaAction": string;
   readonly "welcome": string;
   readonly "hero": string;
   readonly "greeting": string;

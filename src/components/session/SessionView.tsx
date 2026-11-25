@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import { PersonaDrawer, PersonaButton } from './PersonaDrawer.js'
 import clsx from 'clsx'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate } from '../../i18n/index.js'
@@ -22,6 +24,8 @@ export const SessionView = ({
   streaming: boolean
   siderCollapsed: boolean
 }) => {
+  const [personaId, setPersonaId] = useState<string | null>(null)
+  const personaButton = <PersonaButton onClick={() => setPersonaId(session.id)} />
   const t = useTranslate()
   const isMobile = useIsMobile()
   const title = session.title || t('untitledChat')
@@ -41,13 +45,14 @@ export const SessionView = ({
   return (
     <div className={styles.view}>
       {isMobile ? (
-        <MobileHeader title={title} badge={badge} />
+        <MobileHeader title={title} badge={badge} personaButton={personaButton} />
       ) : (
         <div className={styles.header}>
           <div className={clsx(styles.title, siderCollapsed && styles.withCollapsedSider)}>
             {title}
           </div>
           {badge}
+          <div style={{ marginLeft: 'auto' }}>{personaButton}</div>
         </div>
       )}
       {/* #831 附件降级：分支会话里有附件在本机拿不到时，一条明确的说明（不报错、不挡对话） */}
@@ -56,6 +61,7 @@ export const SessionView = ({
           <SessionBranchAttachments session={session} />
         </div>
       )}
+      {personaId === session.id && <PersonaDrawer key={session.id} session={session} onClose={() => setPersonaId(null)} />}
       <MessageList
         session={session}
         streaming={streaming}

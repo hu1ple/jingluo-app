@@ -82,7 +82,7 @@ import {
   settleReply,
   toRequestMessages,
 } from './reply.js'
-import { buildMessageBody } from './requestBody.js'
+import { buildMessageBody, SYSTEM_PROMPT } from './requestBody.js'
 import { pickErrorNotice, rowKey } from './errorNotice.js'
 import { waitDeadlines } from './waitStage.js'
 import { composeWaitNotice, needsUpload, type WaitHint, type WaitStage } from './waitStage.js'
@@ -103,8 +103,6 @@ import {
   type UserMessage,
 } from './types.js'
 
-/** 所有生成请求统一携带的助手身份说明 */
-const SYSTEM_PROMPT = '该助手为DeepSeek，由深度求索公司创造。'
 /** 保留最近打开的详情；当前会话、生成中及尚未成功保存的会话不淘汰。 */
 const SESSION_CACHE_LIMIT = 5
 /** 自动重试的最多次数（不含首次请求）：附件补传、断网、5xx、超时共用这一个上限 */
@@ -118,14 +116,15 @@ const RETRY_BASE_DELAY = LIMITS.retryBaseDelayMs
  * 不支持的协议把快照内容折进 system 前缀，并从 messages 里删掉这些行。
  */
 const toRequestBody = (
-  messages: ReturnType<typeof toRequestMessages>
+  messages: ReturnType<typeof toRequestMessages>,
+  system: string
 ): { system: string; messages: ReturnType<typeof toRequestMessages> } => {
   if (requestGates(getCurrentSpec()).latest_reminder) {
-    return { system: SYSTEM_PROMPT, messages }
+    return { system, messages }
   }
   const folded = foldReminders(messages)
   return {
-    system: [SYSTEM_PROMPT, ...folded.reminders].join('\n'),
+    system: [system, ...folded.reminders].join('\n'),
     messages: folded.messages,
   }
 }
@@ -440,15 +439,15 @@ const persist = (sessionId: string) => {
   if (session) {
     unsavedSessions.add(sessionId)
     if (deletingSessions.has(sessionId)) {
-      return
+      return undefined
     }
     const epoch = historyEpoch
     const files = pendingFiles.get(sessionId)
-    void db
+    return db
       .saveSession(session, files)
       .then(() => {
         if (epoch !== historyEpoch || !getSession(sessionId)) {
-          return
+          return undefined
         }
         if (pendingFiles.get(sessionId) === files) {
           pendingFiles.delete(sessionId)
@@ -462,6 +461,7 @@ const persist = (sessionId: string) => {
           }))
           trimSessionCache()
         }
+        return true
       })
       .catch((error: unknown) => {
         db.reportStorageError('save session')(error)
@@ -470,8 +470,26 @@ const persist = (sessionId: string) => {
             sessionSaveErrors: { ...state.sessionSaveErrors, [sessionId]: true },
           }))
         }
+        return false
       })
   }
+  return undefined
+}
+
+export const saveSessionPrompt = async (id: string, draft: string) => {
+  const session = getSession(id)
+  if (!session || deletingSessions.has(id) || get().importingHistory) {
+    return false
+  }
+  const prompt = draft || undefined
+  updateSession(id, current => ({ ...current, customSystemPrompt: prompt }))
+  if (await persist(id)) {
+    return true
+  }
+  updateSession(id, current => current.customSystemPrompt === prompt
+    ? { ...current, customSystemPrompt: session.customSystemPrompt }
+    : current)
+  return false
 }
 
 export const retrySaveSessions = () => {
@@ -1123,6 +1141,7 @@ export const sendMessage = (targetSessionId: string | null) => {
   }
   if (sessionId === null) {
     const session: Session = {
+      customSystemPrompt: getDraft(null).customSystemPrompt,
       id: createId(),
       title: '',
       createdAt: now,
@@ -1932,7 +1951,8 @@ const scheduleAutoTitle = (sessionId: string) => {
  */
 const withRequestDocuments = async (
   messages: ChatMessage[],
-  kind: ProviderKind
+  kind: ProviderKind,
+  system: string
 ): Promise<{ messages: ChatMessage[]; notice: string }> => {
   // 本函数只被文本注入渠道调用；能力表这里再问一次，是给「将来有人从别处调」兜底
   if (!docInjectionFor(kind).textInjection) {
@@ -1952,7 +1972,7 @@ const withRequestDocuments = async (
        * 这与 issue §9 的公式同形；两边取小（`docBudgetTokens` 也会再取一次小）。
        */
       contextWindowTokens: LIMITS.contextBudget.maxTokens,
-      reservedTokens: estimateTokens(estimateChars(messages) + SYSTEM_PROMPT.length),
+      reservedTokens: estimateTokens(estimateChars(messages) + system.length),
     })
     const notice = [...result.warnings, formatDocumentInjection(result)].join('；')
     return { messages: result.messages, notice }
@@ -1977,6 +1997,9 @@ const withRequestDocuments = async (
  * 服务端判定 file_id 失效时重新补传后重发，退避重试且次数有上限，超过则按原始报错收尾。
  */
 const streamReply = async (sessionId: string, initial: AssistantMessage, request: Request) => {
+  const session = getSession(sessionId)
+  const prompt = session?.customSystemPrompt
+  const systemPrompt = typeof prompt === 'string' && prompt ? SYSTEM_PROMPT + '\n\n' + prompt : SYSTEM_PROMPT
   const controller = new AbortController()
   /** 本轮开始时间：chat_first_token / chat_done / 中止都用它算耗时（老口径，保持不变） */
   const startedAt = Date.now()
@@ -2063,7 +2086,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           // 裁剪边界跟着会话走（#345）：同一会话的后续轮次沿用同一个边界，
           // 请求前缀逐字节稳定，上游上下文缓存才会命中
           // vision：本渠道图片走 file_id 还是 base64 内联（#551）；deepseek 仍只认 file_id
-          { anchorKey: sessionId, attachmentRefs: documentInjection, vision: visionFor(spec.kind) }
+          { anchorKey: sessionId, personaChars: systemPrompt.length - SYSTEM_PROMPT.length, attachmentRefs: documentInjection, vision: visionFor(spec.kind) }
         )
         /**
          * 注入正文（#480 §9）：`buildWithDocuments()` 是**唯一入口** —— 它按预算挑正文、
@@ -2073,7 +2096,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
          * 提问照发；真抛错时这里兜一次，剥掉引用键继续发（文档是增强项，不是发送前置条件）。
          */
         const injected = documentInjection
-          ? await withRequestDocuments(preparedMessages, spec.kind)
+          ? await withRequestDocuments(preparedMessages, spec.kind, systemPrompt)
           : { messages: preparedMessages, notice: '' }
         if (injected.notice) {
           recordEvent('chat_send', injected.notice, {
@@ -2081,7 +2104,7 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
             model: initial.model ?? getModel(),
           })
         }
-        const { system, messages } = toRequestBody(injected.messages)
+        const { system, messages } = toRequestBody(injected.messages, systemPrompt)
         // 附件已补齐、请求即将发出：prepMs 到此为止，后面的耗时才是「等上游」
         meter.markRequest()
         // 字段发不发由 requestBody.ts 里的 REQUEST_GATES 决定，这里只把本轮信息传进去

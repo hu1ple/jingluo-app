@@ -10,6 +10,9 @@ export const en = {
   collapseSiderbarButton: 'Close sidebar',
   newChat: 'New chat',
   shareImport: 'Import conversation',
+  shareImportDescription:
+    'Paste a DeepSeek share link — you can keep editing it locally afterwards.',
+  shareImportAction: 'Import',
   shareLink: 'Official DeepSeek conversation share link',
   shareLoading: 'Importing…',
   shareInvalid: 'Enter a complete HTTPS link with the path /share/share-id.',

@@ -1888,6 +1888,21 @@
   background: transparent;
 }
 
+/* DeepSeek 分享链接输入框（从侧栏搬进「数据管理」后归到这里） */
+.shareLinkInput {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  padding: 10px 12px;
+  min-height: 44px;
+  font: inherit;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-3);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 10px;
+}
+
 /* #173-fallback:start —— 由 node scripts/gen-flex-gap-fallback.mjs 生成，勿手改（issue #173） */
 :global(html[data-flex-gap-fallback]) .row > *:not(:last-child) {
   margin-right: 8px;

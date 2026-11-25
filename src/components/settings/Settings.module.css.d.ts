@@ -113,5 +113,6 @@ declare const styles: {
   readonly "themeOptionSelected": string;
   readonly "douyinValue": string;
   readonly "douyinValueText": string;
+  readonly "shareLinkInput": string;
 };
 export = styles;

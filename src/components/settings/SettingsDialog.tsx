@@ -66,6 +66,7 @@ import { AppUpdateField, AppVersionField } from './AppUpdateField.js'
 import { ChatBackgroundField } from './ChatBackgroundField.js'
 import { DOUYIN_ACCOUNT_ID, douyinCopyToast } from './douyinAccount.js'
 import { FeedbackDialog } from './FeedbackDialog.js'
+import { ShareImportDialog } from './ShareImportDialog.js'
 import {
   closeSettings,
   normalizeSettingsSection,
@@ -359,6 +360,8 @@ const SettingsContent = ({ visible }: { visible: boolean }) => {
   const historyDelete = useHistoryDelete()
   // 反馈弹窗：integrity=true 表示从「检查日志完整性」进入，自检面板默认展开
   const [feedback, setFeedback] = useState({ open: false, integrity: false })
+  // 分享导入弹窗（原生专享，入口在「数据管理」里「导入会话」那一行）
+  const [shareImport, setShareImport] = useState(false)
   const replacingHistory = useChatStore((state) => state.importingHistory)
   const historyBusy = historyImport.busy || historyDelete.busy || replacingHistory
   // 覆盖确认 / 删除确认叠在设置之上时，设置层的 X 与点击遮罩一律不可用：
@@ -387,53 +390,78 @@ const SettingsContent = ({ visible }: { visible: boolean }) => {
       return <AccountConsumePage page={accountPage} onNavigate={setAccountPage} />
     }
     if (page === 'data') {
+      // 「导入会话」只在原生端出现：网页端读分享接口被 CORS 挡，链接导入全靠原生 HTTP。
+      // 所以这里**连行都不渲染**（不是 disabled、也不给「网页端不支持」的提示）。
+      const shareImportAvailable = canImportFromUrl()
       return (
-        <SettingsCard>
-          <ImportHistory historyImport={historyImport} disabled={historyBusy} />
-          <ExportHistory disabled={historyBusy} />
-          <SettingCell
-            label={t('feedbackCellLabel')}
-            description={t('feedbackCellDescription')}
-            status={null}
-            className={styles.wrapActionsCell}
-            action={
-              <>
+        <>
+          <SettingsCard>
+            <ImportHistory historyImport={historyImport} disabled={historyBusy} />
+            {shareImportAvailable ? (
+              <SettingCell
+                label={t('shareImport')}
+                description={t('shareImportDescription')}
+                status={null}
+                action={
+                  <Button
+                    variant="outlined"
+                    size="m"
+                    className={styles.cellButton}
+                    onClick={() => setShareImport(true)}
+                  >
+                    {t('shareImportAction')}
+                  </Button>
+                }
+              />
+            ) : null}
+            <ExportHistory disabled={historyBusy} />
+            <SettingCell
+              label={t('feedbackCellLabel')}
+              description={t('feedbackCellDescription')}
+              status={null}
+              className={styles.wrapActionsCell}
+              action={
+                <>
+                  <Button
+                    variant="outlined"
+                    size="m"
+                    className={styles.cellButton}
+                    onClick={() => setFeedback({ open: true, integrity: false })}
+                  >
+                    {t('feedbackCellAction')}
+                  </Button>
+                  {/* 用户反馈前可先自检：条数 / 时间跨度 / 事件类型覆盖 / 缺失项 */}
+                  <Button
+                    variant="outlined"
+                    size="m"
+                    className={styles.cellButton}
+                    onClick={() => setFeedback({ open: true, integrity: true })}
+                  >
+                    {t('feedbackIntegrityCheck')}
+                  </Button>
+                </>
+              }
+            />
+            <SettingCell
+              label={t('deleteAllSessions')}
+              status={null}
+              action={
                 <Button
-                  variant="outlined"
+                  variant="dangerOutlined"
                   size="m"
                   className={styles.cellButton}
-                  onClick={() => setFeedback({ open: true, integrity: false })}
+                  disabled={historyBusy}
+                  onClick={historyDelete.open}
                 >
-                  {t('feedbackCellAction')}
+                  {t('delete')}
                 </Button>
-                {/* 用户反馈前可先自检：条数 / 时间跨度 / 事件类型覆盖 / 缺失项 */}
-                <Button
-                  variant="outlined"
-                  size="m"
-                  className={styles.cellButton}
-                  onClick={() => setFeedback({ open: true, integrity: true })}
-                >
-                  {t('feedbackIntegrityCheck')}
-                </Button>
-              </>
-            }
-          />
-          <SettingCell
-            label={t('deleteAllSessions')}
-            status={null}
-            action={
-              <Button
-                variant="dangerOutlined"
-                size="m"
-                className={styles.cellButton}
-                disabled={historyBusy}
-                onClick={historyDelete.open}
-              >
-                {t('delete')}
-              </Button>
-            }
-          />
-        </SettingsCard>
+              }
+            />
+          </SettingsCard>
+          {shareImportAvailable ? (
+            <ShareImportDialog open={shareImport} onClose={() => setShareImport(false)} />
+          ) : null}
+        </>
       )
     }
     if (page === 'appearance') {

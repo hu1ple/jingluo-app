@@ -8,6 +8,8 @@ export const zh = {
   collapseSiderbarButton: '收起边栏',
   newChat: '开启新对话',
   shareImport: '导入会话',
+  shareImportDescription: '粘贴 DeepSeek 官方分享链接，导入后可在本机继续编辑',
+  shareImportAction: '导入',
   shareLink: 'DeepSeek 官方会话分享链接',
   shareLoading: '正在导入…',
   shareInvalid: '请输入完整的 HTTPS 会话分享链接，路径应为 /share/分享编号。',

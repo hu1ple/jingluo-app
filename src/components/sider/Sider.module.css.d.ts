@@ -1,5 +1,4 @@
 declare const styles: {
-  readonly "shareLinkInput": string;
   readonly "sider": string;
   readonly "top": string;
   readonly "appName": string;

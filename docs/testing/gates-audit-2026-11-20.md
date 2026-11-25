@@ -113,45 +113,36 @@ main 最新的 push run（`44700028925`）实测：
 `ci.yml` / `release.yml` 都没有它的步骤 —— 也就是说「签名凭据形状」这道门禁**只存在于文档里**。
 本次只登记（不接 CI：CI 无密钥，硬接就是恒红），接法建议写进 PR 正文。
 
-## 4. 三态总表（28 道）
+## 4. 三态总表 —— **已下线，别在这里维护**
 
-「裸跑」= 直接 `node scripts/check-*.mjs`，无 dist、无 apk、无 keystore；「有产物」= `pnpm run build:internal` 之后。
+这份 28 行表在写下它的第二天就开始烂，所以它被删掉了，只留结论（这次删表本身是证据，不是偷懒）：
 
-| # | 门禁脚本 | npm 别名 | CI 接线 | 裸跑 | 有产物 | 说明 |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1 | check-apk-debuggable | check:apk | release.yml（按产物逐个跑） | BROKEN(2) | BROKEN(2) | 需 apk 参数；L0 里 G7 用合成 APK 做过正负对照，脚本本体没问题 |
-| 2 | check-bundle-syntax | check:legacy | ci.yml | BROKEN(2) | **OK** | 无 dist 时按环境错退出（不是跳过） |
-| 3 | check-bundle-target | check:bundle-target | ci.yml | FAIL(1) | **OK** | 无 dist 时**判红**（#298 的设计：没产物=没检查） |
-| 4 | check-capabilities | check:capabilities | ci.yml（warn 档） | OK | OK | 10 处已知缺陷在案，故 warn |
-| 5 | check-compat-baseline | check:compat-baseline | ✗ | OK | OK | 语义由 L0 用例覆盖；建议接线 |
-| 6 | check-container-query-fallback | check:container | ✗ | OK | OK | 语义由 L0 用例覆盖；建议接线 |
-| 7 | check-css-gap-fallback | check:gap | ✗ | OK | OK | 建议接线（<210ms） |
-| 8 | check-doc-refs | check:doc-refs | ci.yml | **FAIL(1) → OK** | **OK** | **本次修复**（§3.1） |
-| 9 | check-duplicate-impl | check:dup-impl | ci.yml | OK | OK | 本次扩范围到 `src/`（§2） |
-| 10 | check-endpoints | check:endpoints | ci.yml | OK | OK | |
-| 11 | check-focus-visible-fallback | check:focus | ✗ | OK | OK | 建议接线（<150ms） |
-| 12 | check-guard-es5 | check:guard | ✗ | OK | OK | 已登记未接线 |
-| 13 | check-hardcoded-ip | check:ip | ci.yml | OK | OK | |
-| 14 | check-hardcoded-ports | check:hardcoded-ports | ✗ | OK | OK | 语义由 L0 用例覆盖 |
-| 15 | check-i18n | check:i18n | ci.yml | OK | OK | 带现场负向对照 |
-| 16 | check-icon-edges | check:icon | ✗ | OK | OK | 本次新增登记 |
-| 17 | check-identity | check:identity | ✗ | OK | OK | 已登记未接线 |
-| 18 | check-issue-close-keywords | （无别名） | ✗ | OK | OK | 手工跑；本次登记 |
-| 19 | check-keystore-config | check:keystore | ✗ | BROKEN(2) | BROKEN(2) | 需本机密钥文件（§3.3） |
-| 20 | check-limits | check:limits | ✗ | OK | OK | 本次新增登记 |
-| 21 | check-log-coverage | check:log-coverage | ci.yml | OK | OK | 缺口在基线里 |
-| 22 | check-manifest-fixtures | check:manifest | ci.yml | OK | OK | |
-| 23 | check-redact | check:redact | ci.yml（含 `--selftest` 负向对照） | OK | OK | |
-| 24 | check-refactor-direction | check:refactor-direction | ✗（#487 明确推迟） | FAIL(1) | FAIL(1) | **设计性红**：A1/A3 未收口前就该红，接了 CI 等于天天红 |
-| 25 | check-repo-hygiene | check:hygiene | ci.yml | OK | OK | |
-| 26 | check-scrollbar-gutter-fallback | check:gutter | ✗ | OK | OK | 建议接线（<90ms） |
-| 27 | check-test-duplication | check:test-duplication | ci.yml | OK | OK | |
-| 28 | check-test-layout | check:test-layout | ci.yml（`-- --strict`） | OK | OK | |
+- 写下时 `scripts/check-*.mjs` **28 道**，现在 **40 道**（`ls scripts/check-*.mjs | wc -l`）——
+  表里没有的 12 道是后来加的。
+- 表里 §3.3 那条「`check:keystore` 从未在任何流水线上跑过」，**#697 起已接线**（ci.yml 跑 `--config-only`
+  降级档，真签名比对在发布机）；§5 的旧条目因此也不再成立。
+- 三态里真正值钱的是 **BROKEN 这一类**（判据：「门禁跑不起来」= 零覆盖，比判红更危险）。它现在不再靠
+  人肉体检：`exit 2` 是仓里所有门禁脚本的公用约定（见 `scripts/check-bundle-target.mjs`、
+  `scripts/check-bundle-syntax.mjs`），而「接了线就必须被跑」由
+  `tests/unit/domain10-gate-wiring.test.mjs` 的 `REQUIRED_CI_GATES` 断言。
 
-合计（有产物口径）：**OK 25 / FAIL 1（设计性）/ BROKEN 2（需参数或本机密钥，均非脚本缺陷）**。
+门禁现在只有两份活的口径，都尽量交给机器：**理由 / 归属 / 准入 / 豁免纪律** →
+[`docs/testing/gates-ledger.md`](gates-ledger.md)；**有没有负向对照、接没接线** →
+`docs/TESTING-POLICY.md` §9.4 与 `tests/unit/domain10-gate-wiring.test.mjs`（`REQUIRED_CI_GATES` / `KNOWN_UNWIRED`）。
+本文件只保留一篇**带日期的体检记录**价值：方法（§1）、那个被误诊成「崩溃」的用例（§2）、
+以及三处真实失效的根因（§3）。
 
 ## 5. 已知仍未覆盖的（写下来，别当成已验）
 
-1. `check:keystore` 没有任何自动入口 —— 谁改坏 `keystore.properties` 的形状，只有发版当天才会知道。
-2. 10 道未接线门禁仍是「手跑才有效」；PR 正文给了接线 diff，需要一次 `ci.yml` 改动（本单按约束不改）。
+（2026-11-25 复看：下面第 1 条已关闭，第 2 条重写；留原文痕迹是为了记住「快照会烂」这件事。）
+
+1. ~~`check:keystore` 没有任何自动入口~~ —— **#697 起已接线**：ci.yml 跑 `--config-only` 降级档
+   （校验配置形状与来源一致性），真签名比对在发布机的全量档。
+2. **未接线门禁**：`check:*` 别名里有 11 道登记在 `tests/unit/domain10-gate-wiring.test.mjs` 的
+   `KNOWN_UNWIRED`（逐条带理由，且该用例会断言它们**确实没被接进 ci.yml**）；另有 3 道
+   **既不接线、也不在那张登记表里**，它们现在只靠这段文字记账：
+   `check:capabilities-docs`（替代判据 `tests/unit/capabilities-docs-sync.test.mjs`）、
+   `check:public-artifact-redaction`（发布前手动，见 `docs/RELEASE-CHECKLIST.md`）、
+   `check:retention`（需分发机，见 `docs/RELEASE-MANUAL.md`）。这三条正是
+   [`docs/testing/gates-ledger.md`](gates-ledger.md) §3.2 第 4 条要治的形状。
 3. 本次体检只验「脚本能不能跑、判得对不对」，**不验**每道门禁的判据是否还覆盖真实风险 —— 那是各门禁自己的 issue。

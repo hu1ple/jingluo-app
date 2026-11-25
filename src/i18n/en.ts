@@ -19,7 +19,7 @@ export const en = {
   personaDiscard: 'Discard',
   personaSaveFailed: 'Could not save. Please try again.',
   newChat: 'New chat',
-  shareImport: 'Import conversation',
+  shareImport: 'Import shared conversation',
   shareImportDescription:
     'Paste a DeepSeek share link — you can keep editing it locally afterwards.',
   shareImportAction: 'Import',
@@ -320,7 +320,7 @@ export const en = {
   confirm: 'Confirm',
   apiKeyInvalid: 'That key looks a bit off (｡•́︿•̀｡)',
   apiKeyVerificationFailed: 'Verification failed: {message}',
-  historyImport: 'Import chat history',
+  historyImport: 'Import past conversations',
   historyImportConfirm: 'Import',
   historyImportConfirmTitle: 'Import chat history?',
   historyImportConfirmDescription:

@@ -38,7 +38,14 @@ import { copyText } from '../../utils/clipboard.js'
 import { saveHistoryArchive } from '../../services/chat/history/saveArchive.js'
 import { bundledApp, isAndroidUpdate } from '../../services/appUpdate.js'
 import { ImportSkippedDetails, importedMessage, summaryFromCount } from './importSkipped.js'
-import { useChatStore, type HistoryImportSummary } from '../../services/chat/store.js'
+import {
+  importHistoryInto,
+  selectSession,
+  useChatStore,
+  type HistoryImportSummary,
+} from '../../services/chat/store.js'
+import { addStagingSession } from '../../services/chat/db.js'
+import { readDeepSeekShare } from '../../services/chat/history/deepseekShare.js'
 import {
   setLocale,
   setEnterKeyMode,
@@ -66,7 +73,6 @@ import { AppUpdateField, AppVersionField } from './AppUpdateField.js'
 import { ChatBackgroundField } from './ChatBackgroundField.js'
 import { DOUYIN_ACCOUNT_ID, douyinCopyToast } from './douyinAccount.js'
 import { FeedbackDialog } from './FeedbackDialog.js'
-import { ShareImportDialog } from './ShareImportDialog.js'
 import {
   closeSettings,
   normalizeSettingsSection,
@@ -360,8 +366,6 @@ const SettingsContent = ({ visible }: { visible: boolean }) => {
   const historyDelete = useHistoryDelete()
   // 反馈弹窗：integrity=true 表示从「检查日志完整性」进入，自检面板默认展开
   const [feedback, setFeedback] = useState({ open: false, integrity: false })
-  // 分享导入弹窗（原生专享，入口在「数据管理」里「导入会话」那一行）
-  const [shareImport, setShareImport] = useState(false)
   const replacingHistory = useChatStore((state) => state.importingHistory)
   const historyBusy = historyImport.busy || historyDelete.busy || replacingHistory
   // 覆盖确认 / 删除确认叠在设置之上时，设置层的 X 与点击遮罩一律不可用：
@@ -390,30 +394,16 @@ const SettingsContent = ({ visible }: { visible: boolean }) => {
       return <AccountConsumePage page={accountPage} onNavigate={setAccountPage} />
     }
     if (page === 'data') {
-      // 「导入会话」只在原生端出现：网页端读分享接口被 CORS 挡，链接导入全靠原生 HTTP。
+      // 「导入分享会话」只在原生端出现：网页端读分享接口被 CORS 挡，链接导入全靠原生 HTTP。
       // 所以这里**连行都不渲染**（不是 disabled、也不给「网页端不支持」的提示）。
+      // 三行导入（导入历史会话 / 从链接导入 / 导入分享会话）同一种行内形态：说明在上、
+      // 控件在下，两个链接输入框共用 `.shareLinkInput` + `.linkActions`，宽高天然一致。
       const shareImportAvailable = canImportFromUrl()
       return (
         <>
           <SettingsCard>
             <ImportHistory historyImport={historyImport} disabled={historyBusy} />
-            {shareImportAvailable ? (
-              <SettingCell
-                label={t('shareImport')}
-                description={t('shareImportDescription')}
-                status={null}
-                action={
-                  <Button
-                    variant="outlined"
-                    size="m"
-                    className={styles.cellButton}
-                    onClick={() => setShareImport(true)}
-                  >
-                    {t('shareImportAction')}
-                  </Button>
-                }
-              />
-            ) : null}
+            {shareImportAvailable ? <ImportShare disabled={historyBusy} /> : null}
             <ExportHistory disabled={historyBusy} />
             <SettingCell
               label={t('feedbackCellLabel')}
@@ -458,9 +448,6 @@ const SettingsContent = ({ visible }: { visible: boolean }) => {
               }
             />
           </SettingsCard>
-          {shareImportAvailable ? (
-            <ShareImportDialog open={shareImport} onClose={() => setShareImport(false)} />
-          ) : null}
         </>
       )
     }
@@ -1569,12 +1556,13 @@ const ImportHistoryUrl = ({
         ) : null}
       </div>
       <div className={styles.linkActions}>
-        <div className={clsx(styles.apiKeyInput, styles.linkInput)}>
+        <div className={styles.linkInput}>
           <input
             type="url"
             inputMode="url"
             autoComplete="off"
             spellCheck={false}
+            className={styles.shareLinkInput}
             aria-label={t('historyImportFromUrl')}
             placeholder={t('historyImportUrlPlaceholder')}
             value={historyImport.url}
@@ -1607,6 +1595,98 @@ const ImportHistoryUrl = ({
           onClick={() => historyImport.selectUrl()}
         >
           {t(running ? 'historyImportUrlDownloading' : 'historyImportUrlStart')}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * 原生专享：粘贴 DeepSeek 官方分享链接，**在行内**直接导入（#390 起不再弹窗）。
+ *
+ * 与「从链接导入」同一副骨架：`label / description / 输入框 + 按钮` 的 `.linkCell` 行，
+ * 输入框复用 `.shareLinkInput`、按钮复用 `.cellButton.uploadButton` —— 两行的控件
+ * 左右对齐、宽高一致（改动其中一处记得两行一起看）。
+ *
+ * 提交逻辑与原来 `ShareImportDialog` 里的一致：`readDeepSeekShare` → `importHistoryInto` →
+ * `selectSession`；成功 / 失败都只在这一行里给状态，不弹窗、不 alert。
+ * 网页端整行不渲染（入口在 `renderPage` 里由 `canImportFromUrl()` 把着）。
+ */
+const ImportShare = ({ disabled }: { disabled: boolean }) => {
+  const t = useTranslate()
+  const [link, setLink] = useState('')
+  const [status, setStatus] = useState<Status>(null)
+  const [busy, setBusy] = useState(false)
+  const blocked = disabled || busy || link.trim() === ''
+  const submit = async () => {
+    if (blocked) {
+      return
+    }
+    setBusy(true)
+    setStatus(null)
+    try {
+      const session = await readDeepSeekShare(link)
+      const state = useChatStore.getState()
+      if (state.importingHistory || Object.keys(state.streaming).length) {
+        setStatus({ key: 'shareBusy', error: true })
+        return
+      }
+      await importHistoryInto(() => addStagingSession(session), 'skip')
+      selectSession(session.id)
+      setLink('')
+      // 既有文案：已导入 1 个会话（不新增 key）
+      setStatus({ key: 'historyImportedOne' })
+    } catch (cause) {
+      setStatus(
+        cause instanceof BackupError
+          ? { key: cause.key, params: cause.params, error: true }
+          : { key: 'shareSaveFailed', error: true }
+      )
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className={clsx(styles.cell, styles.row, styles.linkCell)}>
+      <div className={styles.text}>
+        <div className={styles.label}>{t('shareImport')}</div>
+        {status?.error ? (
+          <ErrorNotice text={statusText(t, status)} />
+        ) : (
+          <CellText status={status} description={t('shareImportDescription')} />
+        )}
+      </div>
+      <div className={styles.linkActions}>
+        <div className={styles.linkInput}>
+          <input
+            type="url"
+            inputMode="url"
+            autoComplete="off"
+            spellCheck={false}
+            className={styles.shareLinkInput}
+            aria-label={t('shareLink')}
+            placeholder="https://chat.deepseek.com/share/…"
+            value={link}
+            disabled={disabled || busy}
+            onChange={(event) => {
+              setLink(event.currentTarget.value)
+              setStatus(null)
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                void submit()
+              }
+            }}
+          />
+        </div>
+        <Button
+          variant="outlined"
+          size="m"
+          className={clsx(styles.cellButton, styles.uploadButton)}
+          disabled={blocked}
+          onClick={() => void submit()}
+        >
+          {t(busy ? 'shareLoading' : 'shareImportAction')}
         </Button>
       </div>
     </div>

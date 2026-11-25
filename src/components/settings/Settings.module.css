@@ -1888,12 +1888,15 @@
   background: transparent;
 }
 
-/* DeepSeek 分享链接输入框（从侧栏搬进「数据管理」后归到这里） */
+/* DeepSeek 分享链接输入框（从侧栏搬进「数据管理」后归到这里）。
+   「从链接导入」与「导入分享会话」两行共用这一个类：改它就等于同时改两行，
+   两行的输入框因此天然同高同宽（`linkCell` + `linkInput` 负责宽度分配）。
+   这里不再带 `margin-top`：那是给已退役的 `ShareImportDialog` 竖排标签留的间距，
+   行内布局由 `.linkActions` 的 `align-items: center` 对齐。 */
 .shareLinkInput {
   display: block;
   width: 100%;
   box-sizing: border-box;
-  margin-top: 8px;
   padding: 10px 12px;
   min-height: 44px;
   font: inherit;

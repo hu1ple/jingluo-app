@@ -199,6 +199,29 @@ const originOf = (value: string): string | null => {
 }
 
 /**
+ * 取 `origin` + `pathname`（query / hash 不参与）：**同一台机器上可能挂着多个端点**，
+ * 这时只有路径能区分它们（`feedbackUrl` 的 `/feedback` 与网关的 `/v1/...` 就共用一台机器）。
+ */
+const addressOf = (value: string): { origin: string; path: string } | null => {
+  try {
+    const url = new URL(value, 'http://redacted.local')
+    return { origin: `${url.protocol}//${url.host}`, path: url.pathname }
+  } catch {
+    return null
+  }
+}
+
+/** 去掉尾斜杠：`/feedback/` 与 `/feedback` 是同一个路径 */
+const trimTrailingSlashes = (path: string): string => path.replace(/\/+$/, '')
+
+/**
+ * 路径前缀匹配：`/feedback` 认 `/feedback` 与 `/feedback/upload`，**不认** `/feedbackx`。
+ * 前缀为空（配置成根路径）时视为「整台机器都是它」。
+ */
+const pathMatchesPrefix = (path: string, prefix: string): boolean =>
+  prefix === '' || path === prefix || path.startsWith(`${prefix}/`)
+
+/**
  * 统一网关（`consume.baseUrl`）的 origin（#812 / #869）：`ours` 的登录与推理都打在它上面，所以日志里
  * 这一台机器上的请求就是**对话端点**。读不到（非打包环境 / 注入不全）返回 null。
  */
@@ -215,23 +238,50 @@ const consumeOrigin = (): string | null => {
 }
 
 /**
+ * 反馈上传端点（`config/endpoints.json` 的 `feedbackUrl`）：origin + 路径前缀。
+ * 读不到（非打包环境 / 没有这个键）返回 null。
+ */
+const feedbackEndpoint = (): { origin: string; pathPrefix: string } | null => {
+  const raw = readFeedbackUrl()
+  if (!raw) {
+    return null
+  }
+  const address = addressOf(raw)
+  return address ? { origin: address.origin, pathPrefix: trimTrailingSlashes(address.path) } : null
+}
+
+/**
  * 把一次请求的地址映射成端点键。相对路径（同源请求）按当前页面 origin 兜底 —— 与 `redactHost` 同口径。
  * 认不出来一律 `other`：宁可粗一档，也不把一个自建中转错标成官方端点。
  *
  * #812 / #869：`consume.baseUrl` 的 origin 是**对话端点**（`chatBaseUrl` 取值），因为 `ours` 的推理地址就是它
  * （同环境是构造出来的，见 `services/api/environment.ts`）。不认这一条，线上所有 chat 请求
  * 都会掉进 `other`，排查时反而看不出「打的是哪台机器」。
+ *
+ * #875 之后 **`feedbackUrl` 与网关同 origin**（都在 `api.ecsafe.cn` 这台机器上），所以「先看谁」不能决定
+ * 归属：只看 origin 会把**所有**聊天请求标成 `feedbackUrl`（端点切片直接失效）。现在的判定顺序是
+ * 「origin 相同 → 再看路径」：落在反馈路径下的才算反馈上传，其余同 origin 请求都归网关。
  */
 export const endpointKeyFromUrl = (url: string): EndpointKey => {
-  const origin = originOf(url)
-  if (!origin) {
+  const target = addressOf(url)
+  if (!target) {
     return 'other'
   }
-  const feedback = readFeedbackUrl()
-  if (feedback && originOf(feedback) === origin) {
-    return 'feedbackUrl'
+  const gatewayOrigin = consumeOrigin()
+  const sameAsGateway = gatewayOrigin !== null && gatewayOrigin === target.origin
+  const feedback = feedbackEndpoint()
+  if (feedback && feedback.origin === target.origin) {
+    // 路径能区分（配置给了非根路径）就以路径为准；不能区分（根路径）时按网关算：
+    // 这台机器是网关，偶发的反馈上传不该抢走高频的聊天请求。
+    if (feedback.pathPrefix !== '' && pathMatchesPrefix(target.path, feedback.pathPrefix)) {
+      return 'feedbackUrl'
+    }
+    if (sameAsGateway) {
+      return 'chatBaseUrl'
+    }
+    return feedback.pathPrefix === '' ? 'feedbackUrl' : 'other'
   }
-  return consumeOrigin() === origin ? 'chatBaseUrl' : 'other'
+  return sameAsGateway ? 'chatBaseUrl' : 'other'
 }
 
 // ---------------------------------------------------------------- 状态

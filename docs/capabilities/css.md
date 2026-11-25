@@ -5,7 +5,7 @@
 > - 盘点工具：`scripts/lib/cssAssumptionAudit.mjs`（`auditCssAssumptions(files)` 纯判定函数，不碰盘、不联网、不起浏览器）
 > - 单元测试：`tests/unit/css-assumption-audit.test.mjs`
 > - 盘点日期：2026-11-19 12:19 (+0800)
-> - 快照基准：`376b123`（`origin/main` tip，2026-11-21 16:33:41 +0800）
+> - 快照基准：`77720a32`（`origin/main` tip，2026-11-25 21:57:52 +0800）
 > - 采集时间：2026-11-21 16:45 (+0800)
 > - 写盘：`node scripts/gen-capabilities-docs.mjs`（`pnpm gen:capabilities`，`pnpm check:capabilities-docs` 只比对不写）——本文件的机器可读数字与 §1 逐特性计数都由它重算，**别手改**
 
@@ -13,9 +13,9 @@
 
 | 项 | 值 |
 | --- | --- |
-| 扫描范围 | `src/**` 全部源文件 **388** 个（`.css` **51** 个，其中 `*.module.css` **43** 个；其余 `.ts / .tsx / .html` 共 **337** 个） |
-| 口径拆分 | 51 `.css` + 253 `.ts` + 83 `.tsx` + 1 `.html` = 388 |
-| 命中总数 | **360** 处，分布在 **42** 个文件 |
+| 扫描范围 | `src/**` 全部源文件 **393** 个（`.css` **51** 个，其中 `*.module.css` **43** 个；其余 `.ts / .tsx / .html` 共 **342** 个） |
+| 口径拆分 | 51 `.css` + 258 `.ts` + 83 `.tsx` + 1 `.html` = 393 |
+| 命中总数 | **375** 处，分布在 **42** 个文件 |
 | 运行时下限 | WebView **83**（Chromium 83）。**首支持 ≤ 83 的特性一律记「无风险」，与有没有兜底无关** |
 | 构建期因素 | `rspack.config.ts` 用 `builtin:lightningcss-loader`，`targets` 取自 `package.json` 的 `browserslist`（强制含 `chrome >= 83`）。**已被构建期翻译掉的写法不算运行时假设** |
 
@@ -35,14 +35,14 @@
 
 | 特性 | 首支持 Chromium | 命中 | 已有兜底 | 无风险 | 可接受降级 | 真实缺陷 | 假阳性 | 结论 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 嵌套 `&` | — （构建期） | 141 | 141 | 0 | 0 | 0 | 0 | lightningcss 按 `chrome >= 83` 展开，非运行时假设 |
-| flex `gap` | 84 | 104 | 104 | 0 | 0 | 0 | 0 | 兜底已全覆盖（#217 补齐最后 2 处；W1-C1 / W1-C2 的新样式由 `pnpm run gen:gap` 补齐）；`check:gap` 口径见 §2.6 |
-| `min()` / `max()` | 79 | 29 | 0 | 29 | 0 | 0 | 0 | 79 ≤ 83，无风险（W1-C1 弹层宽高上限新增 2 处） |
+| 嵌套 `&` | — （构建期） | 149 | 149 | 0 | 0 | 0 | 0 | lightningcss 按 `chrome >= 83` 展开，非运行时假设 |
+| flex `gap` | 84 | 111 | 111 | 0 | 0 | 0 | 0 | 兜底已全覆盖（#217 补齐最后 2 处；W1-C1 / W1-C2 的新样式由 `pnpm run gen:gap` 补齐）；`check:gap` 口径见 §2.6 |
+| `min()` / `max()` | 79 | 30 | 0 | 30 | 0 | 0 | 0 | 79 ≤ 83，无风险（W1-C1 弹层宽高上限新增 2 处） |
 | `:has()` | 105 | **0** | 0 | 0 | 0 | 0 | 0 | 16 处已由 #213 清零：改成渲染期显式状态类 `ds-markdown-before-ul` / `ds-markdown-before-ol`，低内核上零特性依赖 |
 | `:focus-visible` | 86 | 18 | 18 | 0 | 0 | 0 | 0 | 18 处全部合规：每处都有同选择器的 `:focus` 兜底 + `:focus:not(:focus-visible)` 收回（#215；W1-C1 的 `.tab` / `.input` 按同一套三件套写；#486 的 `.md-float-copy` 新增 1 处，同一套三件套）；`pnpm run check:focus` 守住 |
 | `@supports` 块（9 处 `(height/max-height: 100dvh)` + 2 处 `(scrollbar-gutter: …)`） | 108 | 12 | 12 | 0 | 0 | 0 | 0 | **11/11 前置等价兜底**：9 处有 `vh` 基座；2 处（`MessageList.module.css:22,74`，#216 / #236）有常驻 `overflow-y: scroll` 槽位 |
 | `overscroll-behavior` | 63 | 9 | 0 | 9 | 0 | 0 | 0 | 63 ≤ 83，无风险 |
-| `env(safe-area-inset-*)` | 69 | 11 | 0 | 11 | 0 | 0 | 0 | 69 ≤ 83，无风险（见 §5 的一致性备注） |
+| `env(safe-area-inset-*)` | 69 | 10 | 0 | 10 | 0 | 0 | 0 | 69 ≤ 83，无风险（见 §5 的一致性备注） |
 | `getComputedStyle` 声明回读 | — （运行时） | 3 | 3 | 0 | 0 | 0 | **0** | #218 已修：`viewport.ts:55`、`scrollToFirstMessage.ts:30`、`collector.ts:723` 三处都有实测回读，假阳性归零（历史条目见 §3） |
 | `touch-action` | 36 | 8 | 0 | 8 | 0 | 0 | 0 | 36 ≤ 83，无风险 |
 | `backdrop-filter` | 76 | 2 | 0 | 2 | 0 | 0 | 0 | 76 ≤ 83，无风险（`-webkit-` 前缀另计 1 处） |
@@ -59,7 +59,7 @@
 | `color-mix()` | 111 | 0 | — | — | — | 0 | 0 | 未使用（且 lightningcss 会降级） |
 | `@layer` | 99 | 0 | — | — | — | 0 | 0 | 未使用 |
 | `accent-color` | 93 | 0 | — | — | — | 0 | 0 | 未使用 |
-| **合计** | | **360** | **295** | **59** | **1** | **5** | **0** | |
+| **合计** | | **375** | **310** | **59** | **1** | **5** | **0** | |
 
 > `100dvh` 的每一处声明，**没有一处**落在 `@supports` 之外（`dvh` 裸用命中数为 0）。这是本仓 #13 之后形成的最好的一条既有纪律，也是本次盘点最重要的**正面结论**：`dvh` 这一类零缺陷。
 
@@ -67,22 +67,24 @@
 
 列定义：`文件:行 | 假设内容 | 类别 | 风险(高/中/低) | 处置(已有兜底/需探测/需动态验证/拆单)`。类别固定为 **2**（CSS 特性）。
 
-### 2.1 `@supports` 块（现存 11 处，全部已有等价兜底）
+### 2.1 `@supports` 块（现存 12 处，全部已有等价兜底）
 
-行号按 2026-11-21 复算（基准 `40a7a38`，#681 整表核对）重锚：本节是**手工明细表**，生成器不管这一层，
-所以每次代码位移都要人重算一遍（下面 §2.2–§2.8 同）。
+行号按 2026-11-25 复算（基准 `77720a32`，`gate/last2` 整表核对）重锚：本节是**手工明细表**，生成器不管这一层，
+所以每次代码位移都要人重算一遍（下面 §2.2–§2.8 同）。处数从 11 变 12 是 `announcements/Announcements.module.css`
+新增的 `.popupBody`（首次进入的公告弹窗正文，issue #13 的 dvh 写法），它不在上一版快照里。
 
 | 文件:行 | 假设内容 | 类别 | 风险 | 处置 |
 | --- | --- | --- | --- | --- |
 | `app/App.module.css:105` | `@supports (height: 100dvh)`，块外 `:104` 有 `height: var(--app-viewport-height, 100vh)` | 2 | 低 | 已有兜底 |
+| `components/announcements/Announcements.module.css:208` | `.popupBody`（首次进入的公告弹窗正文），块外 `:197` 有 `max-height: 70vh` 基座 | 2 | 低 | 已有兜底 |
 | `components/chatInput/ChatInput.module.css:268` | `@supports (max-height: 100dvh)`，块外 `:267` 有 `max-height: calc(var(--app-viewport-height, 100vh) - 120px)`（窄屏媒体查询内） | 2 | 低 | 已有兜底 |
 | `components/messages/MessageList.module.css:22` | `@supports (scrollbar-gutter: stable both-edges)` 现代内核收回 `overflow-y: auto`（#216），块外 `:16` 有常驻 `overflow-y: scroll` | 2 | 低 | 已有兜底 |
 | `components/messages/MessageList.module.css:74` | `@supports (scrollbar-gutter: stable)` 窄屏收回块（#236），同作用域 `:66` 先写 `overflow-y: scroll` | 2 | 低 | 已有兜底 |
 | `components/settings/AppUpdateField.module.css:24` | `@supports (max-height: 100dvh)`，块外 `:21` 有 `min(70vh, calc(…, 100vh) - 32px)` | 2 | 低 | 已有兜底 |
 | `components/settings/AppUpdateField.module.css:37` | 同上，`@media (max-height: 760px)` 内的孪生块，块外 `:33` | 2 | 低 | 已有兜底 |
-| `components/settings/Settings.module.css:907` | `.deleteConfirm`，块外 `:906` 有 `max-height: calc(100vh - 32px)` 基座 | 2 | 低 | 已有兜底 |
-| `components/settings/Settings.module.css:945` | `.feedbackDialog`，块外 `:944` 有 `calc(var(--modal-viewport-height, 100vh) - 32px)` 基座 | 2 | 低 | 已有兜底 |
-| `components/settings/Settings.module.css:964` | `.feedbackMain`，块外 `:963` 有 `min(560px, calc(100vh - 200px))` 基座 | 2 | 低 | 已有兜底 |
+| `components/settings/Settings.module.css:1205` | `.deleteConfirm`，块外 `:1204` 有 `max-height: calc(100vh - 32px)` 基座 | 2 | 低 | 已有兜底 |
+| `components/settings/Settings.module.css:1243` | `.feedbackDialog`，块外 `:1242` 有 `calc(var(--modal-viewport-height, 100vh) - 32px)` 基座 | 2 | 低 | 已有兜底 |
+| `components/settings/Settings.module.css:1262` | `.feedbackMain`，块外 `:1261` 有 `min(560px, calc(100vh - 200px))` 基座 | 2 | 低 | 已有兜底 |
 | `components/update/UpdateDialog.module.css:22` | `.dialog`（#517 更新弹窗），块外 `:19` 有 `min(70vh, calc(…, 100vh) - 32px)` 基座 | 2 | 低 | 已有兜底 |
 | `components/update/UpdateDialog.module.css:35` | 同上，`@media (max-height: 760px)` 内的孪生块，块外 `:31` | 2 | 低 | 已有兜底 |
 
@@ -188,50 +190,51 @@
 > 3 处声明都已覆盖，2 处 `@supports` 就是收回块本身。**判定规则不改**：放宽到认 `overflow-y: scroll` 会顺手放过真正没兜底的写法，
 > 要不要放宽留给后续单。本文档的职责是把「规则怎么算」和「人怎么核」分开写清楚。
 
-### 2.6 flex `gap`（104 处：全部已有兜底；#217 补齐了最后 2 处）
+### 2.6 flex `gap`（111 处：全部已有兜底；#217 补齐了最后 2 处）
 
 | 文件:行 | 假设内容 | 类别 | 风险 | 处置 |
 | --- | --- | --- | --- | --- |
-| 39 个 `*.module.css` 共 103 处 | flex 容器上的 `gap` / `row-gap` | 2 | 低 | 已有兜底（`html[data-flex-gap-fallback]` + `margin` 块，由 `pnpm run gen:gap` 生成、`pnpm run check:gap` 逐条产出清单） |
-| `components/markdown/markdown.css:495` | `.md-code-block-switch { display:flex; gap:4px }`，文件不是 CSS Module、原先不在 `check:gap` 扫描范围 | 2 | 低 | **#217 已补**：裸写 `html[data-flex-gap-fallback]` 兜底块（` :global()` 在非 module 文件里非法），扫描范围同时扩到全部 `.css` |
+| 43 个 `*.module.css` 共 110 处 | flex 容器上的 `gap` / `row-gap` | 2 | 低 | 已有兜底（`html[data-flex-gap-fallback]` + `margin` 块，由 `pnpm run gen:gap` 生成、`pnpm run check:gap` 逐条产出清单） |
+| `components/markdown/markdown.css:607` | `.md-code-block-switch { display:flex; gap:4px }`，文件不是 CSS Module、原先不在 `check:gap` 扫描范围 | 2 | 低 | **#217 已补**：裸写 `html[data-flex-gap-fallback]` 兜底块（` :global()` 在非 module 文件里非法），扫描范围同时扩到全部 `.css` |
 | `components/messages/ReplyArea.module.css:224` | `.toolBody { display:flex; flex-wrap:wrap; row-gap:6px }`，原先被 `flex-wrap` 排除规则放过 | 2 | 低 | **#217 已补**：`margin-bottom: 6px`；排除规则改为「交叉轴 gap 只在**不换行**时才不需要兜底」 |
 | `components/messages/AssistantMessage.module.css:20,21` | `.waiting { display:flex; flex-wrap:wrap; column-gap:6px; row-gap:2px }`（#328 等待提示可能出现第二行） | 2 | 低 | **#328 已补**：`margin-right: 6px` + `margin-bottom: 2px`，由 `pnpm run gen:gap` 生成 |
 | ~~`components/settings/PaymentTrailDialog.module.css:71,113`~~ | `.tabs { display:flex; flex-wrap:wrap; gap:6px }`（#326 状态筛选页签）与 `.moreError { … gap:8px }`（#326 加载更多失败行） | 2 | 低 | **#561 已随文件删除**（三弹层合一）：两处兜底块随样式表一起删掉，不是漏了 |
 
-> 上表第 1 行是**总量**（39 个 `*.module.css` 里 103 处）；第 2–4 行是总量里的典型条目（`markdown.css` 那处是非 module，单独计入总数），
-> 不再逐行相加。第 5 行是删除记录，不计入 104。
+> 上表第 1 行是**总量**（43 个 `*.module.css` 里 110 处）；第 2–4 行是总量里的典型条目（`markdown.css` 那处是非 module，单独计入总数），
+> 不再逐行相加。第 5 行是删除记录，不计入 111。
 
-> 口径（#217 之后统一，本节数字按 2026-11-21 实跑）：`pnpm run check:gap` 报「扫描 **46** 个 CSS 文件（其中 **39** 个 CSS Module）：已兜底 **105** 条，跳过 **3** 条」。39 = `find src -name '*.module.css' | wc -l`；3 条跳过 = #159 的 `Settings.module.css:.backgroundRow` 1 条 + 非 flex 容器 2 条（`.m`、`.locationCell`）。（#681 复核：上一版记的 48/41/150 是 #499–#505 那一批进场时的口径，之后 `OursServices.module.css`（#583）与三份支付弹层 css（#561）删除，文件数掉到 46/39；本条与 `tests/unit/flex-gap-fallback.test.mjs` 的模块数断言同步。）
+> 口径（#217 之后统一，本节数字按 2026-11-25 实跑）：`pnpm run check:gap` 报「扫描 **51** 个 CSS 文件（其中 **43** 个 CSS Module）：已兜底 **113** 条，跳过 **3** 条」。43 = `find src -name '*.module.css' | wc -l`；3 条跳过 = #159 的 `Settings.module.css:.backgroundRow` 1 条 + 非 flex 容器 2 条（`.m`、`.locationCell`）。（#681 复核：上一版记的 48/41/150 是 #499–#505 那一批进场时的口径，之后 `OursServices.module.css`（#583）与三份支付弹层 css（#561）删除，文件数掉到 46/39；本条与 `tests/unit/flex-gap-fallback.test.mjs` 的模块数断言同步。2026-11-25 复算：扫描面 46/39 → **51/43**、已兜底 105 → **113**、命中 104 → **111**。）
 
-### 2.7 `inset`（16 处，构建期降级 → 已有兜底）
+### 2.7 `inset`（17 处，构建期降级 → 已有兜底）
 
 `inset` 首支持 Chromium 87，但 lightningcss 按 `chrome >= 83` 会把它翻成 `top/right/bottom/left`（`docs/compat/matrix/README.md` §4 实测 dist 里 `inset` 为 **0 处**，可交叉验证）。
 
 | 文件:行 | 假设内容 | 类别 | 风险 | 处置 |
 | --- | --- | --- | --- | --- |
 | `app/App.module.css:3,28,77` | `inset: 0` 铺满 | 2 | 低 | 已有兜底（构建期翻译） |
-| `app/ErrorBoundary.module.css:9` | `inset: 0` | 2 | 低 | 已有兜底（构建期翻译） |
-| `components/base/Modal.module.css:4,22` | `inset: 0` | 2 | 低 | 已有兜底（构建期翻译） |
-| `components/chatInput/ChatInput.module.css:77,109` | `inset: 0` | 2 | 低 | 已有兜底（构建期翻译） |
-| `components/chatInput/DragMask.module.css:3` | `inset: 0` | 2 | 低 | 已有兜底（构建期翻译） |
-| `components/chatInput/VoiceButton.module.css:79,90` | `inset: 0` | 2 | 低 | 已有兜底（构建期翻译） |
-| `components/messages/MessageFile.module.css:54` | `inset: 0` | 2 | 低 | 已有兜底（构建期翻译） |
-| `components/search/SearchPanel.module.css:60` | `inset: 0` | 2 | 低 | 已有兜底（构建期翻译） |
-| `components/session/SessionView.module.css:3` | `inset: 0` | 2 | 低 | 已有兜底（构建期翻译） |
-| `components/session/Welcome.module.css:3` | `inset: 0` | 2 | 低 | 已有兜底（构建期翻译） |
-| `components/sider/Sider.module.css:343` | `inset: 0`（`.drawerMask`） | 2 | 低 | 已有兜底（构建期翻译） |
+| `app/ErrorBoundary.module.css:9` | `inset: 0` 铺满 | 2 | 低 | 已有兜底（构建期翻译） |
+| `components/base/ImagePreview.module.css:6` | `inset: 0` 铺满（#818 应用内图片预览的全屏遮罩） | 2 | 低 | 已有兜底（构建期翻译） |
+| `components/base/Modal.module.css:4,22` | `inset: 0` 铺满 | 2 | 低 | 已有兜底（构建期翻译） |
+| `components/chatInput/ChatInput.module.css:77,109` | `inset: 0` 铺满 | 2 | 低 | 已有兜底（构建期翻译） |
+| `components/chatInput/DragMask.module.css:3` | `inset: 0` 铺满 | 2 | 低 | 已有兜底（构建期翻译） |
+| `components/chatInput/VoiceButton.module.css:79,90` | `inset: 0` 铺满 | 2 | 低 | 已有兜底（构建期翻译） |
+| `components/messages/MessageFile.module.css:63` | `inset: 0` 铺满 | 2 | 低 | 已有兜底（构建期翻译） |
+| `components/search/SearchPanel.module.css:60` | `inset: 0` 铺满 | 2 | 低 | 已有兜底（构建期翻译） |
+| `components/session/SessionView.module.css:3` | `inset: 0` 铺满 | 2 | 低 | 已有兜底（构建期翻译） |
+| `components/session/Welcome.module.css:3` | `inset: 0` 铺满 | 2 | 低 | 已有兜底（构建期翻译） |
+| `components/sider/Sider.module.css:485` | `inset: 0` 铺满（`.drawerMask`） | 2 | 低 | 已有兜底（构建期翻译） |
 
 ### 2.8 无风险特性（首支持 ≤ Chromium 83）
 
 | 文件:行 | 假设内容 | 类别 | 风险 | 处置 |
 | --- | --- | --- | --- | --- |
-| `components/base/Toast.module.css:9`<br>`components/markdown/markdown.css:184,195`<br>`components/messages/MessageFile.module.css:88`<br>`components/session/Welcome.module.css:43`<br>`components/settings/AppUpdateField.module.css:21,26,33,40`<br>`components/settings/Settings.module.css:204,209,344,949,963,965`<br>`components/consume/AccountConsume.module.css:324,325,326`<br>`components/update/UpdateDialog.module.css:19,24,31,38` | CSS `min()` / `max()`（21 处） | 2 | 低 | 无需探测（79 ≤ 83）。另 6 处随文件删除（不计入 21）：~~`components/settings/PaymentRecords.module.css:4,5`~~、~~`components/settings/PaymentTrailDialog.module.css:4,5`~~、~~`components/settings/PurchaseRecordsDialog.module.css:6,7`~~（#561 三弹层合一） |
-| `app/global.css:52`<br>`components/base/Select.module.css:82`<br>`components/chatInput/ChatInput.module.css:233`<br>`components/messages/MessageList.module.css:46`<br>`components/settings/AppUpdateField.module.css:59`<br>`components/settings/Settings.module.css:969`<br>`components/update/UpdateDialog.module.css:53` | `overscroll-behavior[-y]`（7 处） | 2 | 低 | 无需探测（63 ≤ 83） |
-| `components/base/Toast.module.css:3`<br>`components/session/SessionView.module.css:75`<br>`components/session/Welcome.module.css:152`<br>`components/auth/AuthPages.module.css:16`<br>`components/settings/Settings.module.css:699,949` | `env(safe-area-inset-*)`（6 处） | 2 | 低 | 无需探测（69 ≤ 83）；缺省值一致性见 §5 |
-| `components/messages/AssistantMessage.module.css:152,180`<br>`components/session/MobileHeader.module.css:29`<br>`components/settings/AppUpdateField.module.css:57`<br>`components/settings/Settings.module.css:968`<br>`components/update/UpdateDialog.module.css:51` | `touch-action`（6 处） | 2 | 低 | 无需探测（36 ≤ 83）；#347 / #353 给折叠区开关补了第 5 处，#517 更新弹窗的内容区是第 6 处 |
+| `components/base/ImagePreview.module.css:51,52`<br>`components/base/Toast.module.css:9`<br>`components/consume/AccountConsume.module.css:324,325,326`<br>`components/markdown/markdown.css:184,195`<br>`components/messages/MessageFile.module.css:16,17,97`<br>`components/session/PersonaDrawer.module.css:22,316`<br>`components/session/Welcome.module.css:43`<br>`components/settings/AppUpdateField.module.css:21,26,33,40`<br>`components/settings/Settings.module.css:8,523,528,663,993,1247,1261,1263`<br>`components/update/UpdateDialog.module.css:19,24,31,38` | CSS `min()` / `max()`（30 处） | 2 | 低 | 无需探测（79 ≤ 83）。另 6 处随文件删除（不计入 30）：~~`components/settings/PaymentRecords.module.css:4,5`~~、~~`components/settings/PaymentTrailDialog.module.css:4,5`~~、~~`components/settings/PurchaseRecordsDialog.module.css:6,7`~~（#561 三弹层合一） |
+| `app/global.css:52`<br>`components/announcements/Announcements.module.css:150,199`<br>`components/base/Select.module.css:82`<br>`components/chatInput/ChatInput.module.css:233`<br>`components/messages/MessageList.module.css:46`<br>`components/settings/AppUpdateField.module.css:59`<br>`components/settings/Settings.module.css:1267`<br>`components/update/UpdateDialog.module.css:53` | `overscroll-behavior[-y]`（9 处） | 2 | 低 | 无需探测（63 ≤ 83） |
+| `components/auth/AuthPages.module.css:16`<br>`components/base/ImagePreview.module.css:51,52`<br>`components/base/Toast.module.css:3`<br>`components/session/PersonaDrawer.module.css:22,316`<br>`components/session/SessionView.module.css:75`<br>`components/session/Welcome.module.css:152`<br>`components/settings/Settings.module.css:993,1247` | `env(safe-area-inset-*)`（10 处） | 2 | 低 | 无需探测（69 ≤ 83）；缺省值一致性见 §5。与上一行的 `max()` / `min()` 是**同一行代码的两个口径**（`max(22px, env(safe-area-inset-bottom))` 既算 `max()` 也算 `env()`），所以两行有重叠，不相加 |
+| `components/announcements/Announcements.module.css:151,200`<br>`components/messages/AssistantMessage.module.css:170,198`<br>`components/session/MobileHeader.module.css:37`<br>`components/settings/AppUpdateField.module.css:57`<br>`components/settings/Settings.module.css:1266`<br>`components/update/UpdateDialog.module.css:51` | `touch-action`（8 处） | 2 | 低 | 无需探测（36 ≤ 83）；#347 / #353 给折叠区开关补了第 5 处，#517 更新弹窗的内容区是第 6 处，`announcements/Announcements.module.css` 的公告列表与公告弹窗正文再各补一处（`:151` / `:200`，`pan-y`） |
 | `components/base/Modal.module.css:25`<br>`components/chatInput/DragMask.module.css:12` | `backdrop-filter`（2 处；`DragMask.module.css:11` 另有 `-webkit-backdrop-filter` 前缀版） | 2 | 低 | 无需探测（76 ≤ 83） |
 | `components/base/Modal.module.css:95` | `:where(.content)[data-motion-state='closed']` | 2 | 低 | 可接受降级（88 > 83，只丢收起动画） |
-| 22 个文件 / 140 行 | 嵌套 `&`（`:hover` / `&.x` / `&[aria-…]`），逐文件行号见附录 A | 2 | 低 | 已有兜底（构建期 lightningcss 展开） |
+| 149 行 / 24 个文件 | 嵌套 `&`（`:hover` / `&.x` / `&[aria-…]`），逐文件行号见附录 A | 2 | 低 | 已有兜底（构建期 lightningcss 展开） |
 
 > `src/utils/capabilities.ts:106`（`#212` 的包装函数 `cssSupports()`，绑定形式调用在 `:114`）不在上表里：字面量不是 `CSS.supports(`，
 > 静态扫描抓不到（§5 末条已记过这个盲区）。上一版把它记成 `services/diagnostics/` 下 `collector.ts` 的第 465 行 —— 那个行号既不是命中行（现在是 `extras.pixelRatio` 那段），函数也早就不是它了（#212 迁到 `src/utils/capabilities.ts`）。上一版还把它单列一行「无需探测」，属于把复算结果和人工补记混在一张表里，本版挪到正文。
@@ -284,33 +287,35 @@
 4. `:focus-visible` 的实际可见性风险有一档不确定性：若系统/浏览器默认 focus ring 未被项目 CSS 的 `outline` 规则覆盖，低内核上焦点仍可能可见。需要实测才能定档（已写进 #215 的未测边界）。
 5. 没有统计「同一特性被 lightningcss 部分降级」的情形（例如 `color-mix()` 在低目标下会被翻成静态色）。本次 `color-mix()` 命中为 0，暂无影响。
 
-## 附录 A：嵌套 `&` 命中位置（140 行 / 22 文件，全部构建期展开）
+## 附录 A：嵌套 `&` 命中位置（149 行 / 24 文件，全部构建期展开）
 
-> 行号由 `auditCssAssumptions()` 的实时命中导出（#681 复算，基准 `40a7a38`）。上一版是 141 行 / 22 文件，且还挂着已删除的 `OursServices.module.css`；本次删掉该行、按复算重排全部行号。
+> 行号由 `auditCssAssumptions()` 的实时命中导出（2026-11-25 复算，基准 `77720a32`）。上一版是 140 行 / 22 文件；本次按复算重排全部行号，新增的 `announcements/Announcements.module.css`、`base/Button.module.css` 等位移一并体现。
 
 ```
+components/announcements/Announcements.module.css: 106, 113, 117
 components/auth/AuthPages.module.css: 102, 106, 115, 119, 209
-components/base/Button.module.css: 22, 27, 36, 40, 44, 77, 88, 97, 108, 112, 118, 122
+components/base/Button.module.css: 22, 27, 36, 40, 44, 77, 90, 99, 110, 114, 120, 124
 components/base/IconButton.module.css: 16, 24, 28, 37, 41, 45
 components/base/Menu.module.css: 30, 43
 components/base/Modal.module.css: 34
 components/base/Select.module.css: 24, 28, 37, 41, 45, 109
-components/base/Toast.module.css: 50
-components/chatInput/ChatInput.module.css: 60, 70, 227, 314, 318, 323, 328, 364, 368
+components/base/Toast.module.css: 50, 66
+components/chatInput/ChatInput.module.css: 17, 69, 79, 237, 327, 331, 336, 340, 376, 380
 components/chatInput/VoiceButton.module.css: 34, 40, 44, 53, 57
-components/files/FileCard.module.css: 16, 24, 33, 37, 41
-components/markdown/CodeBlock.module.css: 32, 38
+components/files/FileCard.module.css: 17, 25, 34, 38, 42
+components/markdown/CodeBlock.module.css: 48, 54
 components/markdown/markdown.css: 94
-components/messages/AssistantMessage.module.css: 3, 5, 63, 75, 79, 154, 187, 255, 257
+components/messages/AssistantMessage.module.css: 3, 5, 63, 75, 79, 172, 205, 275, 277
 components/messages/ReplyArea.module.css: 14, 61, 75, 78, 102, 147, 152, 154, 167, 171, 175, 180, 182, 265
 components/messages/UserMessage.module.css: 6, 10, 69
 components/search/SearchPanel.module.css: 51
 components/search/SiteLogo.module.css: 47
-components/session/MobileHeader.module.css: 31, 40, 44, 50
+components/session/MobileHeader.module.css: 39, 48, 52, 58
+components/session/SessionBranch.module.css: 58, 129
 components/session/Welcome.module.css: 76, 81, 91, 95
-components/settings/Settings.module.css: 49, 58, 60, 63, 72, 76, 101, 249, 254, 256, 259, 265, 269, 432, 581, 597, 620, 660, 686, 690, 791, 795, 1014, 1018, 1022, 1042, 1101, 1105, 1134, 1210, 1379, 1383, 1414, 1418, 1425, 1429
+components/settings/Settings.module.css: 173, 227, 231, 239, 243, 391, 418, 568, 573, 575, 578, 584, 588, 751, 900, 916, 939, 980, 1089, 1093, 1312, 1316, 1320, 1340, 1399, 1403, 1432, 1508, 1677, 1681
 components/sider/SessionItem.module.css: 15, 19, 28, 31, 33
-components/sider/Sider.module.css: 63, 68, 169, 210, 214, 218, 227, 231
+components/sider/Sider.module.css: 63, 68, 159, 161, 189, 191, 241, 246, 267, 271, 311, 352, 356, 360, 369, 373
 ```
 
 ## 附录 B：复现方式
@@ -333,6 +338,7 @@ node --test tests/unit/css-assumption-audit.test.mjs
 ```
 
 ## 复核记录
+- 复核（2026-11-25，基准 `77720a32`，单元 `gate/last2`）：§0 / §1 由生成器重算（扫描 **393** 个文件、命中 **375** 处 / 分布 **42** 个文件、兜底 310 / 无风险 59 / 可降级 1 / 缺陷 5）；§2.1 / §2.6 / §2.7 / §2.8 与附录 A 的 `文件:行` 按 `auditCssAssumptions()` 实时命中**整表重锚**（§2.1 由 11 处变 **12** 处：新增 `announcements/Announcements.module.css:208` 的 `.popupBody`；`Settings.module.css` 三处 `@supports` 907/945/964 → **1205/1243/1262**，块外基座 906/944/963 → 1204/1242/1261，逐条核过）。逐特性总数同步为实测：flex `gap` 104 → **111**、`inset` 16 → **17**、`min()/max()` 21 → **30**、`overscroll-behavior` 7 → **9**、`env()` 6 → **10**、`touch-action` 6 → **8**、嵌套 `&` 140 → **149**（附录 A 整表重排，24 个文件）；`check:gap` 口径 46/39/105 → **51/43/113**（现跑现报「扫描 51 个 CSS 文件（43 个 module）：已兜底 113 条，跳过 3 条」）。§2.2 / §2.3 / §2.4 的历史快照表（表头写明「修前 / 修复前」）按设计不动。
 
 - 复核（2026-11-21 12:07，基准 `40a7a38`，本单 **#681**，`check-doc-refs` 可见性收口）：**只重锚行号与计数，没有改动任何判定**。§2.1 / §2.5 / §2.6 / §2.7 / §2.8 的 `文件:行` 全部按 `auditCssAssumptions()` 的实时命中重算（§2.5 实测整表 +4 / +6、§2.1 的 `MessageList` 两行 +4/+6、`ChatInput` +30、`Settings` 三行 +103、`Sider` +61），逐条核过「那行是不是文档说的那个构造」而不只是「那行不是 `}`」；已删文件的引用改成删除线（`OursServices.module.css` 2 处 #583、三份支付弹层 css 共 16 处 #561、~~`ours/orderStore.ts`~~ / ~~`ours/returnParams.ts`~~ #331）。计数同步：flex `gap` 126 → **104**（39 个 module 里 103 + 非 module 1）、嵌套 `&` 141 → **140** 行、`check:gap` 口径 48/41/150 → **46/39/105**，`min()/max()` / `overscroll-behavior` / `env()` / `touch-action` 四行的文件清单补上 #487 之后新增的 `consume/` 与 `update/` 两个目录。§2.2 / §2.3 / §2.4 三张表头写明「修前 / 修复前 / 修后」的**历史快照表按设计不动**（保留旧行号是为了让人看见当年长什么样）；§0 / §1 与统计数字**仍由生成器产出**，`pnpm run check:capabilities-docs` 一致；本节（§2）是手写表，生成器一个字都不碰 —— 所以「行号漂了」只能靠 `check-doc-refs` + `tests/unit/capabilities-docs-sync.test.mjs`（后者的匹配正则此前是坏的，已在本单修好）兜住。
 - 复核（2026-11-21 09:20，基准 `d1175ba`，本单 #517 分支 `feat/517-update-policy-dialog`）：新增 `src/components/update/UpdateDialog.module.css` 1 个 `.module.css`（`*.module.css` 38 → **39**），弹窗复用 `base/Modal` 的遮罩与高度链，只补了 `max-height: min(70vh, …)` 两档（`vh` 基座 + `@supports (100dvh)` 升级）、内容区 `overflow-y: auto` / `touch-action: pan-y` / `overscroll-behavior-y: contain`。命中总数 330 → **338**（`min()`/`max()` 17 → 21、`@supports` 9 → 11、`touch-action` 5 → 6、`overscroll-behavior` 6 → 7），全部落在「无风险 / 已有兜底」两列，**没有新增裸 `gap`**（间距一律 `margin`），`pnpm run check:gap` 仍是 OK。逐特性表与 §1/§2 的 `文件:行` 已由 `pnpm run gen:capabilities` 复算，`tests/unit/flex-gap-fallback.test.mjs` 的模块数断言同步到 39。

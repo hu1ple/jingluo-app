@@ -4,7 +4,8 @@ import '../helpers/injected.mjs'
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, readFile, writeFile, rm, cp, access } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdtemp, mkdir, readFile, writeFile, rm, cp, readdir, access } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -26,6 +27,142 @@ const execute = (file, args = []) => new Promise((resolve, reject) => {
   child.on('error', reject)
   child.on('close', (code) => resolve({ code, output }))
 })
+
+/**
+ * 沙箱镜像的**复制清单：只列目录，不列文件。**
+ *
+ * 沙箱不是「被测入口的最小可跑包」，而是「仓库的一份小型镜像」：入口会连带 import 共享 helper
+ * （runtime / env / ports / merge-* 以及它们各自的依赖）、端点读取器（`scripts/lib/*`）、
+ * 配置（`config/*`）与 fixture（`tests/fixtures/*`）。
+ *
+ * 逐文件点名的失败史 —— 每一次表现都是「入口断言没拿到预期输出」，真因都是「副本缺文件」：
+ *   #366 缺 merged-entry.mjs（合并批次起不来）、#501 缺 tap.mjs、#487 缺 consumeEndpoints.mjs、
+ *   #555 缺 helpers.mjs，以及本条：fixture 只点了 `domain03-04/ours-upstream.mjs` 一个，而
+ *   `tests/integration/diagnostics-contract.test.mjs` 新增了
+ *   `import … from '../fixtures/consume-gateway-stubs/builtin-key-claim.mjs'`
+ *   → 副本里 ERR_MODULE_NOT_FOUND → `MOCK_LAUNCH_REACHED` 根本到不了。
+ *
+ * 所以这张表只允许写**目录**：目录里新增文件自动跟上。真需要新子树就把它加进来，
+ * 不要在用例里补一行 `cp` —— 清单式镜像的失败是必然的，不是偶然的。
+ */
+const MIRRORED_DIRS = ['tests/helpers', 'tests/fixtures', 'scripts', 'config']
+
+/** 镜像里可能带 import 的文件；fixture / helper 都可能是 `.js` / `.cjs` */
+const CODE_FILE_RE = /\.(?:mjs|cjs|js)$/
+/**
+ * **静态**说明符：`import … from '…'` / `export … from '…'` / 副作用 `import '…'`。
+ * 这些边一定会被 ESM 加载，所以「仓库里有、沙箱里没有」= 必崩。
+ *
+ * 动态 `import('…')` **不在此列**，这是刻意的：它是条件加载（`tests/helpers/ours-claim.mjs` 就是
+ * 为了不炸这个沙箱才把 `src/services/invite/keyIdentity.ts` 改成懒加载的），把它当静态边会造出
+ * 「文件不在沙箱里」的假红 —— 假红一多，红灯就不等于坏了。动态边的缺失在运行期会点名报错。
+ */
+const STATIC_SPECIFIER_RE = /(?:\bfrom\s*|\bimport\s+)["']([^"'\n]+)["']/g
+
+/** 剥掉行注释与块注释。够用即可：这是「找相对 import」的自检，不是解析器。 */
+const stripComments = (source) =>
+  source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:\\])\/\/[^\n]*/g, '$1')
+
+/** 递归列出 `base` 下所有文件的相对 posix 路径（不跟符号链接，跳过 node_modules） */
+const listFiles = async (base, prefix = '') => {
+  let entries
+  try {
+    entries = await readdir(path.join(base, prefix), { withFileTypes: true })
+  } catch {
+    return []
+  }
+  const out = []
+  for (const entry of entries) {
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name
+    if (entry.isDirectory()) {
+      if (entry.name === 'node_modules') continue
+      out.push(...(await listFiles(base, rel)))
+    } else if (entry.isFile()) {
+      out.push(rel)
+    }
+  }
+  return out
+}
+
+/**
+ * 镜像自洽性自检 —— 本用例要守的**契约**，不是对现状的快照。两条：
+ *
+ * **1. `tests/fixtures` 必须整棵进来。** 比对仓库与沙箱的文件清单，缺一个就红并点名。这条防的是
+ * 「以后有人把 MIRRORED_DIRS 改回清单式 / 只挑几个 fixture 复制」：只要镜像不是整棵复制，这里
+ * 当场红，不依赖「恰好有没有用例 import 到缺的那个」——那是运气，不是契约。
+ *
+ * **2. 从入口出发的装载链，每一跳都必须落在沙箱里。** 从这次要跑的入口测试文件开始，沿相对
+ * import 做广度优先，逐跳确认目标存在；缺一个就红并点名 `文件 → 说明符`，那张名单就是修法。
+ *
+ * 为什么只跟**装载链**而不是扫全部副本：镜像里躺着的文件不等于会被加载。例如
+ * `tests/fixtures/domain05/archive.mjs` 引用 `tests/adversarial/lib/zip.mjs`，而这两个入口一个都
+ * 不加载它 —— 扫全部副本会把它判红，那是**假红**（今天不坏的东西不该红）。装载链是有向的、
+ * 从入口可达的，判据才和「跑起来会不会崩」同义。
+ *
+ * 判据是**仓库里存在、沙箱里没有**，不是「在不在 MIRRORED_DIRS 里」：装载链上的每一跳，只要仓库
+ * 里真有这个文件、沙箱里没有，跑起来必崩，就该在这里红（而不是等运行期抛 ERR_MODULE_NOT_FOUND、
+ * 让入口断言报成「没拿到 MOCK_LAUNCH_REACHED」那种隔了一层的样子）。
+ * 仓库里**本来就没有**的相对目标直接放过：`.js` → `.ts` 的 ESM 映射（`src/utils/capabilities.js`
+ * 实为 `.ts`）由打包器负责、沙箱也不镜像 `src/**`，硬判就是假红。
+ */
+const assertMirrorSelfContained = async (dir, testFiles) => {
+  const inRepo = await listFiles(path.join(root, 'tests/fixtures'))
+  const inSandbox = new Set(await listFiles(path.join(dir, 'tests/fixtures')))
+  const missingFixtures = inRepo.filter((rel) => !inSandbox.has(rel))
+  assert.deepEqual(
+    missingFixtures,
+    [],
+    `沙箱没有整棵复制 tests/fixtures（缺 ${missingFixtures.length} 个文件）。` +
+      '镜像必须按目录复制 `tests/fixtures`，不许退回逐个点名 —— 清单式镜像每加一个 fixture 就漏一次。',
+  )
+
+  const broken = []
+  const queue = [...testFiles]
+  const seen = new Set(queue)
+  while (queue.length > 0) {
+    const rel = queue.shift()
+    if (!CODE_FILE_RE.test(rel)) continue
+    const source = stripComments(await readFile(path.join(root, rel), 'utf8'))
+    for (const [, specifier] of source.matchAll(STATIC_SPECIFIER_RE)) {
+      if (!specifier.startsWith('.')) continue // 裸说明符走 node_modules，不归镜像管
+      const target = path.posix.normalize(path.posix.join(path.posix.dirname(rel), specifier))
+      if (!existsSync(path.join(root, target))) {
+        continue // 仓库里就没这个相对目标（`.js` → `.ts` 映射 / 外部产物）：见上，不制造假红
+      }
+      if (!existsSync(path.join(dir, target))) {
+        broken.push(`${rel} → ${specifier}`)
+        continue
+      }
+      if (!seen.has(target)) {
+        seen.add(target)
+        queue.push(target)
+      }
+    }
+  }
+  assert.deepEqual(
+    broken,
+    [],
+    `沙箱镜像缺文件（${broken.length} 处 import 指空）。镜像按目录复制时漏掉了一棵子树：` +
+      '把缺的那棵加进 MIRRORED_DIRS，不要在用例里补一行 cp。',
+  )
+}
+
+/**
+ * 把仓库镜像进沙箱：按目录复制（MIRRORED_DIRS）+ 放入要跑的入口测试文件 + 验镜像自洽。
+ *
+ * 入口测试文件仍然逐个放 —— 那是「这次要跑哪两个入口」的**被测对象**，不是镜像清单；
+ * 它们各自的 import 由 assertMirrorSelfContained 负责兜住。
+ */
+const mirrorRepo = async (dir, testFiles = []) => {
+  for (const rel of MIRRORED_DIRS) {
+    await cp(path.join(root, rel), path.join(dir, rel), { recursive: true })
+  }
+  for (const rel of testFiles) {
+    await mkdir(path.dirname(path.join(dir, rel)), { recursive: true })
+    await cp(path.join(root, rel), path.join(dir, rel))
+  }
+  await assertMirrorSelfContained(dir, testFiles)
+}
 
 test('case success, failure, independent temp roots and cleanup', async (t) => {
   const dir = await privateRoot(t)
@@ -89,22 +226,15 @@ test('two suite entrypoints reuse injected dist without build, and fail missing 
   await mkdir(path.join(dir, 'node_modules/playwright'), { recursive: true })
   await writeFile(path.join(dir, 'node_modules/playwright/package.json'), JSON.stringify({ type: 'module', exports: './index.mjs' }))
   await writeFile(path.join(dir, 'node_modules/playwright/index.mjs'), `export const chromium={launch:async()=>{throw new Error('MOCK_LAUNCH_REACHED')}}`)
-  // 沙箱不是「被测入口的最小可跑包」，而是「仓库的一份小型镜像」：入口会连带 import 共享 helper
-  // （runtime/env/ports/merge-* 以及它们各自的依赖）、端点读取器（scripts/lib/*）与配置（config/*）。
-  // 所以这三棵子树**按目录整体复制**，不再逐个列文件：
-  //   逐文件清单的失败史 —— #366 缺 merged-entry（合并批次起不来）、#501 缺 tap.mjs、
-  //   #487 缺 consumeEndpoints.mjs、#555 缺 helpers.mjs（diagnostics-contract 新增
-  //   `import { providerKindTrigger } from '../helpers/helpers.mjs'` → 副本里 ERR_MODULE_NOT_FOUND）。
-  // 每一次都表现为「入口断言没拿到预期输出」，而真因是「副本缺文件」—— 按目录复制从根上关掉这一类。
-  await cp(path.join(root, 'tests/helpers'), path.join(dir, 'tests/helpers'), { recursive: true })
-  await cp(path.join(root, 'scripts'), path.join(dir, 'scripts'), { recursive: true })
-  await cp(path.join(root, 'config'), path.join(dir, 'config'), { recursive: true })
-  await mkdir(path.join(dir, 'tests/fixtures/domain03-04'), { recursive: true })
-  await cp(path.join(root, 'tests/fixtures/domain03-04/ours-upstream.mjs'), path.join(dir, 'tests/fixtures/domain03-04/ours-upstream.mjs'))
+  // 沙箱是「仓库的一份小型镜像」（不是入口的最小可跑包）—— 见 MIRRORED_DIRS 的失败史。
+  // fixture 曾经只点名复制 `domain03-04/ours-upstream.mjs` 一个，于是 diagnostics-contract 新增
+  // `consume-gateway-stubs/builtin-key-claim.mjs` 后副本里 ERR_MODULE_NOT_FOUND、
+  // 断言要的 MOCK_LAUNCH_REACHED 永远到不了。现在整棵复制，并由 assertMirrorSelfContained 咬住。
+  const entrypoints = ['auto-title', 'diagnostics-contract']
+  await mirrorRepo(dir, entrypoints.map((name) => `tests/integration/${name}.test.mjs`))
   const dist = path.join(dir, 'prebuilt'); await mkdir(dist); await writeFile(path.join(dist, 'index.html'), 'immutable')
-  for (const name of ['auto-title', 'diagnostics-contract']) {
+  for (const name of entrypoints) {
     const file = path.join(dir, `tests/integration/${name}.test.mjs`)
-    await cp(path.join(root, `tests/integration/${name}.test.mjs`), file)
     const result = await runCase(file, { cwd: dir, output: false, env: { ...process.env, DIST_DIR: dist, STANDARD_DIST_DIR: dist, PORT: '0', STANDARD_PORT: '0' } })
     assert.equal(result.ok, false) // Intentional browser stop, never counted as suite PASS.
     assert.match(result.tail.join(''), /MOCK_LAUNCH_REACHED/)
@@ -183,13 +313,10 @@ console.log('READY');`,
 test('CLI exact failure rerun, JSON, no-match, invalid arguments and node:test detection', async (t) => {
   const dir = await privateRoot(t)
   await mkdir(path.join(dir, 'tests/unit'), { recursive: true })
-  await cp(path.join(root, 'tests/run-layer.mjs'), path.join(dir, 'tests/run-layer.mjs'))
-  // 同上一节：按目录整体复制（helpers / scripts 全给），不逐个列文件 —— run-layer 会连带 import
+  // 同上一节：镜像按目录复制（MIRRORED_DIRS），不逐个列文件 —— run-layer 会连带 import
   // helpers/runtime + helpers/env，合并批次还会用到 merged-*，重跑登记用 scripts/flaky-registry.mjs。
-  // 逐文件清单每加一条依赖就漏一次，红的是「沙箱缺文件」而不是「CLI 行为」（见 #366 / #501 / #406 / #555）。
-  await cp(path.join(root, 'tests/helpers'), path.join(dir, 'tests/helpers'), { recursive: true })
-  await cp(path.join(root, 'scripts'), path.join(dir, 'scripts'), { recursive: true })
-  await cp(path.join(root, 'config'), path.join(dir, 'config'), { recursive: true })
+  // 逐文件清单每加一条依赖就漏一次，红的是「沙箱缺文件」而不是「CLI 行为」（见 #366 / #501 / #487 / #555）。
+  await mirrorRepo(dir, ['tests/run-layer.mjs'])
   await writeFile(path.join(dir, 'tests/unit/pass.test.mjs'), `import test from 'node:test'; test('pass',()=>{});`)
   await writeFile(path.join(dir, 'tests/unit/fail.test.mjs'), 'process.exit(9)')
   const runner = path.join(dir, 'tests/run-layer.mjs'), report = path.join(dir, 'report.json')

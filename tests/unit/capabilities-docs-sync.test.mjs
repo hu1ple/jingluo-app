@@ -31,6 +31,14 @@ import { auditCssAssumptions, collectSources } from '../../scripts/lib/cssAssump
 import { auditHostCapabilities } from '../../scripts/lib/hostCapabilityAudit.mjs'
 import { auditBehaviorAssumptions, VERDICT as BEHAVIOR_VERDICT } from '../../scripts/lib/behaviorAssumptionAudit.mjs'
 
+/**
+ * 失败时的「怎么修」：这些数字**由生成器算、由人写盘**（#542 起的规矩），所以对不上时该改的是**文档**，
+ * 不是断言、也不是审计模块。生成器若报「先补/删行再重跑」，就按它点名的地方补/删 §二 的明细行再跑一次。
+ * 只加在「文档数字 vs 实时复算」这类断言上：好让每一条红都自带下一步，而不是让人去猜哪一侧是快照。
+ */
+const SNAPSHOT_HINT =
+  '—— 文档是快照：跑 `node scripts/gen-capabilities-docs.mjs` 重算并写盘（别手改数字）；它若报「先补/删行」，按它点名的位置补/删 §二 明细行再跑'
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const DOCS = path.join(ROOT, 'docs', 'capabilities')
 const SRC = path.join(ROOT, 'src')
@@ -177,7 +185,7 @@ test('api.md 的扫描范围与统计表与实时复算一致', () => {
   assert.deepEqual(
     numbers(scopeLine),
     [SRC_REL.length, byExt('.ts'), byExt('.tsx'), byExt('.css'), byExt('.html'), byExt('.md')],
-    'api.md 扫描范围的文件数与实时清点不一致',
+    'api.md 扫描范围的文件数与实时清点不一致' + SNAPSHOT_HINT,
   )
 
   assert.equal(API.filesScanned, SRC_REL.length, 'api 审计的扫描文件数变了，文档口径要跟着改')
@@ -215,8 +223,8 @@ test('api.md 的按 API 分项表覆盖全部命中的 API 且计数一致', () 
     }
     const count = known.reduce((sum, b) => sum + b.count, 0)
     const files = new Set(known.flatMap((b) => b.files))
-    assert.equal(numbers(row[2])[0], count, `api.md §三「${plain(row[0])}」的命中数与复算不一致`)
-    assert.equal(numbers(row[3])[0], files.size, `api.md §三「${plain(row[0])}」的涉及文件数与复算不一致`)
+    assert.equal(numbers(row[2])[0], count, `api.md §三「${plain(row[0])}」的命中数与复算不一致${SNAPSHOT_HINT}`)
+    assert.equal(numbers(row[3])[0], files.size, `api.md §三「${plain(row[0])}」的涉及文件数与复算不一致${SNAPSHOT_HINT}`)
     for (const b of known) documented.add(b.api)
   }
 
@@ -229,10 +237,10 @@ test('api.md 逐条命中表的行数与每个 文件:行 都对得上复算', (
 
   const heading = lines.find((l) => l.includes('逐条命中'))
   assert.ok(heading, 'api.md 缺「逐条命中」小节')
-  assert.equal(numbers(heading)[0], API.total, 'api.md 逐条命中标题里的处数与复算不一致')
+  assert.equal(numbers(heading)[0], API.total, 'api.md 逐条命中标题里的处数与复算不一致' + SNAPSHOT_HINT)
 
   const rows = table(lines, (l) => l.startsWith('|') && l.includes('假设内容') && l.includes('类别'), 'api.md §二 明细表')
-  assert.equal(rows.length, API.total, 'api.md §二 明细表的行数与命中总数不一致')
+  assert.equal(rows.length, API.total, 'api.md §二 明细表的行数与命中总数不一致' + SNAPSHOT_HINT)
 
   const live = new Set(API_RAW.hits.map((h) => `${h.file}:${h.line}`))
   for (const row of rows) {
@@ -276,7 +284,7 @@ test('css.md 的扫描范围、命中总数与逐特性统计与实时复算一�
   assert.deepEqual(
     numbers(scopeLine),
     [CSS.files, cssFiles.length, moduleFiles.length, CSS.files - cssFiles.length],
-    'css.md 扫描范围的文件数与实时清点不一致',
+    'css.md 扫描范围的文件数与实时清点不一致' + SNAPSHOT_HINT,
   )
   assert.equal(CSS.files, SRC_REL.filter((p) => /\.(css|ts|tsx|html)$/.test(p)).length, 'collectSources 的扫描范围变了')
 

@@ -46,9 +46,21 @@ test('慢，但终态是绿的', async () => {
   assert.equal(1, 1)
 })
 `
-/** 永远不结束：复核也超时 → 只能判红（不许当绿） */
+/**
+ * 永远不结束：复核也超时 → 只能判红（不许当绿）。
+ *
+ * 探针**必须真的挂住**。`() => new Promise(() => {})` 已经不算挂了：这种写法不留下任何活动句柄，
+ * node:test 会自己收尾（`cancelledByParent` + 「Promise resolution is still pending but the event
+ * loop has already resolved」），进程 130ms 就退出 —— 于是 run-layer 看到的是「用例红了」而不是
+ * 「超时了」，本拍也就测不到 TIMEOUT 分类（实测 #733 ② 因此红了）。
+ * 留一个永不结束的 `setInterval` 才是「进程不退出」的形状：主预算到点由 runner 停掉它，
+ * 复核预算同样到点 —— 于是 `<< TIMEOUT` 与 `Total 1: … TIMEOUT 1` 才有东西可判。
+ */
 const HANG_PROBE = `import { test } from 'node:test'
-test('永远不结束', () => new Promise(() => {}))
+test('永远不结束', () => {
+  setInterval(() => {}, 1000)
+  return new Promise(() => {})
+})
 `
 /** 负向对照：真断言失败，超时分类不许把它吞掉 */
 const RED_PROBE = `import { test } from 'node:test'

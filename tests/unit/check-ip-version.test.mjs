@@ -16,7 +16,8 @@ import '../helpers/injected.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { isVersionContext, scanText } from '../../scripts/lib/hardcodedIpAudit.mjs'
+import { ALLOWED_HOSTS, isVersionContext, scanText } from '../../scripts/lib/hardcodedIpAudit.mjs'
+import { consumeBaseUrl } from '../../scripts/lib/endpoints.mjs'
 
 const ips = (text) => scanText(text).map((hit) => `${hit.line}:${hit.ip}`)
 
@@ -43,7 +44,12 @@ test('check:ip 版本语境有主机/地址语义词时作废：注释里的真 
   assert.deepEqual(ips('// 生产环境 62.106.70.167'), ['1:62.106.70.167'])
   assert.deepEqual(ips('// 服务器版本 1.2.3.4'), ['1:1.2.3.4'])
   assert.deepEqual(ips('// host: 62.106.70.167'), ['1:62.106.70.167'])
-  assert.deepEqual(ips('// 62.106.70.167 -> 140.210.13.146 迁移'), ['1:62.106.70.167'])
+  // 「A → B 迁移」这种写法两个地址都要报。历史：这行原文的 B 是 `140.210.13.146`（旧邀请服务），
+  // 它当年在 `config/endpoints.json` 的 `allowedHosts` 里，于是靠「白名单主机写在注释里算说明文字」
+  // 这条豁免只报了前一个；#745 / #869 把网关收敛到 `apia.ecsafe.cn` 之后它不再是白名单主机。
+  // 这里刻意换成两段**都不在**白名单的地址：本行判的是「地址语义词一票否决版本语境豁免」，
+  // 与当前白名单内容无关，不该随着配置里有没有那个 IP 忽红忽绿。
+  assert.deepEqual(ips('// 62.106.70.167 -> 8.8.8.8 迁移'), ['1:62.106.70.167', '1:8.8.8.8'])
   // check-endpoints-allow：规则自测必须喂地址字面量，才能证明「写进去会红」
   assert.deepEqual(ips('// 旧机 8.8.8.8 已下线，webview 版本另说'), ['1:8.8.8.8'])
   // 代价（明知并接受）：「迁移 + 版本号」混写的行，版本号也会被一并报出来，用 check-ip-allow 拆开
@@ -63,22 +69,53 @@ test('check:ip 一行里列两个版本号不误报（版本区间 / 差分）',
 })
 
 test('check:ip 白名单主机：注释行放过、代码行照报（#274 收窄），保留段豁免不变', () => {
-  // 注释行里的线上地址是说明文字（不参与运行）—— 放过
-  assert.deepEqual(ips('// 对话上游在 140.210.13.146:60010'), []) // check-endpoints-allow：规则自测输入
-  assert.deepEqual(ips(' * 邀请服务 http://140.210.13.146:60013'), []) // check-endpoints-allow：规则自测输入
+  /**
+   * #274 的「白名单主机」豁免只对**注释行**生效；同一串地址写进代码行照样报，并在
+   * `reason` 上标成 `allowed-host-in-code`（CLI 据此给出「走 __ENDPOINTS__」的建议）。
+   *
+   * 这条机制现在**没有生效对象**：白名单唯一来源是 `config/endpoints.json` 的 `allowedHosts`，
+   * 而它从 #869 起是域名 `apia.ecsafe.cn`（不是 IP 字面量），扫描器只认四段点分十进制，
+   * 永远不会命中。以前这里拿 `140.210.13.146`（旧邀请服务）当样本，那台机器已从白名单删除，
+   * 于是同样的写法现在按「普通写死地址」判红 —— 断言红在了样本过期上，而不是机制坏了。
+   *
+   * 所以改成**按配置数据驱动**：白名单里有 IP 字面量就照机制两头钉（注释放过 / 代码照报）；
+   * 没有就显式记下「这条分支暂时没有生效对象」，而不是把断言删掉假装它被验过。
+   * 一旦有人把某个 IP 加回 `allowedHosts`（本地联调实例那类），这些断言立刻重新咬住。
+   */
+  const whitelistedIps = [...ALLOWED_HOSTS].filter((host) => /^\d{1,3}(\.\d{1,3}){3}$/.test(host))
 
-  // 代码行里再写一次 = 违规：地址只能来自 config/endpoints.json（#274 之前这里是整行放过，
-  // 于是「再写死一次」永远绿，门禁的保护方向是反的）。
-  // 下面几条字面量是「规则自测的输入」，不是可执行的地址副本，用 check-endpoints-allow 标出来。
-  const hostLiteral = "const host = '140.210.13.146'" // check-endpoints-allow：规则自测输入
-  const baseLiteral = "export const INVITE_API_BASE = 'http://140.210.13.146:60013'" // check-endpoints-allow：规则自测输入
-  assert.deepEqual(ips(hostLiteral), ['1:140.210.13.146'])
-  assert.deepEqual(ips(baseLiteral), ['1:140.210.13.146'])
-  assert.equal(
-    scanText(hostLiteral)[0].reason,
-    'allowed-host-in-code',
-    '命中原因标成「白名单主机写进了代码」，CLI 据此给出「走 __ENDPOINTS__」的建议',
-  )
+  // 白名单这条路必须还挂着：它非空，且装着**当前 consume 网关**的主机。
+  // 这一条与有没有 IP 无关，所以不管上面那个分支今天是否有效都能验 —— 白名单被清空 / 改名成
+  // 别的主机时，`check:ip` 会把所有线上地址一起判成「写死地址」，那是另一种事故。
+  const gatewayHost = new URL(consumeBaseUrl).hostname
+  assert.ok(ALLOWED_HOSTS.has(gatewayHost), `allowedHosts 必须含当前 consume 网关 ${gatewayHost}（实际：${[...ALLOWED_HOSTS].join(', ')}）`)
+  if (whitelistedIps.length === 0) {
+    // 显式记下「这条分支今天没有生效对象」，而不是把断言删掉假装它被验过。
+    assert.equal(
+      [...ALLOWED_HOSTS].filter((host) => /^\d{1,3}(\.\d{1,3}){3}$/.test(host)).length,
+      0,
+      '当前白名单里没有 IP 字面量 → 「注释放过」分支无生效对象（加回一个 IP 即重新咬住）',
+    )
+  }
+
+  for (const host of whitelistedIps) {
+    // 注释行里的白名单地址是说明文字（不参与运行）—— 放过
+    assert.deepEqual(ips(`// 对话上游在 ${host}:60010`), [], `${host} 在注释里应放过（白名单主机）`) // check-endpoints-allow：规则自测输入
+    // 代码行里再写一次 = 违规：地址只能来自 config/endpoints.json（#274 之前这里是整行放过，
+    // 于是「再写死一次」永远绿，门禁的保护方向是反的）。
+    const hostLiteral = `const host = '${host}'` // check-endpoints-allow：规则自测输入
+    assert.deepEqual(ips(hostLiteral), [`1:${host}`], `${host} 写进代码行必须报`)
+    assert.equal(
+      scanText(hostLiteral)[0].reason,
+      'allowed-host-in-code',
+      '命中原因标成「白名单主机写进了代码」，CLI 据此给出「走 __ENDPOINTS__」的建议',
+    )
+  }
+
+  // 非白名单地址写在注释里照报：注释里的死地址会把人带沟里（旧池 IP 就是这一类）
+  const retired = '140.210.13.146' // check-endpoints-allow：规则自测输入
+  assert.deepEqual(ips(`// 对话上游在 ${retired}:60010`), [`1:${retired}`], '已下线的主机写进注释也要报')
+  assert.equal(scanText(`const host = '${retired}'`)[0].reason, 'hardcoded', '非白名单地址的原因是 hardcoded')
 
   // 保留段 / 回环与之前一致
   assert.deepEqual(ips("const HOST = '127.0.0.1'"), [])

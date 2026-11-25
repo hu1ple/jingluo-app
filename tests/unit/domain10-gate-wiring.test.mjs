@@ -60,8 +60,9 @@ const REQUIRED_CI_GATES = [
   'check:webroot-hygiene',
   // #697：签名凭据门禁 —— 摘掉它，「签名换了一把 key」（换证书 = 已装用户无法覆盖升级）就再没有
   // 自动化检查能发现；它同时也是**唯一**会读 config/appIdentity.json 的 expectedCertSha256 去比对
-  // 真实证书指纹的地方。CI 上跑降级档 `--config-only`（只校验配置与 gradle 的一致性），
-  // 真签名比对在 release.yml 的发布机上跑全量。
+  // 真实证书指纹的地方。CI 上跑降级档 `--config-only`（只校验配置与 gradle 的一致性）。
+  // 真签名比对（拿 APK 里的证书算指纹）现在**没有自动化触发点** —— 原来在 release.yml 的发布机上跑，
+  // 该 workflow 已按决策删除；只能在发布机上人工执行 `pnpm run check:keystore`（见 KNOWN_UNWIRED 的 check:apk）。
   'check:keystore',
   // #661：截图引用门禁 —— `docs/ui` 曾只进不出（553 张里 155 张零引用 / 17.4 MiB）。
   // 摘掉它，「又提交了一批没人引用的截图」就回到没人守：check:doc-refs 不认 png/jpg
@@ -82,7 +83,11 @@ const REQUIRED_CI_GATES = [
  */
 const KNOWN_UNWIRED = {
   'check:identity': '语义由 L0 用例（tests/unit/app-identity.test.mjs 等 3 条）覆盖；脚本本体未接 CI',
-  'check:apk': 'release.yml 每次发布对每个产物实跑（需要 apk 路径参数，checks job 里没有产物）',
+  // ⚠ 这一条**不再有自动化触发点**（原先由 `release.yml` 每次发布对每个产物实跑，该文件已删除）。
+  // 它要 apk 路径参数，而 checks job 里没有产物，所以补不进 ci.yml；真跑只能在发布机上人工执行。
+  // 登记在这里是为了让「签名 / debuggable 门禁现在没人跑」这件事在 review 时看得见 ——
+  // 不是「已经安排好」的意思（同 #362：脚本能判红 ≠ 有人在跑）。
+  'check:apk': '需 apk 路径参数；checks job 无产物。原先由 release.yml 每发一次跑一遍，#871 删除该 workflow 后已无自动化触发点',
   'check:guard': 'ES5 守卫顺序扫描；存量与 check:legacy 重叠，待定是否合并后接线',
   'check:gap': 'CSS flex gap 兜底扫描；四个 fallback 门禁统一在「阶段③测试重建」后接线',
   'check:focus': 'CSS focus-visible 兜底扫描；同上',
@@ -182,8 +187,18 @@ const ROWS = [
         .filter((name) => !aliased.has(name) && !SCRIPT_WITHOUT_ALIAS.includes(name))
       assert.deepEqual(orphans, [], `这些门禁脚本既没有 npm 别名也没有登记，等于藏起来了：${orphans.join(', ')}`)
 
-      // ③ CI 里以 `node scripts/xxx.mjs` 直接入场的脚本同样必须存在（如 release.yml 的 apk 校验、ci.yml 的负向对照）
-      for (const file of ['.github/workflows/ci.yml', '.github/workflows/release.yml']) {
+      // ③ CI 里以 `node scripts/xxx.mjs` 直接入场的脚本同样必须存在（如 ci.yml 的负向对照里那些探针）
+      //
+      // 枚举**目录里现有的** workflow，不硬编码文件名：`release.yml` 已按决策整体删除
+      // （「仓库里不再有任何自动发布的路径」），写死两个名字会让这条断言红在 ENOENT 上。
+      // 判据要守的是「流水线里写到的脚本都得真存在」，与有几个 workflow、叫什么名字无关 ——
+      // 将来新增一个 workflow 时，它的 `node scripts/…` 也自动被这条判据覆盖。
+      const workflowDir = '.github/workflows'
+      const workflows = readdirSync(path.join(ROOT, workflowDir))
+        .filter((name) => /\.ya?ml$/.test(name))
+        .map((name) => `${workflowDir}/${name}`)
+      assert.ok(workflows.length > 0, `${workflowDir} 里至少得有一个 workflow（否则这条判据空转）`)
+      for (const file of workflows) {
         for (const m of read(file).matchAll(/node (scripts\/[A-Za-z0-9_.@/-]+\.mjs)/g)) {
           if (m[1].includes('*')) continue
           assert.ok(existsSync(path.join(ROOT, m[1])), `${file} 里执行的 ${m[1]} 不存在 —— 这条 CI 步骤会直接崩掉`)

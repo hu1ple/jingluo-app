@@ -294,9 +294,15 @@ console.log('\n[F] openCheckout 的 TypeError 风险：发版产物里不可达�
     rmSync(dir, { recursive: true, force: true })
   }
 
-  // 接线：DefinePlugin 的 consume.baseUrl 确实来自 loadConsumePay 的结果，而不是别处
+  // 接线：DefinePlugin 的 consume.baseUrl 确实来自 loadConsumePay 的结果，而不是别处。
+  // 钉的是**数据流**（读到配置 → 过 applyBaseOverrides 校验的才是生效值），不钉临时变量名：
+  // `ENDPOINTS_FILE` 随「按 ENDPOINTS_PROFILE 选配置文件」改名成 `endpointsFile`，钉名字会让门禁
+  // 为一次正确的重构变红。
   const rspack = readFileSync(path.join(ROOT, 'rspack.config.ts'), 'utf8')
-  truthy(/loadConsumePay\(ENDPOINTS_FILE\)/u.test(rspack), 'rspack.config.ts：用 loadConsumePay(ENDPOINTS_FILE) 读配置')
+  truthy(
+    /applyBaseOverrides\(\s*loadConsumePay\([^()]*\)\s*,/u.test(rspack),
+    'rspack.config.ts：生效值来自 applyBaseOverrides(loadConsumePay(…), …)（读到就校验）',
+  )
   truthy(
     /baseUrl:\s*effectiveConsumePay\.config\.consume\.baseUrl/u.test(rspack),
     'rspack.config.ts：__ENDPOINTS__.consume.baseUrl 取自校验后的 effectiveConsumePay',

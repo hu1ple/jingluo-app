@@ -172,12 +172,25 @@ test('门禁：实际仓库判绿；配置改回历史前缀 / 代码再现字�
   assert.equal(back[0].code, 'P1')
 
   // 生产者里塞一份老字面量 → P2
-  const ciText = fs.readFileSync(path.join(ROOT, '.github/workflows/release.yml'), 'utf8')
+  //
+  // 样本取自**现存**的 workflow：`.github/workflows/` 是 P2 的扫描目录之一（见 P2 的判据说明）。
+  // 以前读的是 `release.yml` —— 那个文件已按决策整体删除（「仓库里不再有任何自动发布的路径」），
+  // 于是这条断言红在 ENOENT 上而不是判据上。判据要守的是「扫描目录里的文件不许出现老前缀字面量」，
+  // 与具体是哪个 workflow 无关。这里刻意用 `build-apk.yml`（`ci.yml` 在 LEGACY_LITERAL_ALLOWED 里，
+  // 它自己就有一段负向对照要摆历史包名，不能当样本）。
+  const workflowRel = '.github/workflows/build-apk.yml'
+  const workflowText = fs.readFileSync(path.join(ROOT, workflowRel), 'utf8')
   const hit = scanProducerLiterals(
-    [{ rel: '.github/workflows/release.yml', text: `${ciText}\n          apk="${LEGACY}-\${version}.apk"\n` }],
+    [{ rel: workflowRel, text: `${workflowText}\n          apk="${LEGACY}-\${version}.apk"\n` }],
     PREFIX,
   )
-  assert.ok(hit.some((v) => v.code === 'P2'), 'CI 里写死老前缀 → P2 红')
+  assert.ok(hit.some((v) => v.code === 'P2'), 'workflow 里写死老前缀 → P2 红')
+  // 而且这段注入必须是**这批样本自己**引出来的：正本（未被注入的真文件）里没有这条违规
+  assert.deepEqual(
+    scanProducerLiterals([{ rel: workflowRel, text: workflowText }], PREFIX),
+    [],
+    '正本 workflow 应当零违规（否则上面的「P2 红」可能是本来就红，测不出判据）',
+  )
 
   // 生产者里塞一份「当前前缀常量」→ P2（这次改完，下次改名仍会漏）
   const hit2 = scanProducerLiterals(

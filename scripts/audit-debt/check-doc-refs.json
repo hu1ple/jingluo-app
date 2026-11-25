@@ -1,0 +1,108 @@
+{
+  "gate": "check-doc-refs",
+  "note": "文档引用门禁的账本（#290）。只登记「行号漂移」这一类（引用指到空行 / 越界）：文件还在、结论还有价值，只是定位失效。**死引用（指向的文件不存在 / 同名多份）永远不记账** —— 它让读者白跑一趟。账目 id = 文档::引用原文；到期、新增漂移、或死引用都会让 check:doc-refs 红。",
+  "entries": {
+    "docs/baseurl-config-research.md::client.ts:94": {
+      "count": 1,
+      "why": "行号漂到空行上：文档里那条「文件:行号」曾经是对的，被引用文件改动后整体平移。结论还有价值、只是定位失效 —— 属于「改对了也不该红」的那一类，故按账期容忍，到期即红。修法：按引用处的符号名 grep 出真实行号改对。",
+      "issue": "#290",
+      "expires": "2027-01-24"
+    },
+    "docs/baseurl-config-research.md::src/services/api/client.ts:94": {
+      "count": 1,
+      "why": "行号漂到空行上：文档里那条「文件:行号」曾经是对的，被引用文件改动后整体平移。结论还有价值、只是定位失效 —— 属于「改对了也不该红」的那一类，故按账期容忍，到期即红。修法：按引用处的符号名 grep 出真实行号改对。",
+      "issue": "#290",
+      "expires": "2027-01-24"
+    },
+    "docs/capabilities/api.md::src/services/chat/store.ts:1187": {
+      "count": 1,
+      "why": "行号漂到空行上：文档里那条「文件:行号」曾经是对的，被引用文件改动后整体平移。结论还有价值、只是定位失效 —— 属于「改对了也不该红」的那一类，故按账期容忍，到期即红。修法：按引用处的符号名 grep 出真实行号改对。",
+      "issue": "#290",
+      "expires": "2027-01-24"
+    },
+    "docs/capabilities/css.md::components/settings/Settings.module.css:945": {
+      "count": 1,
+      "why": "行号漂到空行上：文档里那条「文件:行号」曾经是对的，被引用文件改动后整体平移。结论还有价值、只是定位失效 —— 属于「改对了也不该红」的那一类，故按账期容忍，到期即红。修法：按引用处的符号名 grep 出真实行号改对。",
+      "issue": "#290",
+      "expires": "2027-01-24"
+    },
+    "docs/capabilities/host.md::src/components/attachments/useAttachmentDrafts.ts:210": {
+      "count": 1,
+      "why": "行号漂到空行上：文档里那条「文件:行号」曾经是对的，被引用文件改动后整体平移。结论还有价值、只是定位失效 —— 属于「改对了也不该红」的那一类，故按账期容忍，到期即红。修法：按引用处的符号名 grep 出真实行号改对。",
+      "issue": "#290",
+      "expires": "2027-01-24"
+    },
+    "docs/capabilities/host.md::src/services/attachments/parsers/docx.ts:1118": {
+      "count": 1,
+      "why": "行号漂到空行上：文档里那条「文件:行号」曾经是对的，被引用文件改动后整体平移。结论还有价值、只是定位失效 —— 属于「改对了也不该红」的那一类，故按账期容忍，到期即红。修法：按引用处的符号名 grep 出真实行号改对。",
+      "issue": "#290",
+      "expires": "2027-01-24"
+    },
+    "docs/capabilities/host.md::src/services/attachments/sha256.ts:144": {
+      "count": 1,
+      "why": "行号越界（文件比引用短）：同样是被引用文件删改后留下的旧编号。修法：把行号收进文件内，或改成「函数名/常量名」定位。",
+      "issue": "#290",
+      "expires": "2027-01-24"
+    },
+    "docs/capabilities/host.md::src/services/auth/store.ts:127": {
+      "count": 1,
+      "why": "行号漂到空行上：文档里那条「文件:行号」曾经是对的，被引用文件改动后整体平移。结论还有价值、只是定位失效 —— 属于「改对了也不该红」的那一类，故按账期容忍，到期即红。修法：按引用处的符号名 grep 出真实行号改对。",
+      "issue": "#290",
+      "expires": "2027-01-24"
+    },
+    "docs/capabilities/host.md::src/services/diagnostics/collector.ts:1509": {
+      "count": 2,
+      "why": "行号漂到空行上：文档里那条「文件:行号」曾经是对的，被引用文件改动后整体平移。结论还有价值、只是定位失效 —— 属于「改对了也不该红」的那一类，故按账期容忍，到期即红。修法：按引用处的符号名 grep 出真实行号改对。",
+      "issue": "#290",
+      "expires": "2027-01-24"
+    },
+    "docs/capability-matrix.md::providers.ts:187": {
+      "count": 3,
+      "why": "行号漂到空行上：文档里那条「文件:行号」曾经是对的，被引用文件改动后整体平移。结论还有价值、只是定位失效 —— 属于「改对了也不该红」的那一类，故按账期容忍，到期即红。修法：按引用处的符号名 grep 出真实行号改对。",
+      "issue": "#290",
+      "expires": "2027-01-24"
+    },
+    "docs/capability-matrix.md::src/services/chat/store.ts:2090": {
+      "count": 1,
+      "why": "行号漂到空行上：文档里那条「文件:行号」曾经是对的，被引用文件改动后整体平移。结论还有价值、只是定位失效 —— 属于「改对了也不该红」的那一类，故按账期容忍，到期即红。修法：按引用处的符号名 grep 出真实行号改对。",
+      "issue": "#290",
+      "expires": "2027-01-24"
+    },
+    "docs/consume-676-contract-audit.md::src/components/auth/RegisterPage.tsx:97": {
+      "count": 1,
+      "why": "行号漂到空行上：文档里那条「文件:行号」曾经是对的，被引用文件改动后整体平移。结论还有价值、只是定位失效 —— 属于「改对了也不该红」的那一类，故按账期容忍，到期即红。修法：按引用处的符号名 grep 出真实行号改对。",
+      "issue": "#290",
+      "expires": "2027-01-24"
+    },
+    "docs/consume-676-contract-audit.md::src/components/consume/invitePanelModel.ts:83": {
+      "count": 1,
+      "why": "行号漂到空行上：文档里那条「文件:行号」曾经是对的，被引用文件改动后整体平移。结论还有价值、只是定位失效 —— 属于「改对了也不该红」的那一类，故按账期容忍，到期即红。修法：按引用处的符号名 grep 出真实行号改对。",
+      "issue": "#290",
+      "expires": "2027-01-24"
+    },
+    "docs/consume-676-contract-audit.md::src/services/ours/api.ts:490": {
+      "count": 1,
+      "why": "行号越界（文件比引用短）：同样是被引用文件删改后留下的旧编号。修法：把行号收进文件内，或改成「函数名/常量名」定位。",
+      "issue": "#290",
+      "expires": "2027-01-24"
+    },
+    "docs/public-artifact-http-audit.md::src/services/api/apiConfig.ts:175": {
+      "count": 1,
+      "why": "行号漂到空行上：文档里那条「文件:行号」曾经是对的，被引用文件改动后整体平移。结论还有价值、只是定位失效 —— 属于「改对了也不该红」的那一类，故按账期容忍，到期即红。修法：按引用处的符号名 grep 出真实行号改对。",
+      "issue": "#290",
+      "expires": "2027-01-24"
+    },
+    "docs/release/staging-release-runbook.md::scripts/build.mjs:98": {
+      "count": 1,
+      "why": "行号漂到空行上：文档里那条「文件:行号」曾经是对的，被引用文件改动后整体平移。结论还有价值、只是定位失效 —— 属于「改对了也不该红」的那一类，故按账期容忍，到期即红。修法：按引用处的符号名 grep 出真实行号改对。",
+      "issue": "#290",
+      "expires": "2027-01-24"
+    },
+    "docs/release/staging-release-runbook.md::src/services/consume/http.ts:179": {
+      "count": 1,
+      "why": "行号漂到空行上：文档里那条「文件:行号」曾经是对的，被引用文件改动后整体平移。结论还有价值、只是定位失效 —— 属于「改对了也不该红」的那一类，故按账期容忍，到期即红。修法：按引用处的符号名 grep 出真实行号改对。",
+      "issue": "#290",
+      "expires": "2027-01-24"
+    }
+  }
+}

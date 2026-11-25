@@ -5,6 +5,7 @@
  *   node scripts/check-doc-refs.mjs           # 或 pnpm check:doc-refs
  *   node scripts/check-doc-refs.mjs --json
  *   node scripts/check-doc-refs.mjs --audit-skipped   # 把「被跳过的引用」按原因分组摊开（#678）
+ *   node scripts/check-doc-refs.mjs --selftest        # 自带负向对照（6 拍，临时仓库，不碰本仓）
  *
  * 回答一个问题：**文档里那些 `文件:行号`，还指得着吗？**
  *
@@ -19,10 +20,25 @@
  * 1 **带行号的引用**（`文件:行`）要过四关：
  *    - 文件要存在：有 `/` 的按仓库根相对路径解析；裸名先按**文档所在目录**解析，再按全仓
  *      basename 唯一匹配，同名多于一个就 FAIL（补成仓库相对路径）；
- *    - 起行要在文件行数内 —— 越界 = FAIL；
- *    - 起行不许是空行 —— 空行 = FAIL（这正是本单的根因）；
+ *    - 起行要在文件行数内 —— 越界 = **漂移**（见下面分级）；
+ *    - 起行不许是空行 —— 空行 = **漂移**（这正是本单的根因）；
  *    - 起行不许是孤立的 `}`、注释结束符、`);` 这类结构行 —— WARN。**止行不受这条约束**：
  *      区间本来就常常收在函数体最后一个 `}` 上，那不是漂移。
+ *
+ * ### 分级：什么拦、什么只提示（2026-11 起）
+ *
+ * 判据是**读者会付出多少**，不是实现成本：
+ *
+ * | 情形 | 档位 | 依据 |
+ * | --- | --- | --- |
+ * | 文件不存在 / 同名多份（**死引用**） | **红，永远拦** | 读者按它去找，找不到（或不知道该看哪份）＝这条结论等于没写。修法一分钟 |
+ * | 行号漂到空行 / 越界（**漂移**），且没记账 | **红** | 新的漂移当场暴露 |
+ * | 漂移，记了账且未到期 | 提示 | 文件还在、结论还有价值，只是定位失效，见 `scripts/audit-debt/check-doc-refs.json` |
+ * | 漂移，记了账但已到期 | **红** | 豁免会过期 |
+ *
+ * 为什么漂移不判死红：它是「钉死行号」最典型的现场 —— main 上曾长期挂着 18 处空行 + 2 处越界，
+ * 门禁常年红、真正的死引用反而被淹没，维护者于是学会「改文档凑数」而不是「修结论」。
+ * 现在把 20 处收进账本（每笔带到期日），新漂的一律红、到期的一律红。
  * 2 **只给路径的引用**（`src/services/chat/store.ts`）：存在即合格，只检查「带 `/` 且首段
  *    是仓库根下真实目录」的那种；裸文件名（`releases.json`、`metrics.json` 这类远端清单 /
  *    采集产物）不判定 —— 它们不是仓库里的文件，硬判只会逼人写假路径。
@@ -65,19 +81,27 @@
  * 里面的 `文件:行号` 记的是当次取证那一刻的仓库状态，事后「修」它等于篡改证据。
  * 这些引用只计数、不判定、不影响退出码。
  *
- * 退出码：0 合格 / 1 有 FAIL / 2 环境不具备（找不到 docs 目录）。
+ * 退出码：0 合格（可能有「账期内的漂移」提示）/ 1 有死引用，或有未记账·已到期的漂移，或账本形状不合规 /
+ * 2 环境不具备（找不到 docs 目录）。
  *
  * 维护提示：这个门禁验的是「引用还指得着」，**不验**「文档描述的行为是否还对」。后者只能读代码
  * 复核；别把这里变绿当成文档正确。
  */
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { loadDebt, renderSelftest, settleDebt, todayStr } from './lib/auditDebt.mjs'
+
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 
-/** 仓库根目录 */
-export const ROOT = path.resolve(HERE, '..')
+/**
+ * 仓库根目录。`CHECK_DOC_REFS_ROOT` 只给 `--selftest` 用（它起一个临时仓库当输入），
+ * 是测试注入口、不是运行开关：正常调用不设这个变量。
+ */
+export const ROOT = path.resolve(process.env.CHECK_DOC_REFS_ROOT ?? path.resolve(HERE, '..'))
 
 /** 扫这些路径（目录递归 .md，文件按原样） */
 export const SCAN_TARGETS = ['docs', 'CHANGELOG.md']
@@ -524,7 +548,136 @@ const auditOtherExt = (text, index, docRel, out) => {
   })
 }
 
+/**
+ * 分级：什么拦、什么只提示。判据是**改错之后有多难挽回**，不是实现成本。
+ *
+ * - `missing-file` / `ambiguous` → **死引用**，永远拦：读者按它去找，找不到（或不知道该看哪一份），
+ *   这条结论就等于没写。修法只有两种（改路径 / 删或划线），一分钟的事。
+ * - `out-of-range` / `blank-line` → **行号漂移**，可按账期容忍：读者仍能找到这个文件，只是多翻两下。
+ *   这一档是这一族「钉死行号 → 正确改动也红」的现场：main 上曾存在 18 处空行 + 2 处越界，
+ *   长期把门禁挂在红上，真问题（死引用）反而被淹掉。现在改记账制：每笔带到期日，
+ *   新的漂移立刻红，到期的也红。
+ */
+const DEAD_KINDS = new Set(['missing-file', 'ambiguous'])
+const DRIFT_KINDS = new Set(['blank-line', 'out-of-range'])
+
+/** 一句话事故：这条不修，读者会遇到什么 */
+const ACCIDENT = {
+  'missing-file': '读者按这条引用去翻文件，翻不到 —— 要么这条结论早就不存在（该删），要么路径写错了（该改）。两种情况都让人白跑一趟，而且他不会知道是哪一种。',
+  ambiguous: '同名文件不止一个，读者不知道该看哪一份 —— 引用等于没写。',
+  'blank-line': '引用指到空行：读者跳过去只看到空白，这条引用就失去了定位能力，只能整篇翻。',
+  'out-of-range': '行号越界：文件比引用短，读者翻到底也找不到 —— 要么结论漂走了，要么文件被删改过。',
+}
+
+/** 一条能直接敲的修复入口（不是「请修正」这种空话） */
+const fixOf = (item) => {
+  const target = item.target ?? item.file ?? '<路径>'
+  if (item.kind === 'missing-file')
+    return `git log --diff-filter=D --oneline -- ${target}   # 看它何时被删；换路径或把引用改成 ~~${target}~~（删除线=曾存在）`
+  if (item.kind === 'ambiguous')
+    return `rg --files | grep -E '/${target.split('/').pop()}$'   # 看是哪几份同名，引用补成仓库相对路径`
+  if (item.kind === 'out-of-range')
+    return `wc -l ${target}   # 把行号收进文件内，或改成「函数名/常量名」定位`
+  return `grep -n "<你引用的那个符号>" ${target}   # 拿到真实行号改对；符号改名了就改引用`
+}
+
+/** 账目 id：`文档::引用原文`。**不含行号**（文档里的行号本身就是被引用的字符串，已经够了） */
+const debtKeyOf = (item) => `${item.doc}::${item.raw}`
+
+/**
+ * `--selftest`：**故意做错必须被拦**。六拍，全在一个临时仓库里跑（`CHECK_DOC_REFS_ROOT`），
+ * 不碰真仓库的任何文件：
+ *   ① 干净 → exit 0
+ *   ② 写一个不存在的路径（死引用）→ **必 exit 1**，且印「事故 + 修法」
+ *   ③ 行号落到空行（漂移、没记账）→ **必 exit 1**
+ *   ④ 同一处漂移记进账（未到期）→ **必 exit 0**（容忍在账期内的漂移）
+ *   ⑤ 同一本账改成已过期 → **必 exit 1**
+ *   ⑥ 账本条目没有到期日 → **必 exit 1**（永久豁免不存在）
+ */
+const selftest = () => {
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'check-doc-refs-selftest-'))
+  const cases = []
+  const gate = (root) => {
+    const result = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
+      encoding: 'utf8',
+      env: { ...process.env, CHECK_DOC_REFS_ROOT: root },
+    })
+    return { status: result.status, out: `${result.stdout ?? ''}${result.stderr ?? ''}` }
+  }
+  try {
+    mkdirSync(path.join(tmp, 'docs'), { recursive: true })
+    mkdirSync(path.join(tmp, 'src'), { recursive: true })
+    writeFileSync(path.join(tmp, 'src', 'thing.ts'), 'export const a = 1\n\nexport const b = 2\n', 'utf8')
+    writeFileSync(path.join(tmp, 'docs', 'README.md'), '# 干净\n\n看 `src/thing.ts:1`。\n', 'utf8')
+    const doc = path.join(tmp, 'docs', 'probe.md')
+
+    cases.push({ name: '① 干净文档 → exit 0', ok: gate(tmp).status === 0 })
+
+    writeFileSync(doc, '不存在的路径：`src/services/gone.ts:12`\n', 'utf8')
+    const dead = gate(tmp)
+    cases.push({
+      name: '② 死引用 → exit 1',
+      ok: dead.status === 1 && dead.out.includes('死引用'),
+      detail: `exit ${dead.status}`,
+    })
+    cases.push({
+      name: '② 报错自带「事故 + 修法」',
+      ok: dead.out.includes('事故：') && dead.out.includes('修法：git log --diff-filter=D'),
+    })
+
+    writeFileSync(doc, '行号落在空行：`src/thing.ts:2`\n', 'utf8')
+    const drift = gate(tmp)
+    cases.push({
+      name: '③ 行号漂到空行且没记账 → exit 1',
+      ok: drift.status === 1 && drift.out.includes('起行 2 是空行'),
+      detail: `exit ${drift.status}`,
+    })
+
+    const debtDir = path.join(tmp, 'scripts', 'audit-debt')
+    mkdirSync(debtDir, { recursive: true })
+    const ledger = path.join(debtDir, 'check-doc-refs.json')
+    const key = 'docs/probe.md::src/thing.ts:2'
+    const soon = todayStr(new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10))
+    writeFileSync(
+      ledger,
+      JSON.stringify({ gate: 'check-doc-refs', entries: { [key]: { count: 1, why: 'selftest', issue: '#0', expires: soon } } }),
+      'utf8',
+    )
+    const booked = gate(tmp)
+    cases.push({ name: '④ 记账未到期 → exit 0', ok: booked.status === 0, detail: `exit ${booked.status}` })
+
+    writeFileSync(
+      ledger,
+      JSON.stringify({
+        gate: 'check-doc-refs',
+        entries: { [key]: { count: 1, why: 'selftest', issue: '#0', expires: todayStr('2020-01-01') } },
+      }),
+      'utf8',
+    )
+    const expired = gate(tmp)
+    cases.push({
+      name: '⑤ 账到期 → exit 1 且报「已到期」',
+      ok: expired.status === 1 && expired.out.includes('已到期'),
+      detail: `exit ${expired.status}`,
+    })
+
+    writeFileSync(ledger, JSON.stringify({ gate: 'check-doc-refs', entries: { [key]: { why: '无期限' } } }), 'utf8')
+    const shapeless = gate(tmp)
+    cases.push({
+      name: '⑥ 账本没有到期日 → exit 1',
+      ok: shapeless.status === 1 && shapeless.out.includes('expires'),
+      detail: `exit ${shapeless.status}`,
+    })
+  } catch (error) {
+    cases.push({ name: 'selftest 自身抛错', ok: false, detail: error.message })
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+  return renderSelftest('check:doc-refs', cases)
+}
+
 const main = () => {
+  if (process.argv.includes('--selftest')) process.exit(selftest() ? 0 : 1)
   const json = process.argv.includes('--json')
   const audit = process.argv.includes('--audit-skipped')
   const docsDir = path.join(ROOT, 'docs')
@@ -585,6 +738,31 @@ const main = () => {
   const fails = findings.filter((f) => f.verdict === 'fail')
   const warns = findings.filter((f) => f.verdict === 'warn')
 
+  // 分级：死引用永远拦；行号漂移走账本（有到期日）。
+  const deadRefs = fails.filter((f) => DEAD_KINDS.has(f.kind))
+  const drift = fails.filter((f) => DRIFT_KINDS.has(f.kind))
+  const actualDrift = new Map()
+  for (const item of drift) {
+    const key = debtKeyOf(item)
+    const entry = actualDrift.get(key) ?? { count: 0, sample: `${item.doc}:${item.docLine}  ${item.raw}` }
+    entry.count += 1
+    actualDrift.set(key, entry)
+  }
+  const debt = loadDebt({ root: ROOT, gate: 'check-doc-refs' })
+  const settled = settleDebt({ actual: actualDrift, debt })
+  const driftByKey = new Map()
+  for (const item of drift) {
+    if (!driftByKey.has(debtKeyOf(item))) driftByKey.set(debtKeyOf(item), item)
+  }
+  // 逐条展开（同一处引用可能在文档里出现多次），别在显示层去重 —— 去重会让条数比实际少
+  const redReason = new Map()
+  for (const item of settled.unregistered) redReason.set(item.key, item.why)
+  for (const item of settled.expired) redReason.set(item.key, `已到期 ${item.entry.expires}（逾期 ${item.overdueDays} 天）`)
+  const redDrift = drift
+    .filter((item) => redReason.has(debtKeyOf(item)))
+    .map((item) => ({ ...item, why: redReason.get(debtKeyOf(item)) }))
+  const hardRed = deadRefs.length + redDrift.length
+
   if (json) {
     console.log(
       JSON.stringify(
@@ -596,12 +774,20 @@ const main = () => {
           deletedMarkers: deleted.length,
           fails,
           warns,
+          debt: {
+            file: debt.shown,
+            entries: debt.entries.size,
+            settled: settled.settled.length,
+            redDrift: redDrift.map(({ key, why }) => ({ key, why })),
+            shrink: settled.shrink.map(({ key, registered, found }) => ({ key, registered, actual: found.count })),
+            problems: debt.problems,
+          },
         },
         null,
         2,
       ),
     )
-    process.exit(fails.length > 0 ? 1 : 0)
+    process.exit(hardRed > 0 || debt.problems.length > 0 ? 1 : 0)
   }
 
   console.log('文档引用门禁（GitHub issue #290）')
@@ -665,27 +851,66 @@ const main = () => {
     console.log('')
   }
 
-  const printGroup = (title, list) => {
+  /**
+   * `full`：只有「要有人动手」的两档（死引用 / 未记账·到期的漂移）才逐条印「事故 + 修法」；
+   * 已经是提示档的（WARN、账期内）只印两行 —— 否则真正要修的那几条会被自己的噪音埋掉。
+   */
+  const printGroup = (title, list, { full = false } = {}) => {
     if (list.length === 0) return
     console.log(`${title} ${list.length}`)
     for (const f of list) {
       console.log(`  ${f.doc}:${f.docLine}  ${f.raw}`)
       console.log(`      ${f.message}`)
+      if (!full) continue
+      if (ACCIDENT[f.kind]) console.log(`      事故：${ACCIDENT[f.kind]}`)
+      console.log(`      修法：${fixOf(f)}`)
+      const entry = debt.entries.get(debtKeyOf(f))
+      if (entry) console.log(`      账上：${entry.issue} 到期 ${entry.expires}（剩 ${entry.left} 天）—— ${entry.why}`)
     }
     console.log('')
   }
-  printGroup('FAIL', fails)
+
+  printGroup('❌ 死引用（指向的文件不存在 / 同名多份，永远拦）', deadRefs, { full: true })
+  printGroup('❌ 行号漂移 · 未记账 / 已到期（新漂的一律红；到期即红）', redDrift, { full: true })
+  printGroup(
+    '⚠ 行号漂移 · 已记账在账期内（不拦，但每跑一次都会提醒）',
+    drift.filter((item) => settled.settled.some((entry) => entry.key === debtKeyOf(item))),
+  )
   printGroup('WARN', warns)
 
-  if (fails.length === 0 && warns.length === 0) {
-    console.log('合格：所有引用都指得着（文件存在、行号在文件内、不落在空行）。')
+  if (settled.shrink.length) {
+    console.log(`ℹ 账面比实际多 ${settled.shrink.length} 笔（引用已改对，但账没销 —— 提示，不判红）：`)
+    for (const item of settled.shrink) {
+      console.log(`  ${item.key}  登记 ${item.registered}，实际 ${item.count}  → 从 scripts/audit-debt/check-doc-refs.json 删掉这一条`)
+    }
+    console.log('')
+  }
+
+  if (debt.problems.length) {
+    console.log('❌ 账本形状不合规（形状不合规的账本就是白名单）：')
+    for (const problem of debt.problems) console.log(`  ${problem}`)
+    console.log('')
+  }
+
+  if (debt.exists && debt.entries.size) {
+    const nearest = [...debt.entries.entries()]
+      .filter(([key]) => actualDrift.has(key))
+      .sort((a, b) => a[1].left - b[1].left)[0]
+    console.log(
+      `账本 ${debt.shown}：${debt.entries.size} 笔 / 共 ${[...debt.entries.values()].reduce((sum, e) => sum + e.count, 0)} 处` +
+        (nearest ? `；最近到期 ${nearest[0]} → ${nearest[1].expires}（剩 ${nearest[1].left} 天，到期即红）` : ''),
+    )
+  }
+
+  if (hardRed === 0 && debt.problems.length === 0) {
+    console.log(
+      warns.length === 0
+        ? '合格：所有引用都指得着（文件存在、行号在文件内、不落在空行）。'
+        : '合格（有 WARN）：没有硬错误；WARN 项建议改用函数名/常量名定位。',
+    )
     process.exit(0)
   }
-  if (fails.length === 0) {
-    console.log('合格（有 WARN）：没有硬错误；WARN 项建议改用函数名/常量名定位。')
-    process.exit(0)
-  }
-  console.log('不合格：先修 FAIL 项。别用「换成章节标题」绕过 —— 那样可核对性就没了。')
+  console.log('不合格：先修 ❌ 项。别用「换成章节标题」绕过 —— 那样可核对性就没了。')
   process.exit(1)
 }
 

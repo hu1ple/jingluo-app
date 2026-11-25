@@ -95,6 +95,7 @@
     "check:webroot-hygiene": "node scripts/check-webroot-hygiene.mjs",
     "check:private-publish-root": "node scripts/check-private-publish-root.mjs",
     "check:public-artifact-redaction": "node scripts/check-public-artifact-redaction.mjs",
+    "check:audit-selftest": "node scripts/check-capabilities.mjs --selftest && node scripts/check-doc-refs.mjs --selftest && node scripts/check-ui-shots.mjs --selftest && node scripts/check-limits.mjs --selftest && node scripts/check-repo-hygiene.mjs --selftest && node scripts/check-duplicate-impl.mjs --selftest",
     "measure:scroll-shift": "node scripts/measure-narrow-scroll-shift.mjs"
   },
   "dependencies": {

@@ -1,0 +1,966 @@
+{
+  "gate": "check-ui-shots",
+  "note": "截图门禁的账本（#661/#761）。这里登记的**只有历史孤儿**：它们是这门禁上线之前的采集全集，删不删要按 #661 的流程「先归档到仓库外再 git rm」，不是门禁该替人决定的事。规矩：① 条目逐张登记，不做「整目录放行」；② 每笔 2027-02-15 到期，到期即红；③ 新增孤儿不在账上就红；④ 这张图后来被文档引用了、或被删了，条目要主动销掉（不销只提示、不判红）。",
+  "entries": {
+    "docs/ui/727-source-rows/360/builtin-signed-out.png": {
+      "count": 1,
+      "why": "727 来源行的 360/390 各三张：shot-727-source-rows.mjs 的产物，脚本本身还在但文档没引用这批图。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/727-source-rows/360/list.png": {
+      "count": 1,
+      "why": "727 来源行的 360/390 各三张：shot-727-source-rows.mjs 的产物，脚本本身还在但文档没引用这批图。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/727-source-rows/360/third.png": {
+      "count": 1,
+      "why": "727 来源行的 360/390 各三张：shot-727-source-rows.mjs 的产物，脚本本身还在但文档没引用这批图。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/727-source-rows/390/builtin-signed-out.png": {
+      "count": 1,
+      "why": "727 来源行的 360/390 各三张：shot-727-source-rows.mjs 的产物，脚本本身还在但文档没引用这批图。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/727-source-rows/390/list.png": {
+      "count": 1,
+      "why": "727 来源行的 360/390 各三张：shot-727-source-rows.mjs 的产物，脚本本身还在但文档没引用这批图。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/727-source-rows/390/third.png": {
+      "count": 1,
+      "why": "727 来源行的 360/390 各三张：shot-727-source-rows.mjs 的产物，脚本本身还在但文档没引用这批图。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/819-invite-flash/830-02-flash-gone-360.png": {
+      "count": 1,
+      "why": "819 邀请可见性那轮的对照图（开/关、负对照），结论已写进 README 正文但没点文件名。补一张表就销账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/819-invite-flash/830-03-account-fixed-360.png": {
+      "count": 1,
+      "why": "819 邀请可见性那轮的对照图（开/关、负对照），结论已写进 README 正文但没点文件名。补一张表就销账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/819-invite-flash/830-04-switch-on-panel-360.png": {
+      "count": 1,
+      "why": "819 邀请可见性那轮的对照图（开/关、负对照），结论已写进 README 正文但没点文件名。补一张表就销账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/819-invite-visible/819v2-register-off-360.png": {
+      "count": 1,
+      "why": "819 邀请可见性那轮的对照图（开/关、负对照），结论已写进 README 正文但没点文件名。补一张表就销账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/819-invite-visible/819v2-register-on-360.png": {
+      "count": 1,
+      "why": "819 邀请可见性那轮的对照图（开/关、负对照），结论已写进 README 正文但没点文件名。补一张表就销账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/819-invite-visible/after-invite-panel-360.png": {
+      "count": 1,
+      "why": "819 邀请可见性那轮的对照图（开/关、负对照），结论已写进 README 正文但没点文件名。补一张表就销账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/819-invite-visible/negctl-invite-panel-360.png": {
+      "count": 1,
+      "why": "819 邀请可见性那轮的对照图（开/关、负对照），结论已写进 README 正文但没点文件名。补一张表就销账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/819-invite-visible/negctl-invite-panel-390-full.png": {
+      "count": 1,
+      "why": "819 邀请可见性那轮的对照图（开/关、负对照），结论已写进 README 正文但没点文件名。补一张表就销账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/819-invite-visible/negctl-invite-panel-390.png": {
+      "count": 1,
+      "why": "819 邀请可见性那轮的对照图（开/关、负对照），结论已写进 README 正文但没点文件名。补一张表就销账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/live/live-360.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/live/live-390.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/360/00-signedout-360.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/360/01-unbound-360.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/360/02-format-error-360.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/360/03-submitting-360.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/360/04-bound-360.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/360/05-already-bound-360.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/360/05-disabled-360.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/360/05-full-360.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/360/05-invalid-360.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/360/05-netdrop-360.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/360/05-noreason400-360.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/360/05-ratelimit-360.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/360/05-server500-360.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/360/06-bound-after-reload-360.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/360/07-keyboard-sim-360.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/360/07-layout-360.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/390/00-signedout-390.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/390/01-unbound-390.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/390/02-format-error-390.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/390/03-submitting-390.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/390/04-bound-390.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/390/05-already-bound-390.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/390/05-disabled-390.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/390/05-full-390.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/390/05-invalid-390.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/390/05-netdrop-390.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/390/05-noreason400-390.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/390/05-ratelimit-390.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/390/05-server500-390.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/390/06-bound-after-reload-390.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/390/07-keyboard-sim-390.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/842-invite-bind/ready/390/07-layout-390.png": {
+      "count": 1,
+      "why": "842 邀请绑定那一轮的采集全集：README 只列了结论用的几张，其余是同时拍的过程图（/live、/ready 各档位）。归档或补引用都要按 #661 的流程走，故整批挂账。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/account-390-cards.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/account-390-entry.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/account-390-source.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/account-390-wallet.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/announce-390-allread.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/announce-390-list.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/announce-390-live-8096.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/announce-390-markread-btn.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/announce-390-offline.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/announce-390-per-item-read.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/announce-390-popup.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/announce-390-remote.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/announce-gate-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/announce-gate-ready-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/announce-gate-resume-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/auth-429-countdown.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/auth-doubleclick-single-request.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/copy-attachment-too-large-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/copy-content-filtered-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/copy-model-retired-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/copy-net-down-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/copy-quota-exhausted-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/copy-rate-limit-429-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/dl-390-ann.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/dl-390-full.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/e2e-refusal-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/jump-fixed-360-long-scroll-alive.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/jump-fixed-long-scroll-alive.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/jump-fixed-s1-after-submit.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/jump-fixed-s4-before-send.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/jump-fixed-s4-focus-kept.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/no-auto-settings-blocked-send-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/no-auto-settings-click-opened-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/no-auto-settings-control-key-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/no-auto-settings-paste-file-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/no-auto-settings-typing-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/persona-limit-320.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/persona-limit-360.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/persona-limit-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/persona-limit-full-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/persona-limit-legacy-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/refusal-390-badrequest.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/refusal-390-notice.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/register-flags-missing-field.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/resetpw-360-step2.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/resetpw-390-error.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/resetpw-390-live-error.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/resetpw-390-live-ratelimited.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/resetpw-390-live-step1.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/resetpw-390-live-step2.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/resetpw-390-step1.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/resetpw-390-step2.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/settings-360-about.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/settings-360-font-overlap-check.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/settings-390-announcement.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/settings-390-appearance-font.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/settings-390-appearance-style.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/settings-390-appearance.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/settings-390-data.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/settings-390-font-block.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/settings-390-font-overlap-check.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/settings-390-general.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/settings-390-list-about.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/settings-390-list-bottom.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/settings-390-list.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/settings-390-voice-only.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/settings-390-voice.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/settings-web-version-only.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/share-dialog-native-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/share-entry-hidden-web.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/share-in-data-native-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/share-in-data-web-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/sider-header-polish-active-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/sider-header-polish-dark-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/sider-header-polish-default-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/sider-no-share-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/storage-p0-blocked-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/storage-p0-clone-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/storage-p0-clone-after-reload-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/storage-p0-quota-390.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/streambreak-after-1-before-first-byte.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/streambreak-after-2-midstream.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/streambreak-after-3-idle-timeout.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/streambreak-after-3-idle-waiting.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/streambreak-after-4-retry-success.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/streamretry-1-before-first-final.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/streamretry-1-before-first-mid.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/streamretry-2-before-first-3then-ok.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/streamretry-3-after-partial-final.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/streamretry-3-after-partial-retrying.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/streamretry-4-after-partial-long.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/streamretry-5-idle-final.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/streamretry-5-idle-waiting.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/streamretry-6-a-401.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/streamretry-6-b-400.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/think-clamp-fixed-mobile360-D120.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/think-clamp-fixed-mobile360-D400.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/think-clamp-fixed-mobile360-stream-autocollapse.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/think-clamp-fixed-mobile390-D120.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/think-clamp-fixed-mobile390-D400.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/think-clamp-fixed-mobile390-stream-autocollapse.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/update-390-forced-demo.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/update-390-forced-readonly-demo.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/update-390-forced-readonly.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/update-390-forced.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/update-390-soft-demo.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/update-390-soft.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/update-single-host/update-dialog-after-copy-390x844.png": {
+      "count": 1,
+      "why": "update-single-host 的采集图：结论在 #8xx，图没进任何表。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/update-single-host/update-dialog-fail-390x844.png": {
+      "count": 1,
+      "why": "update-single-host 的采集图：结论在 #8xx，图没进任何表。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/update-single-host/update-dialog-ok-390x844.png": {
+      "count": 1,
+      "why": "update-single-host 的采集图：结论在 #8xx，图没进任何表。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    },
+    "docs/ui/web-pay-buy-tab.png": {
+      "count": 1,
+      "why": "根目录散图（390/360 单张）：历史采集遗留，README 索引没收录。",
+      "issue": "#661",
+      "expires": "2027-02-15"
+    }
+  }
+}

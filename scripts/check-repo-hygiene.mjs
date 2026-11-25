@@ -35,15 +35,24 @@
  *   node scripts/check-repo-hygiene.mjs
  *   pnpm run check:hygiene
  *   node scripts/check-repo-hygiene.mjs --verbose   # 额外打印豁免清单与扫描文件数
+ *   node scripts/check-repo-hygiene.mjs --selftest  # 自带负向对照（10 拍，临时仓库，不碰本仓）
  *
  * 退出码：0 干净 / 1 发现违规 / 2 用法或环境错误
  */
 
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+import { renderSelftest } from './lib/auditDebt.mjs'
+
+/**
+ * 仓库根。`CHECK_HYGIENE_ROOT` 只给 `--selftest` 用（它在一个临时仓库上跑），
+ * 是测试注入口、不是运行开关：正常调用不设这个变量。
+ */
+const ROOT = path.resolve(process.env.CHECK_HYGIENE_ROOT ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'))
 
 /** 扫这些目录（相对仓库根）。`repro/` 在 #291 里已整目录删除，留着是防它被重新引入。 */
 const SCAN_DIRS = ['docs', 'repro']
@@ -170,7 +179,106 @@ const absExemptionFor = (relPath) => {
   return null
 }
 
+/**
+ * `--selftest`：**故意做错必须被拦**。临时仓库（`CHECK_HYGIENE_ROOT`），每一拍都只留一份文件，
+ * 所以「绿」只可能来自「这一处已经不在了」：
+ *   ① 干净 → exit 0
+ *   ② Windows 盘符路径 → **必 exit 1**，点名 `文件:行` + 给修法
+ *   ③ URL / `http://127.0.0.1:5181/…` 不许误判成盘符路径（正确内容不许红）
+ *   ④ Git-Bash 挂载路径 `/d/all_project/…` → **必 exit 1**
+ *   ⑤ `/home/<user>` → **必 exit 1**
+ *   ⑥ 超 512 KiB 的文本 → **必 exit 1**
+ *   ⑦ 同样大小的 .png 不判体积
+ *   ⑧ `docs/repro/g1-…` 那份已豁免的关单证据 → **必 exit 0**
+ *   ⑨ 全部删掉 → exit 0（证明红来自那一处，不是恒红）
+ */
+const selftest = () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'check-hygiene-selftest-'))
+  const cases = []
+  const gate = () => {
+    const result = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
+      encoding: 'utf8',
+      env: { ...process.env, CHECK_HYGIENE_ROOT: tmp },
+    })
+    return { status: result.status, out: `${result.stdout ?? ''}${result.stderr ?? ''}` }
+  }
+  const abs = (rel) => path.join(tmp, rel)
+  /** 写一份文件 → 跑一次 → 断言 → 无论对错都删掉（下一拍从干净开始） */
+  const probe = (rel, content, check) => {
+    fs.mkdirSync(path.dirname(abs(rel)), { recursive: true })
+    fs.writeFileSync(abs(rel), content)
+    try {
+      return check(gate())
+    } finally {
+      fs.rmSync(abs(rel), { force: true })
+    }
+  }
+  try {
+    // 常驻的干净文件：⑦/⑨ 的两拍需要「仓库里至少有一个文本文件」（否则按「没扫到文件」exit 2）
+    fs.mkdirSync(abs('docs'), { recursive: true })
+    fs.writeFileSync(abs('docs/ok.md'), '# 干净\n\n看 `src/services/x.ts:1`，别写本机路径。\n')
+    cases.push({ name: '① 干净文档 → exit 0', ok: gate().status === 0 })
+
+    probe('docs/win.md', '线 A\n现场在 D:\\all_project\\runs\\compatold\\log.txt\n', (r) => {
+      cases.push({
+        name: '② Windows 盘符路径 → exit 1 且点名 文件:行',
+        ok: r.status === 1 && r.out.includes('docs/win.md:2: [win-drive]'),
+        detail: `exit ${r.status}`,
+      })
+      cases.push({ name: '② 报错给出修法', ok: r.out.includes('修法：本机路径改成仓库相对路径') })
+    })
+
+    probe('docs/url.md', '见 https://example.com/a/b 与 http://127.0.0.1:5181/static/main.js\n', (r) => {
+      cases.push({ name: '③ URL / scheme 不许误判成盘符路径', ok: r.status === 0, detail: `exit ${r.status}` })
+    })
+
+    probe('docs/msys.md', '跑过 `/d/all_project/runs/g1`\n', (r) => {
+      cases.push({
+        name: '④ Git-Bash 挂载路径 → exit 1',
+        ok: r.status === 1 && r.out.includes('[msys-drive]'),
+        detail: `exit ${r.status}`,
+      })
+    })
+
+    probe('docs/home.md', '我的目录是 /home/someone/deepseek\n', (r) => {
+      cases.push({
+        name: '⑤ /home/<user> → exit 1',
+        ok: r.status === 1 && r.out.includes('[posix-home-drive]'),
+        detail: `exit ${r.status}`,
+      })
+    })
+
+    probe('docs/big.txt', 'x'.repeat(600 * 1024), (r) => {
+      cases.push({
+        name: '⑥ 超 512 KiB 文本 → exit 1',
+        ok: r.status === 1 && r.out.includes('docs/big.txt: '),
+        detail: `exit ${r.status}`,
+      })
+    })
+
+    probe('docs/shot.png', Buffer.alloc(600 * 1024), (r) => {
+      cases.push({ name: '⑦ 同样大小的 .png 不判体积', ok: r.status === 0, detail: `exit ${r.status}` })
+    })
+
+    probe('docs/repro/g1-issue-38-34-24.md', '现场：D:\\all_project\\runs\\g1\\x.txt\n', (r) => {
+      cases.push({
+        name: '⑧ 已豁免的关单证据（docs/repro/g1-…）→ exit 0',
+        ok: r.status === 0,
+        detail: `exit ${r.status}`,
+      })
+    })
+
+    cases.push({ name: '⑨ 临时仓库清空后 → exit 0', ok: gate().status === 0 })
+  } catch (error) {
+    cases.push({ name: 'selftest 自身抛错', ok: false, detail: error.message })
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true })
+  }
+  return renderSelftest('check:hygiene', cases)
+}
+
 const main = () => {
+  if (process.argv.includes('--selftest')) process.exit(selftest() ? 0 : 1)
   const verbose = process.argv.includes('--verbose')
   const files = []
   for (const dir of SCAN_DIRS) {

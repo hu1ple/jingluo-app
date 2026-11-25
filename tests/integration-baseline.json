@@ -4,7 +4,7 @@
     "ref": "origin/main@18b44f3（1.4.0-beta.9 线）",
     "recordedAt": "2026-11-18",
     "recordedBy": "Issue #19（集成测试基线红）",
-    "note": "逐个集成文件登记「应该是什么状态」，按当前 main 从零重登记（29 个文件）。判定只判「相对基线没有新增失败」：expected=pass 的跑红算新增失败；expected=known-red 的跑绿会报 FIXED? 提醒删条目，防基线腐烂。known-red 必须写清 reason + 证据 + followUp，禁止把环境问题塞进 known-red。（#365 补：上面 7 条 expected=known-red 是接线时实测到的既有红，逐条带 evidence/followUp；跑绿即要求删条目，不允许新增。）",
+    "note": "逐个集成文件登记「应该是什么状态」，按当前 main 从零重登记（29 个文件）。判定只判「相对基线没有新增失败」：expected=pass 的跑红算新增失败；expected=known-red 的跑绿会报 FIXED? 提醒删条目，防基线腐烂。known-red 必须写清 reason + 证据 + followUp，禁止把环境问题塞进 known-red。（#365 补：上面 7 条 expected=known-red 是接线时实测到的既有红，逐条带 evidence/followUp；跑绿即要求删条目，不允许新增。）｜（本合同自 2026-11-25 起由 `pnpm run check:exemptions` **机械执行**：只有 note 里的文字没有判据，等于没有纪律 —— 现在缺 reason / evidence / followUp / addedAt / reviewAfter 任一项都直接红。）",
     "reverified": {
       "ref": "origin/main@6e7baab",
       "recordedAt": "2026-11-19",
@@ -12,6 +12,22 @@
       "note": "#365 接线前把 45 个集成文件全量重测了一遍（1188s）：7 条既有红登记为 known-red（各带 evidence/followUp），其余 38 条 pass。known-red 只允许减：条目跑绿会报 FIXED? 并要求删条目。",
       "note2026_11_20": "#406 第二轮逐条复核：7 条 known-red 里 6 条判定为「断言过时 / 测试自身 bug」，改测试后转绿并删条目（diagnostics-contract / log-viewer / mode-switch / url-import-stages / full-acceptance / feedback-scroll）；剩 1 条 upstream-html 判定为真实产品缺陷（C 类），保留条目并开 follow-up issue #432。"
     }
+  },
+  "exemptionContract": {
+    "enforcedBy": "pnpm run check:exemptions（scripts/check-test-exemptions.mjs，CI 每次跑）",
+    "scope": "只有 `expected: \"known-red\"` 的条目受本合同约束。`expected: \"pass\"` 的条目是「这里应该绿」的声明，不是豁免 —— 它跑红就是新增失败（run-layer --baseline 判 NEW FAIL），不需要到期日。",
+    "requires": {
+      "reason": "为什么它是已知红（写清「为什么现在不修 / 修不了」）",
+      "evidence": "凭据：必须能指到一个可复核的事实（日期 YYYY-MM-DD / 提交号 / 工单号）",
+      "followUp": "承接单 `#N`（谁负责把它修掉）。承接单关闭 → 门禁红：关单说明这件事应该结案",
+      "addedAt": "登记日期 YYYY-MM-DD",
+      "reviewAfter": "最晚复审日期 YYYY-MM-DD（上限 120 天；到期本门禁红 —— 续期是复审，不是免检）",
+      "lastRedAt": "最后一次**实跑**确认它仍然是红的日期（超过 60 天没人跑过 → 门禁红：没跑过的红不能当已知红）",
+      "lastObserved": "可选：上一次实跑结果。写 `pass` → 判 `fixed-exemption` 红（已经跑绿就必须删条目，与 run-layer 报 FIXED? 同一个判据的两端）"
+    },
+    "forbidden": "环境问题（缺产物 / 产物陈旧 / 端口被占 / 机器慢 / 网络抖动）**不许**登记成 known-red —— 那是 SKIP(env) 或修环境，不是「已知红」。判据是关键词，写清「这不是环境问题」的句子不算命中。",
+    "why": "「known-red 必须写清 reason + 证据 + followUp」「跑绿要删条目」「禁止把环境问题塞进 known-red」这三条纪律此前只写在本文件的 note 里，没有任何机器检查，于是它退化成一张可以随手加行的表。",
+    "deadRegistry": "本文件曾有一个顶层 `knownRed: {}` 槽位，但 `run-layer.mjs --baseline` 只读 `files[*].expected` —— 写在那里等于「登记了但谁都不看」的隐形豁免。2026-11-25 删除，登记入口只剩 `files` 一处。"
   },
   "howToRun": {
     "standardBuild": "NODE_ENV=production DIST_OUT=dist-standard npx rspack build -c rspack.config.ts",
@@ -236,6 +252,5 @@
       "reason": "DIST_DIR_STANDARD / dist-standard + 自起服务",
       "evidence": "2026-11-19 实测 PASS 84.2s"
     }
-  },
-  "knownRed": {}
+  }
 }

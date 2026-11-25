@@ -33,6 +33,7 @@
     "check:dup-impl": "node scripts/check-duplicate-impl.mjs",
     "check:test-layout": "node scripts/check-test-layout.mjs",
     "check:test-duplication": "node scripts/check-test-duplication.mjs",
+    "check:exemptions": "node scripts/check-test-exemptions.mjs",
     "check:hygiene": "node scripts/check-repo-hygiene.mjs",
     "check:eol": "node scripts/check-eol.mjs",
     "check:identity": "node scripts/check-identity.mjs",

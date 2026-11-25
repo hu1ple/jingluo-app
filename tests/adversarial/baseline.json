@@ -137,5 +137,19 @@
       "expect": "每个目标给出不可用清单与最低可用版本；--json 可解析、退出码符合约定；源码里用到的不可用特性要被点名。",
       "actual": "chromium79 23 项不可用、83 20 项、91 13 项、109 3 项、120 0 项；--list 46 条；--scan src 命中 legacy polyfill、drafts.ts、App.module.css 等处。"
     }
+  },
+  "exemptionContract": {
+    "enforcedBy": "pnpm run check:exemptions（scripts/check-test-exemptions.mjs，CI 每次跑）",
+    "why": "`verdict: known-defect` 是「允许这条用例继续红」—— 之前它只要求「变绿报 REGRESSION」，没有理由、没有承接单、没有到期日，而且 `--record` 会把 known-defect 直接改回 green（等于私自销账）。",
+    "requires": {
+      "reason": "为什么这是**真产品缺陷**而不是测试写错",
+      "evidence": "凭据（要带日期 / 提交号 / 工单号，便于复核）",
+      "followUp": "承接单 `#N`",
+      "addedAt": "登记日期 YYYY-MM-DD",
+      "reviewAfter": "最晚复审日期 YYYY-MM-DD",
+      "lastObserved": "可选：这条用例**上一次实跑**的结果（`red` / `pass`）。写 `pass` 会被判 `fixed-exemption` 红 —— 已经修好的缺陷不许继续算成「已知缺陷」"
+    },
+    "maxReviewDays": 180,
+    "fixOn": "变绿（runner 报 REGRESSION，需人工确认后删条目与用例里的断言）或 `lastObserved: \"pass\"`"
   }
 }

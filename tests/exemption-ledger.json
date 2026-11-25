@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "note": "豁免总数快照（只追加）。由 scripts/check-test-exemptions.mjs --record 写入；用途：让「豁免只增不减」显形，不设上限。",
+  "snapshots": [
+    {
+      "today": "2026-11-25",
+      "recordedAt": "2026-11-25T15:16:59.240Z",
+      "note": "check-test-exemptions @ 2026-11-25",
+      "entries": {
+        "duplication-baseline": [
+          "tests/integration/domain05-ui-export-import.test.mjs ↔ tests/integration/url-import-web.test.mjs",
+          "tests/unit/intl-displaynames-fallback.test.mjs ↔ tests/unit/legacy-boot-guard.test.mjs"
+        ],
+        "fast-subset-exclude": [
+          "api-request-timeout.test.mjs",
+          "capabilities-docs-sync.test.mjs",
+          "chat-context-budget-long-session.test.mjs",
+          "chat-retry-retryable.test.mjs",
+          "check-capabilities.test.mjs",
+          "diagnostics-stream-timing.test.mjs",
+          "domain03-provider-probe-matrix.test.mjs",
+          "domain05-failure-tiers.test.mjs",
+          "domain09-settings-persistence.test.mjs",
+          "domain10-release-gate-matrix.test.mjs",
+          "gate-negative-controls.test.mjs",
+          "import-budget-vs-stall.test.mjs",
+          "import-error-copy.test.mjs",
+          "import-hardening.test.mjs",
+          "import-network-classification.test.mjs",
+          "import-unreachable-copy.test.mjs",
+          "quota-exhausted.test.mjs",
+          "stream-idle-timeout.test.mjs",
+          "test-runtime.test.mjs",
+          "url-import-stall.test.mjs"
+        ]
+      }
+    }
+  ]
+}

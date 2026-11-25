@@ -396,6 +396,15 @@ const REGISTRY = {
   'check:redact': { where: '.github/workflows/ci.yml', kind: 'ci', what: 'CI 跑 `check-redact.mjs --selftest`（脱敏器换成恒等函数必须红）' },
   'check:test-layout': { where: 'tests/unit/gate-negative-controls.test.mjs', kind: 'inject', what: '造一个跑不到的用例（孤立子目录）' },
   'check:test-duplication': { where: 'tests/unit/gate-negative-controls.test.mjs', kind: 'inject', what: '整份复制一份用例文件' },
+  // 门禁优化第 7 条（#892）：豁免登记契约。对照落在 CI 的 `--selftest`（脚本自带反例，不碰仓库文件）：
+  // 缺 reason / 占位句 reason / 已过期 / 到期日远到等于没有 / 已跑绿（两种形态）/ 承接单已关闭 /
+  // 拿环境问题顶包 / 对象文件没了 / 声称还红但没人实跑 / 缺承接单 —— 11 类都必须被判非法，
+  // 并且一条**合法**条目必须被放行（证明「必红」不是「恒红」）、分片权重不被当成豁免（不被误伤）。
+  'check:exemptions': {
+    where: '.github/workflows/ci.yml',
+    kind: 'ci',
+    what: 'CI 跑 `check-test-exemptions.mjs --selftest`：11 类坏豁免条目逐个必须被判非法 + 合法条目放行',
+  },
   // #415：CI 新增的 `pnpm run test:dl-release` 是「跑用例」而不是扫描器，但它同样是「被换成软命令就永远绿」
   // 的位置（`|| true` / 加 continue-on-error / glob 改窄到只剩一个文件）。所以按同一套四拍：
   // 塞一条必红用例 → 入口必须 exit≠0 → 删掉 → exit 0（N7）。

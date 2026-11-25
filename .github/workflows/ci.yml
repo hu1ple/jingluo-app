@@ -13,6 +13,9 @@ on:
 
 permissions:
   contents: read
+  # 门禁优化第 7 条（check:exemptions）：判「豁免引用的承接单是否已关闭」要读 issue 状态。
+  # 只读；判不出来（无凭据/无网）时本门禁按**环境失败**处理，不伪装成「条目有问题」。
+  issues: read
 
 # #405：容器化 job（golden / integration）里 `run` 的默认 shell 会退化成 `sh`（dash），
 # 那些 `set -euo pipefail` 的步骤会直接 `Illegal option -o pipefail` 挂掉（实测 exit 2）。
@@ -170,6 +173,30 @@ jobs:
 
       - name: 测试重复检测（check:test-duplication）
         run: pnpm run check:test-duplication
+
+      # ─────────── 门禁优化第 7 条：**任何豁免都必须会过期**（check:exemptions） ───────────
+      #
+      # 六份「允许它先这样」的表（集成基线 known-red / flaky 隔离区 / 对抗基线 known-defect /
+      # 重复基线 / 重复白名单 / 快速子集排除）此前都只有注释纪律：reason 可以空、followUp 没人核对、
+      # 没有到期日。这一道把它们收成一份契约，并且**让它自己烂**：
+      #   · 缺 reason/证据/承接单/到期日 → red；
+      #   · 今天 > reviewAfter，或到期日远到等于没有 → red；
+      #   · 已经跑绿 / 对象文件没了 / 承接单已关闭 / 声称还红但 60 天没人实跑 → red；
+      #   · 把「缺产物、端口被占、机器慢」写成已知红 → red（环境问题是「没测」，不是「已知」）。
+      # 只读，无浏览器、无构建（~1s + 每个承接待办一次 gh issue view）。
+      # 抓不到 issue 状态时 `--strict` 判**环境失败 exit 2**（fail-closed）：不是条目有问题，
+      # 是「这条判据今天没在工作」—— 两件事必须分开，否则谁也不知道该改条目还是该修凭据。
+      - name: 豁免登记契约（check:exemptions）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pnpm run check:exemptions -- --strict
+
+      # 负向对照（脚本自带 `--selftest`，不碰仓库文件）：造 11 类坏条目 —— 缺 reason、占位句 reason、
+      # 已过期、到期日远到等于没有、已跑绿（两种形态）、承接单已关闭、拿环境问题顶包、对象文件没了、
+      # 声称还红但没人实跑、缺承接单 —— 每一个都必须被判非法；再放一条合法条目证明「必红」不是「恒红」。
+      # 最后一条反例是「分片权重不是豁免」：机制不许把到期日无差别套在不是豁免的东西上。
+      - name: 负向对照：缺 reason / 已过期 / 已跑绿 / 指向已关闭的 issue 的豁免条目必须被判非法
+        run: node scripts/check-test-exemptions.mjs --selftest
 
       # 文档引用门禁（#290 落地脚本，这次才接线）：验「文档里那些 `文件:行号` 还指得着吗」——
       # 文件存在、行号在文件内、起行不落在空行/孤立 `}` 上。同样是纯文本扫描（< 1s）。

@@ -257,5 +257,13 @@ E2E_API_KEY=sk-xxx npm run test:e2e               # 真上游握手（发版前�
 | `tests/test-layout-baseline.json` | 布局门禁的存量豁免清单（**只减不增**，#408 后已清空：命名 / 孤儿 / 落位 / fixture 散放全 0） |
 | `tests/test-duplication-baseline.json` | 逐字重复门禁的存量豁免清单（21 组，#408 起从 32 组降下来；新组不许进，抽掉一组删一条） |
 | `tests/test-duplication-whitelist.json` | 允许长期存在的跨层重复（必须写 reason），R1 组 / R2 topic / R3 title 三种键 |
+| `tests/flaky-registry.json` | flaky 登记簿 + `quarantine`（隔离 = 跳过用例，属豁免）+ `infraSignatures`（runner 崩溃签名，不放行文件） |
+| `tests/adversarial/baseline.json` | 对抗用例基线：`green` / `known-defect`（后者是豁免，必须带 reason + followUp + reviewAfter） |
+| `tests/integration-shard-weights.json` | 集成层逐文件耗时（只影响分片均衡度，**不是豁免**：没登记的文件照样会跑） |
+| `tests/exemption-ledger.json` | 豁免总数快照（只追加）。用途是让「豁免只增不减」显形，**不设上限** |
+
+上面凡是「允许它先这样」的表（基线 / 白名单 / 隔离区 / 排除名单）都受同一份契约约束：条目必须带
+`reason` + 证据 + 承接单 + 到期日，条件不成立（跑绿 / 对象没了 / 承接单关闭 / 到期）就自己红 ——
+见 [`docs/testing/exemptions.md`](../docs/testing/exemptions.md) 与 `scripts/check-test-exemptions.mjs`。
 
 使用场景与判红口径见 `docs/TESTING-POLICY.md` 第 10 节。

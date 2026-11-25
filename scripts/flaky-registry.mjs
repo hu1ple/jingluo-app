@@ -21,7 +21,8 @@
  *           "stackIncludes": "node:internal/test_runner"
  *         },
  *         "tests": [],                                // 恒为空：这里不是豁免名单
- *         "firstSeen": "2026-11-20",
+ *         "firstSeen": "2026-11-20",                  // = addedAt
+ *         "reviewAfter": "2027-05-24",                // 最晚复审日：签名不再出现就该删，别留成化石
  *         "note": "…",
  *         "mustNotMask": "这是 runner 问题，不许用来掩盖断言失败。"
  *       }
@@ -40,10 +41,21 @@
  *         "quarantinedAt": null,                      // 进隔离区的日期；跑绿自动移除（置 null）
  *         "lastRemindedAt": null,                     // 上一次提醒修复的日期（每周一次）
  *         "lastGreen": null,                          // 最近一次「一次就绿」的时刻（ISO）：复发窗口的起点
- *         "lastRedAt": null                           // 最近一次「复发当红」的日期
+ *         "lastRedAt": null,                          // 最近一次「复发当红」的日期
+ *         "followUp": "#N",                           // 互斥豁免的承接单（quarantine 时必填，见下）
+ *         "reviewAfter": "YYYY-MM-DD"                 // quarantine 的到期日（quarantine 时必填）
  *       }
  *     }
  *   }
+ *
+ * **quarantine 是一次豁免，所以它必须会腐烂**（门禁优化第 7 条 / `pnpm run check:exemptions`）：
+ *   · 隔离 = 「跳过这个用例」= 少测一个东西。以前它只有一条软约束 —— 每 `remindEveryDays` 天打印一次提醒，
+ *     提醒不是判据：没人删就一直在跳，跳到天荒地老；
+ *   · 现在 quarantine 条目必须带 `reason`（为什么它是 flake，自动生成的原始报错不算）、`followUp`（承接单）
+ *     与 `reviewAfter`（到期日，≤45 天）。到期 / 承接单关闭 / 隔离后又跑绿，`check:exemptions` 直接红。
+ *   · 这三个字段必须**原样活过注册表重写**：`tests/run-layer.mjs` 每轮都会 normalize + 落盘，
+ *     `normalizeRegistry()` 若只认白名单字段，人写的 `reviewAfter` 就会在下一次 flake 事件里被洗掉
+ *     —— 到期日消失得无声无息，比没有到期日更坏（看起来管过了）。
  *
  * **禁止用重跑掩盖真红**（写进 docs/TESTING-POLICY.md 第 11 节）：
  * 重跑通过但 21 天内**复发 ≥2 次** → 不再当 flaky，`isRecurringRed()` 返回 true，runner 直接按真红上报。
@@ -147,6 +159,10 @@ export const normalizeInfraSignatures = (raw) => {
         /** 只登记签名，不放行任何文件：这里恒为空数组，留着是为了把「不是豁免名单」写死在形状里 */
         tests: [],
         firstSeen: typeof item.firstSeen === 'string' ? item.firstSeen : dayOf(),
+        // 门禁优化第 7 条：签名登记也会腐烂，承接单与到期日必须能存活过重写
+        // （缺失时留空，由 check:exemptions 判红；这里**不能**因为缺就整个键不写，否则人补的字段会在下一轮消失）
+        reviewAfter: typeof item.reviewAfter === 'string' ? item.reviewAfter : '',
+        followUp: typeof item.followUp === 'string' ? item.followUp : '',
         note: typeof item.note === 'string' ? item.note : '',
         mustNotMask: typeof item.mustNotMask === 'string' ? item.mustNotMask : '这是 runner 问题，不许用来掩盖断言失败。',
       }
@@ -196,6 +212,10 @@ export const normalizeRegistry = (raw) => {
       lastGreen: typeof value.lastGreen === 'string' ? value.lastGreen : null,
       lastRedAt: typeof value.lastRedAt === 'string' ? value.lastRedAt : null,
       ...(typeof value.reason === 'string' && value.reason ? { reason: value.reason } : {}),
+      // 门禁优化第 7 条：quarantine 是豁免，必须带承接单与到期日。
+      // 这里**必须透传**：run-layer 每轮都会 normalize + 落盘，不透传 = 人写的到期日在下次 flake 事件里被静默洗掉。
+      ...(typeof value.followUp === 'string' && value.followUp ? { followUp: value.followUp } : {}),
+      ...(typeof value.reviewAfter === 'string' && value.reviewAfter ? { reviewAfter: value.reviewAfter } : {}),
     }
   }
   return {
@@ -204,6 +224,10 @@ export const normalizeRegistry = (raw) => {
     policy,
     // #456：kinds 是**说明**字段，人读登记簿时不用跳代码；丢了就补默认，不因为缺它而红。
     kinds: { ...KIND_TEXT, ...(raw?.kinds && typeof raw.kinds === 'object' ? raw.kinds : {}) },
+    // 门禁优化第 7 条：`contracts` 是**登记契约的说明书**（每类条目必须带哪些字段）。它必须像 `note` / `kinds`
+    // 一样活过重写 —— 实测代价：只保留 note 时，跑一轮 `run-layer` 就把整块 contracts 洗掉了，
+    // 于是文件里「quarantine 必须带 reviewAfter」这句话消失，下一个加隔离的人永远不会知道有这条规矩。
+    ...(raw?.contracts && typeof raw.contracts === 'object' ? { contracts: raw.contracts } : {}),
     // #611：INFRA 签名（按签名登记、不放行文件）。老登记簿没有这个键 → 空数组，不因为升级而红。
     infraSignatures: normalizeInfraSignatures(raw?.infraSignatures),
     tests,

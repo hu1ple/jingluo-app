@@ -13,77 +13,22 @@
 //   [F] 静态断言：src 里不再出现 /api/plans、/api/buy；BuyTab 把失败文案渲染出来（不静默吞掉）
 //
 // 跑法：node tests/run-layer.mjs unit --only 861
-import { fixtureUrl, installTsResolve } from '../helpers/dom-env.mjs'
+import { fixtureUrl } from '../helpers/dom-env.mjs'
 import { createSelfCheck } from '../helpers/ours-check.mjs'
+import { createPayLinkHarness } from '../helpers/pay-link-harness.mjs'
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 
-installTsResolve({
+// 装配（ts 解析 + 原生浏览器替身 + 假 transport + buyFlow 编排）与 `pay-link-hardening-861` 共用一份：
+// `helpers/pay-link-harness.mjs`。替身表留在这里 —— run-layer 的 harnessKey() 靠扫本文件认替身家族。
+const { api, zh, en, ROOT, cap, SHOP_URL, response, fakeTransport, buyFlow } = await createPayLinkHarness({
   stubs: {
     '@capacitor/core': fixtureUrl('domain03-04/checkout-plugins.mjs'),
     '@capacitor/browser': fixtureUrl('domain03-04/checkout-browser.mjs'),
   },
 })
 
-globalThis.__cap = {
-  native: true,
-  browser: {
-    opens: [],
-    listeners: [],
-    rejectOpen: false,
-    removeCount: 0,
-    finish() {
-      for (const item of [...this.listeners]) {
-        item.handler()
-      }
-    },
-  },
-}
-
-const api = await import('../../src/services/ours/api.ts')
-const transport = await import('../../src/services/ours/transport.ts')
-const { zh } = await import('../../src/i18n/zh.ts')
-const { en } = await import('../../src/i18n/en.ts')
-
-const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const { failures, checks, eq, truthy } = createSelfCheck({ countBad: true })
-
-const cap = () => globalThis.__cap
-const resetStubs = () => {
-  cap().native = true
-  cap().browser.opens.length = 0
-  cap().browser.listeners.length = 0
-  cap().browser.rejectOpen = false
-  cap().browser.removeCount = 0
-}
-const SHOP_URL = 'https://wzyp.cn/shop/DIWOOHLR'
-const response = (status, body) => ({
-  kind: 'response',
-  status,
-  text: typeof body === 'string' ? body : JSON.stringify(body),
-})
-const fakeTransport = (result) => {
-  const calls = []
-  return {
-    calls,
-    transport: async (request) => {
-      calls.push(request)
-      return result
-    },
-  }
-}
-/** 与 BuyTab.openCheckout 同一条编排：取地址 → 成功才打开；失败只给文案 */
-const buyFlow = async (result) => {
-  resetStubs()
-  const fake = fakeTransport(result)
-  const link = await api.fetchPayLink(fake.transport)
-  let opened = null
-  if (link.status === 'ok') {
-    opened = await transport.openPayLinkInApp(link.url, () => {})
-  }
-  return { link, opened, calls: fake.calls, opens: cap().browser.opens.length }
-}
 
 console.log('\n[A] mock 测试：请求路径与基地址取自 consume 配置')
 {

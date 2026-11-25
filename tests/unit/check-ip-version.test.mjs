@@ -8,7 +8,8 @@
 //   2. 真写死的公网地址必须照报 —— 包括写在注释里的，以及「版本号 + 真地址」混写在一行的。
 //
 // #274 收窄了「线上地址白名单」的豁免范围：白名单主机（config/endpoints.json 的 allowedHosts）
-// 只在**注释行**里放过；代码行里再写一次地址照样报（地址只能来自配置），见最后一个用例。
+// 只在**注释行**里放过；代码行里再写一次地址照样报（地址只能来自配置）。豁免的另一半边界 ——
+// 「注释里提到白名单**外**的地址仍然必须判」—— 单独一条用例，见文件末尾那条 #875 之后的用例。
 // #507：`__ENDPOINTS__` 全局兜底 —— 装载即挂（幂等）。单跑本文件（不经 run-layer 的 `--import` 预加载）也不会
 // `ReferenceError: __ENDPOINTS__ is not defined`；走门禁时与预加载是同一份模块，无副作用叠加。
 import '../helpers/injected.mjs'
@@ -16,7 +17,7 @@ import '../helpers/injected.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { ALLOWED_HOSTS, isVersionContext, scanText } from '../../scripts/lib/hardcodedIpAudit.mjs'
+import { ALLOWED_HOSTS, isCommentOnlyLine, isVersionContext, scanText } from '../../scripts/lib/hardcodedIpAudit.mjs'
 import { consumeBaseUrl } from '../../scripts/lib/endpoints.mjs'
 
 const ips = (text) => scanText(text).map((hit) => `${hit.line}:${hit.ip}`)
@@ -124,6 +125,41 @@ test('check:ip 白名单主机：注释行放过、代码行照报（#274 收窄
   assert.deepEqual(ips("const HOST = '100.64.0.1'"), [])
   assert.deepEqual(ips("const HOST = '203.0.113.9'"), []) // RFC 5737 TEST-NET-3：保留测试段
   assert.deepEqual(ips("const HOST = '198.51.100.7'"), []) // RFC 5737 TEST-NET-2
+})
+
+/**
+ * 豁免的**另一半边界**（#875 之后补）：注释行放过的只是「白名单主机」，不是「整行 / 整段注释」。
+ *
+ * 为什么单独钉：`allowedHosts` 从 #875 起只剩域名 `apia.ecsafe.cn`，扫描器只认四段点分十进制 ——
+ * 上一条用例里「注释放过白名单主机」那个分支**今天没有生效对象**。于是「这条豁免有没有宽成
+ * 什么都放过」就没有正向样本可验了；答案只能从反面钉：把白名单**外**的地址放进同一批注释形态里，
+ * 每一条都必须照报。判据一旦退化成「注释行整行跳过」，下面每一条都会掉成空数组 → 当场红。
+ */
+test('check:ip 白名单外地址写在注释里仍然必须判（豁免只放过白名单主机，不放过整行注释）', () => {
+  // 样本先自证**不在**白名单。#875 之前那两条断言坏掉的方式正是「样本过期」：`140.210.13.146`
+  // 被移出 allowedHosts 之后，断言红在了样本上，看起来却像门禁坏了。把前提写成断言，红了能归因。
+  const outside = '62.106.70.167' // check-endpoints-allow：规则自测输入
+  assert.equal(
+    ALLOWED_HOSTS.has(outside),
+    false,
+    `样本 ${outside} 不该在 allowedHosts 里（实际：${[...ALLOWED_HOSTS].join(', ')}）——若它被加回白名单，换一个白名单外的样本再来验`,
+  )
+
+  // 四种注释前缀（`//` `/*` ` * ` `#`）：判据里有、断言里也得有，否则删掉哪一种前缀都不会红。
+  assert.deepEqual(ips(`// 对话上游在 ${outside}:60010`), [`1:${outside}`], '`//` 注释里的白名单外地址照报') // check-endpoints-allow：规则自测输入
+  assert.deepEqual(ips(`/* 上游 ${outside} */`), [`1:${outside}`], '`/* … */` 单行块注释里的白名单外地址照报') // check-endpoints-allow：规则自测输入
+  assert.deepEqual(ips(` * 邀请服务 http://${outside}:60013`), [`1:${outside}`], '` * ` 块注释续行里的白名单外地址照报') // check-endpoints-allow：规则自测输入
+  assert.deepEqual(ips(`# 上游 ${outside}`), [`1:${outside}`], '`#` 注释里的白名单外地址照报') // check-endpoints-allow：规则自测输入
+  // 同一行两段都在白名单外的地址：一个都不许少（豁免是逐地址判，不是「这行有白名单主机就整行放过」）
+  assert.deepEqual(ips(`// 旧机 ${outside} 换到 8.8.8.8`), [`1:${outside}`, '1:8.8.8.8'], '一行两个白名单外地址都报') // check-endpoints-allow：规则自测输入
+
+  // 反向：行尾注释**不是**注释行。否则豁免会宽成「这一行里出现过 `//` 就整行放过」——
+  // 而「代码行 + 行尾注释」正是写死地址最常见的形状，#274 那条收窄就跟着作废了。
+  assert.equal(isCommentOnlyLine(`const host = 'x' // 上游 ${outside}`), false, '行尾注释不算注释行')
+  assert.deepEqual(ips(`const host = '${outside}' // 上游`), [`1:${outside}`], '代码行 + 行尾注释：照报') // check-endpoints-allow：规则自测输入
+  for (const line of ['// 注释', ' * 注释', '/* 注释 */', '# 注释']) {
+    assert.equal(isCommentOnlyLine(line), true, `「${line}」应判为注释行（判据与上面四条断言同源）`)
+  }
 })
 
 test('check:ip 行内 check-ip-allow 豁免仍然生效（本行与上一行）', () => {

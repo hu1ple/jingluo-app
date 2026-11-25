@@ -32,7 +32,6 @@ import 'fake-indexeddb/auto'
 
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import * as fakeIdb from 'fake-indexeddb'
 import { openDB } from 'idb'
 import {
   chatCollectorStub,
@@ -42,39 +41,18 @@ import {
   loadTsModule,
   resetLog,
 } from '../helpers/dom-env.mjs'
+import {
+  installFakeIdbGlobals,
+  installMinimalLocalStorage,
+  snapshotDatabase,
+} from '../helpers/fake-idb.mjs'
 
-/**
- * `fake-indexeddb/auto` 的副作用只在模块首次求值时装一次；run-layer 合并批次跑完一个文件会把
- * 该文件新增的全局抹掉（#513）。所以每个文件自己幂等装一遍（同 `attachment-store-572` 的做法）。
- */
-const IDB_GLOBALS = [
-  'indexedDB',
-  'IDBCursor',
-  'IDBCursorWithValue',
-  'IDBDatabase',
-  'IDBFactory',
-  'IDBIndex',
-  'IDBKeyRange',
-  'IDBObjectStore',
-  'IDBOpenDBRequest',
-  'IDBRequest',
-  'IDBTransaction',
-  'IDBVersionChangeEvent',
-]
-for (const name of IDB_GLOBALS) {
-  if (globalThis[name] === undefined && fakeIdb[name] !== undefined) {
-    globalThis[name] = fakeIdb[name]
-  }
-}
-
-/** 最小 localStorage：`settings.ts` / `apiConfig.ts` 只做 get / set / remove */
-const storage = new Map()
-globalThis.localStorage = {
-  getItem: (key) => (storage.has(key) ? storage.get(key) : null),
-  setItem: (key, value) => storage.set(key, String(value)),
-  removeItem: (key) => storage.delete(key),
-  clear: () => storage.clear(),
-}
+// `fake-indexeddb/auto` 的副作用只在模块首次求值时装一次；run-layer 合并批次跑完一个文件会把该文件
+// 新增的全局抹掉（#513）。所以每个文件自己幂等装一遍 —— 与 `session-branch-831` 共用
+// `helpers/fake-idb.mjs` 里的那份（同一段装配原来在两个文件里逐字抄了两遍）。
+installFakeIdbGlobals()
+// 最小 localStorage：`settings.ts` / `apiConfig.ts` 只做 get / set / remove
+installMinimalLocalStorage()
 
 // 装配：`.js→.ts` 解析 + Capacitor / 诊断写入口替身（诊断替身把 `record()` 收进 `globalThis.__log`，
 // T3 / T4 / T7 的「必须留痕」就断言在那里）。顺序要紧：hook 必须先于任何 `src/**` 的动态 import。
@@ -659,32 +637,8 @@ const LEGACY_SCHEMA = [
   ['attachmentTexts', { keyPath: 'key' }, [['sha256', 'sha256', {}]]],
 ]
 
-/** 旧库整库快照：store → 记录（Blob 折成 {type,text}，才能深比较） */
-const snapshotProbe = async () => {
-  const handle = await openDB(PROBE_DB)
-  try {
-    const stores = [...handle.objectStoreNames].sort()
-    const data = {}
-    const indexes = {}
-    for (const store of stores) {
-      const tx = handle.transaction(store, 'readonly')
-      indexes[store] = [...tx.store.indexNames].sort()
-      const rows = await tx.store.getAll()
-      data[store] = rows.map((row) => {
-        const copy = { ...row }
-        for (const [key, value] of Object.entries(copy)) {
-          if (value instanceof Blob) {
-            copy[key] = { __blob: true, type: value.type, size: value.size }
-          }
-        }
-        return copy
-      })
-    }
-    return { version: handle.version, stores, data, indexes }
-  } finally {
-    handle.close()
-  }
-}
+/** 旧库整库快照（`helpers/fake-idb.mjs`，与 `session-branch-831` 共用一份）：Blob 折成 `{__blob,type,size}` */
+const snapshotProbe = () => snapshotDatabase(PROBE_DB)
 
 test('T8 DB 迁移不变量：v13 旧库升级后旧 store / 旧数据一条不动，新 store 就位', async () => {
   assert.ok(DB_VERSION > LEGACY_DB_VERSION, 'DB_VERSION 必须大于迁移起点（版本号不许往回改）')

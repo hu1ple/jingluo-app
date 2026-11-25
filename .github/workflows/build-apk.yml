@@ -3,7 +3,10 @@ name: Build signed APK
 # 让「拿到仓库的人」不需要任何签名材料就能产出**用户可覆盖升级**的正式包。
 #
 # 签名私钥不进仓库、不进日志、不进 artifact：
-#   · 四个 Secret 与 `release.yml` **同名**（同一套材料，不要维护两套命名）：
+#   · 四个 Secret 沿用既有那套命名（`~~.github/workflows/release.yml~~` 时代定的名字；那个 workflow
+#     已于 `ce7968e3` / 2026-11-24 整条删除，今天仓库里只有本文件读它们）—— 名字不是随便取的：
+#     仓库 / Environment `apk-signing` 里存的就是这四个，改名等于必须重新把材料录进 Secret，
+#     而改名期间本 workflow 会因为读不到而红在「预检签名 Secret」：
 #     `ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_STORE_PASSWORD` /
 #     `ANDROID_KEYSTORE_KEY_ALIAS` / `ANDROID_KEYSTORE_KEY_PASSWORD`
 #   · 触发者**不需要也不应该**知道口令 —— 他能拿到的是「签好名的 APK」

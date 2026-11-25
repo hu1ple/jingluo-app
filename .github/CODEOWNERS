@@ -1,6 +1,8 @@
 # 代码归属：签名的「命门」文件必须由 owner 审批改动。
 #
-# 为什么单独给 workflow 目录划 owner：`build-apk.yml` / `release.yml` 里用到了签名 Secret。
+# 为什么单独给 workflow 目录划 owner：`build-apk.yml`（手动出签名包，Environment `apk-signing`）
+# 里用到了签名 Secret。（同目录曾经的 `~~release.yml~~` 已于 `ce7968e3` / 2026-11-24 删除；
+# 目录级的 owner 规则照旧 —— 只要这里还有能读 Secret 的 workflow，规则就得在。）
 # 任何能修改这些文件的人，都能加一行 `echo ${{ secrets.ANDROID_KEYSTORE_B64 }}`
 # 把私钥导出到日志或 artifact —— 所以「谁能改 workflow」等价于「谁能拿到私钥」。
 # 配合 branch protection 的「Require review from Code Owners」才真正生效；

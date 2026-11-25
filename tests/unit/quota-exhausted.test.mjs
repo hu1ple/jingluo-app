@@ -56,8 +56,17 @@ const { setApiKey } = await import('../../src/services/api/apiConfig.ts')
 const { setDraftText } = await import('../../src/services/chat/drafts.ts')
 const { zh } = await import('../../src/i18n/zh.ts')
 const { en } = await import('../../src/i18n/en.ts')
+const { useSettings } = await import('../../src/services/settings.ts')
+const { pinLocale } = await import('../helpers/locale.mjs')
 const store = await import('../../src/services/chat/store.ts')
 const { useChatStore, initChat, sendMessage } = store
+
+// 本文件 [3] 断言的是中文那几句（zh.replyInsufficientBalance 等），而 settings.ts 的
+// initialLocale() 跟随 navigator.language（Node 里来自 shell 的 LANG：en_US / ja_JP → 'en-US'，
+// zh_CN → 'zh-CN'）。不钉死就会同一份代码「本机绿、换台机器红」—— 本轮要消灭的就是这种环境红。
+// 这里用真实 settings store ＋ 真实 translate 把界面语言钉在中文，不依赖跑测机器；
+// 也不用 `process.env.LANG = ...`，那只是把「这台绿」换成「那台绿」。helper 见 tests/helpers/locale.mjs。
+assert.equal(pinLocale(useSettings), 'zh-CN', '界面语言必须钉在中文，不能跟随 shell 的 LANG')
 
 const realSetTimeoutRef = realSetTimeout
 const delay = (ms) => new Promise((resolve) => realSetTimeoutRef(resolve, ms))
@@ -267,11 +276,15 @@ test('负向：502 / 网络断开 / 超时 / 普通 400 的分类与可重试性
 
 // ---------------------------------------------------------------- [2][3][4] 真实链路
 
+/** 上游真实报错原文（网关就是这么回 429 + insufficient_quota 的） */
+const UPSTREAM_QUOTA_MESSAGE =
+  'You exceeded your current quota, please check your plan and billing details.'
+
 test('额度不足：真实 store 一次都不重试，界面给明确文案 + 充值动作，诊断单独打标', async () => {
   const { calls, reply, notice, failureRecord } = await runRound({
     respond: () =>
       errorResponse(429, {
-        message: 'You exceeded your current quota, please check your plan and billing details.',
+        message: UPSTREAM_QUOTA_MESSAGE,
         type: 'insufficient_quota',
         code: 'insufficient_quota',
       }),
@@ -284,9 +297,25 @@ test('额度不足：真实 store 一次都不重试，界面给明确文案 + �
   assert.equal(reply.error?.upstreamCode, 'insufficient_quota')
   // [3] 文案与出路
   assert.ok(notice, '必须有提示，不能静默失败')
-  assert.equal(notice.text, zh.replyInsufficientBalance)
+  assert.equal(
+    notice.text,
+    zh.replyInsufficientBalance,
+    '额度档必须给用户「额度这一句」：落到别的档（限流 / 泛化失败 / 网络异常）就是没给出来'
+  )
   assert.match(notice.text, /余额|额度/, '文案要点明余额/额度')
-  assert.match(notice.text, /不足以|无法继续生成/, '文案要说清无法继续生成')
+  // 原来这里是 `assert.match(notice.text, /不足以|无法继续生成/)`（#299 当时那句
+  // 「余额不足以…无法继续生成」）。2026-11-24 产品《错误文案定稿》(1e687929) 按规定把这条换成
+  // 「你是一直等着用完额度好去找其他AI吗。。。(╥﹏╥)」之后，那条正则就只剩「守护旧措辞」——
+  // 文案改一次红一次。它想守的意图（用户看到的是额度这一档、不是上游原文、不是泛化失败）改由三行守：
+  //   ① 上一行 `=== zh.replyInsufficientBalance` 钉死「就是额度这一句」（换文案只改 i18n 一处）；
+  //   ② 这一行钉「上游原文一个字都不许端给用户」（#299 [3] 的原话）—— 比旧正则更准，
+  //      且与措辞、界面语言都无关，换文案 / 换语言都不会假红；
+  //   ③ 下一行钉「不许退回网络异常 / 泛化失败」。
+  assert.equal(
+    notice.text.includes(UPSTREAM_QUOTA_MESSAGE),
+    false,
+    '不许把上游英文原文端给用户'
+  )
   assert.doesNotMatch(notice.text, /网络|生成失败|未知错误/, '不许退回网络异常 / 泛化失败')
   assert.equal(notice.action, 'topUp', '必须给出充值 / 兑换入口')
   // [4] 诊断可区分
@@ -302,7 +331,11 @@ test('402：同一条链路给出同样的文案与充值动作', async () => {
     respond: () => errorResponse(402, { message: 'Insufficient balance', code: 'insufficient_balance' }),
   })
   assert.equal(calls, 1, '402 不重试')
-  assert.equal(notice?.text, zh.replyInsufficientBalance)
+  assert.equal(
+    notice?.text,
+    zh.replyInsufficientBalance,
+    '402 同样要给「额度这一句」：落到别的档就是没给出来'
+  )
   assert.equal(notice?.action, 'topUp')
 })
 
@@ -326,13 +359,19 @@ test('负向：普通 400 不重试，落到参数错误档（#324 之前这里�
   })
   assert.equal(calls, 1, '参数错误重试无用')
   // #324：400 参数错误有了独立档位（不可重试），不再落到「未知错误」兜底
-  // #347：文案带状态码 + 上游点名的字段（这句原文里的 `max_tokens`）
-  assert.equal(
-    notice?.text,
-    zh.replyParamInvalid.replace('{status}', 'HTTP 400').replace('{field}', 'max_tokens')
-  )
+  // #347：当时那句是「<field> 有地方填错（HTTP <status>），不要重试」，所以这里有两条按措辞的断言。
+  // 2026-11-24 产品《错误文案定稿》(1e687929) 把这条换成「有地方填错啦 (｡•́︿•̀｡)」—— `{status}` /
+  // `{field}` 占位符也从文案里拿掉了，于是 `/不要重试/` 就成了「守护旧措辞」的假红。
+  // 「重试无用」这条意图本身仍被上一行 `calls === 1`（真实请求计数）守着，比让文案复述一遍更硬；
+  // 状态码与上游点名字段的可归因性由下面 `upstreamCode` / `status` 两条诊断字段断言守着。
+  // 这里只保留「文案是参数错误这一档 + 不把上游英文原文端给用户」这两条与措辞无关的意图。
+  assert.equal(notice?.text, zh.replyParamInvalid, '文案就是参数错误这一档的定稿那一句')
   assert.equal(notice?.action, 'settings', '参数错误要给出「打开设置」入口（#347 / #353）')
-  assert.match(notice?.text ?? '', /不要重试/)
+  assert.equal(
+    (notice?.text ?? '').includes('invalid request: max_tokens must be a positive integer'),
+    false,
+    '不许把上游英文原文端给用户'
+  )
   assert.equal(failureRecord.fields['billing.quota'], undefined)
   assert.equal(failureRecord.fields['ui.condition'], 'badRequest')
   // 上游短码进诊断，便于按 code 切片（#324 第 4 条）

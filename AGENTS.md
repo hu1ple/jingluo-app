@@ -69,6 +69,28 @@ node scripts/check-issue-close-keywords.mjs --body-file pr-body.md --strict
 
 ## 常用命令
 
+### 第一步：改完先跑本地门禁（别把「5 秒能发现的事」留给 CI）
+
+```bash
+pnpm hooks:install     # 一次性：接上 .githooks（commit 跑提交档、push 跑默认档）
+pnpm dev-check         # 改完那一刻：32 道内容门禁 + 类型 + lint，一次给结论（实测 ~14s）
+pnpm dev-check -- --content   # 只想快速过一遍（~4s）：纯内容门禁，pre-commit 跑的就是这条
+```
+
+**为什么是这条而不是「记得跑一下 CI 里的那些 check」**：仓库里 42 个 `check:*` 门禁，
+每一个都便宜（0.1~8s），但以前只在 CI 里跑 —— 也就是说「一个 CRLF 文件」「一对仅大小写不同的
+文件名」「一行写死的 IP」要等你 push 之后 3~8 分钟才知道，而那时人的反应多半是**绕过**而不是修。
+`dev-check` 不新增任何检查，它只是把**已有**的那批搬到最便宜的失败点上，并且：
+
+- **红可归因**：它先看你的改动集，再决定这条红是「你这次改坏的」（阻塞，exit 1）还是
+  「HEAD 上本来就有的」（不阻塞，△ 标出来）。所以它不会变成第二条「反正天天红」的命令。
+- **失败自带下一步**：每条红都打印该门禁自己的修法 + 单跑命令 + 为什么有这道门禁。
+- **判不了 ≠ 通过**：缺产物/缺依赖时它明说「判不了」，不伪装成绿。
+
+口径、分档、归因规则见 [`docs/TESTING-POLICY.md`](docs/TESTING-POLICY.md) 第 2 节与第 14 节；
+要更厚的一层用 `pnpm test:fast`（≤60s，超预算自己判红），全量只在合并前/发版前跑
+（`pnpm test:full`）。**不要在红的基础上继续推** —— 先看那条红是谁的、归哪张单。
+
 ```bash
 # 认领
 gh issue comment <n> --body "/claim 分支 feat/xxx"

@@ -35,7 +35,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: build-apk-${{ github.ref }}
+  # 变体进 group：standard 与 staging 是两个互不相干的产物，同一分支上同时触发时
+  # **不该互相排队**（以前 group 只有 ref，`cancel-in-progress: false` 于是把它们串起来，
+  # 后面那个白等前面几十分钟）。同一个变体仍然串行 —— 发布动作不做并发的纪律不变。
+  group: build-apk-${{ github.ref }}-${{ inputs.variant }}
+  # 不取消正在跑的签名构建：半截的 APK 比没有 APK 更危险。
   cancel-in-progress: false
 
 jobs:
@@ -62,16 +66,29 @@ jobs:
           [ -n "${KS_PASS:-}" ] || { echo "::error::缺少 Secret ANDROID_KEYSTORE_STORE_PASSWORD"; exit 1; }
           echo "签名 Secret 已就位（长度 $(printf %s "$KS_B64" | wc -c) / 口令长度 ${#KS_PASS}）"
 
+      # 版本必须与 `ci.yml` 一致（那里是 9）。两个 workflow 用不同的 pnpm 主版本装同一个
+      # `pnpm-lock.yaml`，等于「同一份锁文件、两套解析结果」：CI 绿而这里装出另一棵 node_modules
+      # （反之亦然），红起来谁也说不清是代码还是解析器。要么两边一起升（并同时改这两处），
+      # 要么两边都用这里/那里钉的那个版本 —— 单方面改动就是造一个假红/假绿的入口。
       - name: pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: 12
+          version: 9
 
       - name: Node
         uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: pnpm
+
+      # 依赖装在最前面（准绳 #5「站在最便宜的失败点」）：
+      #   · 它是最可能因外部原因失败的一步（lockfile 漂移 / registry 抖动），却曾经排在
+      #     「注入签名材料」「check:keystore」之后 —— 那两步都依赖 node_modules 里的脚本，
+      #     顺序反了等于「先用再装」。现在装坏了立刻红，且红在 install 这一步（可归因）。
+      #   · 顺带把签名材料的落盘时刻推后：它在 runner 上存在的每一秒都是多余的暴露面。
+      - name: 依赖
+        timeout-minutes: 10
+        run: pnpm install --frozen-lockfile
 
       - name: JDK 21
         uses: actions/setup-java@v4
@@ -128,10 +145,11 @@ jobs:
       - name: 签名凭据自检（指纹必须是已发布证书）
         run: pnpm run check:keystore
 
-      - name: 依赖
-        run: pnpm install --frozen-lockfile
-
       - name: 构建（web → cap sync → assembleRelease）
+        # 45 分钟：冷缓存 assembleRelease（下载 AGP/gradle 发行版 + dex）实测天花板远低于此，
+        # 但给够了余量。留住这个 per-step 上限是为了让「卡住」红在这一步名下，而不是让
+        # 60 分钟的 job 超时把「卡在 web 构建还是卡在 dex」这件事一起吃掉（准绳 #3）。
+        timeout-minutes: 45
         env:
           # 变体只在这里透传一次，构建逻辑全在 build-apk.sh（standard 分支与加变体前逐字一致）
           BUILD_VARIANT: ${{ inputs.variant }}

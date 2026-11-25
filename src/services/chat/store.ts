@@ -90,6 +90,10 @@ import type { MergePlan, ImportMode } from './history/mergeSessions.js'
 import type { ImportSkip } from './history/toLocal.js'
 import { shouldRetryStreamTimeout, streamTimeoutStageOf } from './timeoutPolicy.js'
 import {
+  decideStreamBreakout,
+  isStreamBreakoutKind,
+} from './streamBreakout.js'
+import {
   toSessionSummary,
   type AssistantMessage,
   type FileAttachment,
@@ -2012,6 +2016,15 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
       /** 附件补齐前出错属于上传失败，请求还没有发出 */
       let preparing = true
       let receivedContent = false
+      /**
+       * 这一轮**已经展示给用户**的字符数（正文 + 思考）：断流后「要不要静默重发」看它。
+       *
+       * 与 `receivedContent` 的分工：那个是布尔（有没有出过内容块），这里要的是量 ——
+       * 产品口径按「首字节前 / 首字节后」分档（见 `chat/streamBreakout.ts`），
+       * 而 `content_block_start` 到达时正文可能还是空的（思考块先到），按块判会把
+       * 「用户已经看着思考在滚」当成「什么都没看到」。
+       */
+      let receivedChars = 0
       try {
         setWaitStage(sessionId, needsUpload(roundFiles(request)) ? 'uploading' : 'preparing')
         const prepared = await prepareFiles(sessionId, request, controller.signal)
@@ -2096,6 +2109,14 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
         const blockIndexes = new Map<number, number>()
         for await (const event of events) {
           receivedContent ||= event.type === 'content_block_start'
+          // 「用户看到了多少字」：正文与思考增量都算（见 receivedChars 的注释）
+          if (event.type === 'content_block_delta') {
+            if (event.delta.type === 'text_delta') {
+              receivedChars += event.delta.text.length
+            } else if (event.delta.type === 'thinking_delta') {
+              receivedChars += event.delta.thinking.length
+            }
+          }
           if (
             event.type === 'message_delta' &&
             (event.delta.stop_reason === 'end_turn' || event.delta.stop_reason === 'max_tokens') &&
@@ -2338,18 +2359,39 @@ const streamReply = async (sessionId: string, initial: AssistantMessage, request
           mayRetry &&
           !isRetryableApiError(error) &&
           reuploadInvalidatedFiles(sessionId, request, error)
-        const decision = decideStreamRetry({
-          error,
-          attempt,
-          receivedContent,
-          aborted: controller.signal.aborted,
-          fileRecovered,
+        /**
+         * 断流两档（interrupted / idle）走**自己那套口径**（`chat/streamBreakout.ts`）：
+         * - 首字节前断开 → 静默重试 1 次（上限是 `STREAM_BREAK_RETRY_LIMIT`，不是 #105 的 2 次）；
+         * - 首字节后断开 / idle → 一次都不重发（重发会重复输出、重复计费）。
+         *
+         * `decideStreamRetry` 的口径**不动**：它服务的是弱网 / 5xx / 连接超时 / 首字超时、
+         * 以及附件失效补传，那些档位有自己的上限与提示。这里只是在断流两档上做一次收口，
+         * 两者不重叠（`isStreamBreakoutKind` 只认 interrupted / idle）。
+         */
+        const breakout = decideStreamBreakout({
+          receivedChars,
+          retried: attempt > 0,
+          kind: error instanceof ApiError ? error.kind : undefined,
         })
+        const decision = isStreamBreakoutKind(error instanceof ApiError ? error.kind : undefined)
+          ? controller.signal.aborted
+            ? 'aborted'
+            : breakout.retry
+              ? 'retry'
+              : 'final'
+          : decideStreamRetry({
+              error,
+              attempt,
+              receivedContent,
+              aborted: controller.signal.aborted,
+              fileRecovered,
+            })
         if (decision === 'retry') {
           // 让用户看见「正在第 N 次重试」，而不是静默卡住；秒数从点发送累计，不因重试归零（#328 G6）
+          // 断流这一档的上限是 1 次，所以文案里的「共 N 次」要用这一档自己的预算，不能照抄 #105 的 2
           setWaitStage(sessionId, 'retrying', {
             attempt: attempt + 1,
-            limit: STREAM_RETRY_LIMIT,
+            limit: breakout.maxRetries > 0 ? breakout.maxRetries : STREAM_RETRY_LIMIT,
           })
           await waitForRetry(attempt, controller.signal)
           if (controller.signal.aborted) {

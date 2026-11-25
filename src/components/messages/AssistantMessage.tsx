@@ -150,8 +150,20 @@ export const AssistantMessage = memo(function AssistantMessage({
           disableLink={false}
         />
       ) : notice ? (
-        <div className={styles.notice}>
-          <IconWarningOutline16 />
+        /*
+          断流两档（`notice.tone`）不穿红色错误条：用户已经看到内容了，用报错语气说
+          「已经收到的都在」只会让他以为内容丢了（用户报的正是这个）。tone 为空 = 真错误，保持原样。
+        */
+        <div
+          className={clsx(
+            styles.notice,
+            notice.tone === 'soft' && styles.noticeSoft,
+            notice.tone === 'warn' && styles.noticeWarn
+          )}
+          data-tone={notice.tone ?? 'error'}
+          data-testid="reply-notice"
+        >
+          {notice.tone ? null : <IconWarningOutline16 />}
           {/*
             文案 + 操作 + 折叠区共用一个列容器（#347 / #353）：折叠区要独占一行，
             不能和文案挤在同一个行盒里（英文原文一长就会把「打开设置」挤到屏幕外）。

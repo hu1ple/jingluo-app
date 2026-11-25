@@ -19,6 +19,11 @@ import { AssistantMessage } from './AssistantMessage.js'
 import { ScrollToBottomContext, ScrollToBottomStateContext } from './scrollContext.js'
 import { UserMessage } from './UserMessage.js'
 import { DEFAULT_ESTIMATE, VirtualRows } from './virtualRows.js'
+import {
+  decideAnchorCorrection,
+  editorCenterPlan,
+  isEditorTargetLive,
+} from './scrollGuard.js'
 import type { Message } from '../../services/chat/types.js'
 
 /**
@@ -145,12 +150,32 @@ export const MessageList = ({
   const [metrics, setMetrics] = useState({ top: 0, viewport: 0 })
   const [editingIds, setEditingIds] = useState(() => new Set<string>())
   const openingEditor = useRef<{ id: string; textarea: HTMLTextAreaElement } | null>(null)
+  /**
+   * Bug A-1：这一轮**已经居中过**的编辑框消息 id。
+   * 原来每帧都重新居中，于是「编辑框一直有焦点」时列表被钉在编辑框上，流式内容全被拽回去。
+   */
+  const centeredEditorRef = useRef<string | null>(null)
+  /** `positionOpeningEditor` 要在 layout effect 里读到最新的编辑集合，又不能让回调身份每帧都变。 */
+  const editingIdsRef = useRef<Set<string>>(editingIds)
+  editingIdsRef.current = editingIds
+  /**
+   * Bug B：锚点校正的收敛状态。
+   * `previousShift` = 上一次真落地的校正量，`streak` = 本轮连续尝试次数（含被拒的），
+   * `blocked` = 本轮已判自激。三者只由**用户手势**（wheel / touchstart / pointerdown / 键盘）清零，
+   * 否则我们自己的写入会不断重置它，链永远截不断。
+   */
+  const anchorGuardRef = useRef({ previousShift: 0, streak: 0, blocked: false })
+  const resetAnchorGuard = useCallback(() => {
+    anchorGuardRef.current = { previousShift: 0, streak: 0, blocked: false }
+  }, [])
   const onEditingChange = useCallback(
     (id: string, editing: boolean, textarea?: HTMLTextAreaElement | null) => {
       if (editing && textarea) {
         openingEditor.current = { id, textarea }
+        centeredEditorRef.current = null
       } else if (openingEditor.current?.id === id) {
         openingEditor.current = null
+        centeredEditorRef.current = null
       }
       setEditingIds((previous) => {
         const next = new Set(previous)
@@ -165,11 +190,32 @@ export const MessageList = ({
     []
   )
   // 键盘弹出会改变消息区高度，虚拟行实测会改变编辑框位置。两者都按当前 DOM 定位。
+  /**
+   * Bug A：把「刚打开的编辑框」挪到视口中间。
+   *
+   * 三处收紧（原来这里是无条件关贴底 + 每帧重新居中 + 不校验引用）：
+   *   1. A-2 先验目标还活着（消息仍在 `editingIds`、`textarea` 仍连着文档、焦点仍在它身上），
+   *      陈旧的 textarea 引用一律返回 false —— 发送后拿它的 rect 去定位就是把列表往上拽；
+   *   2. A-1 只有真的要挪（|shift| ≥ 1）才关掉贴底 / 平滑滚动标记；
+   *   3. A-1 同一条消息这一轮只居中一次，之后再进这个函数只「占位」（返回 true，让
+   *      ResizeObserver 那条路别再贴底），不会再写 scrollTop。
+   */
   const positionOpeningEditor = useCallback(() => {
     const scroll = scrollRef.current
-    const textarea = openingEditor.current?.textarea
+    const target = openingEditor.current
+    const textarea = target?.textarea
     const editor = textarea?.parentElement
-    if (!isMobile || !scroll || !textarea || !editor || document.activeElement !== textarea) {
+    if (!isMobile || !scroll || !target || !textarea || !editor) {
+      return false
+    }
+    if (
+      !isEditorTargetLive({
+        messageId: target.id,
+        editingIds: editingIdsRef.current,
+        isConnected: textarea.isConnected,
+        focused: document.activeElement === textarea,
+      })
+    ) {
       return false
     }
     const viewport = scroll.getBoundingClientRect()
@@ -177,16 +223,23 @@ export const MessageList = ({
     const box = editor.getBoundingClientRect()
     const centered = (viewport.top + viewport.bottom - field.height) / 2
     // 让输入区域居中，同时给下方的取消、发送按钮留出空间。
-    const target = Math.max(
+    const targetTop = Math.max(
       viewport.top + (field.top - box.top),
       Math.min(centered, viewport.bottom - (box.bottom - field.top))
     )
-    const shift = field.top - target
-    stickyRef.current = false
-    jumpRef.current = false
-    if (Math.abs(shift) >= 1) {
-      scroll.scrollTop += shift
+    const plan = editorCenterPlan({
+      targetTop,
+      currentTop: field.top,
+      alreadyCentered: centeredEditorRef.current === target.id,
+    })
+    if (plan.shift !== 0) {
+      centeredEditorRef.current = target.id
+      scroll.scrollTop += plan.shift
       scrollTopRef.current = scroll.scrollTop
+    }
+    if (!plan.keepSticky) {
+      stickyRef.current = false
+      jumpRef.current = false
     }
     return true
   }, [isMobile])
@@ -263,8 +316,10 @@ export const MessageList = ({
     // 先恢复跟随：动画落地后新内容继续自动贴底（这是 Issue 验收里的「点击后恢复跟随」）
     stickyRef.current = true
     jumpRef.current = true
+    // 用户主动回到列表这头，之前判过的「自激」不再有意义（Bug B）
+    resetAnchorGuard()
     smoothScrollToBottom(el)
-  }, [])
+  }, [resetAnchorGuard])
 
   // 行实测高度 → 未实测行的估值。用已实测高度的均值，比固定常量更接近真实内容。
   let measuredSum = 0
@@ -308,13 +363,22 @@ export const MessageList = ({
     for (const event of events) {
       scroll.addEventListener(event, releaseEditor, { passive: true })
     }
+    // Bug B：用户真的动了（滚轮 / 触摸 / 指针 / 键盘 / 输入）才解封锚点校正的收敛状态。
+    // 不能挂在 scroll 事件上 —— 我们自己的校正写入也会触发 scroll，那样刚判的自激立刻被清零。
+    const gestures = [...events, 'keydown']
+    for (const event of gestures) {
+      scroll.addEventListener(event, resetAnchorGuard, { passive: true })
+    }
     return () => {
       observer.disconnect()
       for (const event of events) {
         scroll.removeEventListener(event, releaseEditor)
       }
+      for (const event of gestures) {
+        scroll.removeEventListener(event, resetAnchorGuard)
+      }
     }
-  }, [positionOpeningEditor, scrollToBottom, syncToBottom])
+  }, [positionOpeningEditor, resetAnchorGuard, scrollToBottom, syncToBottom])
 
   // 单例行高实测：挂载/卸载行时订阅、退订，高度变化（流式增长、版本切换）时重算占位。
   useLayoutEffect(() => {
@@ -392,9 +456,11 @@ export const MessageList = ({
       sessionIdRef.current = session.id
       heightsRef.current.clear()
       anchorRef.current = null
+      resetAnchorGuard()
+      centeredEditorRef.current = null
       setMeasureVersion((version) => version + 1)
     }
-  }, [session.id])
+  }, [resetAnchorGuard, session.id])
 
   // 切换版本后将选择器留在原位置，避免回答长短变化导致操作区跳出视口。
   useLayoutEffect(() => {
@@ -439,6 +505,40 @@ export const MessageList = ({
     )
   }, [])
 
+  /**
+   * Bug B：锚点校正里**不许**同步 setState（原来那句 `syncMetrics(scroll)` 就在校正分支里）。
+   *
+   * 那条环是：校正写 scrollTop → 同步 setState → 新提交 → 又校正 → …… 实测在长会话里
+   * 连写 54 次 `1414 ↔ 1246`（27 次振荡）后 React 抛 `Maximum update depth exceeded`。
+   * 这里合并到下一帧，且同一帧只排一次；校正分支本身另有反号 / 次数上限两道闸。
+   */
+  const metricsFrameRef = useRef(0)
+  const syncMetricsSoon = useCallback(
+    (el: HTMLElement) => {
+      if (metricsFrameRef.current) {
+        return
+      }
+      if (typeof requestAnimationFrame !== 'function') {
+        syncMetrics(el)
+        return
+      }
+      metricsFrameRef.current = requestAnimationFrame(() => {
+        metricsFrameRef.current = 0
+        syncMetrics(el)
+      })
+    },
+    [syncMetrics]
+  )
+  useEffect(
+    () => () => {
+      if (metricsFrameRef.current) {
+        cancelAnimationFrame(metricsFrameRef.current)
+        metricsFrameRef.current = 0
+      }
+    },
+    []
+  )
+
   // 跨移动端断点时切换滚动层，并保持输入框及当前阅读位置。
   useLayoutEffect(() => {
     const el = scrollRef.current
@@ -482,6 +582,12 @@ export const MessageList = ({
    *
    * 三种情况不修正：贴底跟随（#386 由 scrollToBottom 负责）、版本切换的故意定位、
    * 以及锚点行已经不在列表里（编辑截断 / 删消息 —— 这时宁可不挪）。
+   *
+   * Bug B：**校正必须收敛**。原来只要位移 ≥ 0.5 就补，补完还在校正里同步 setState 把链续上，
+   * 于是「补 168 → 下一帧 −168 → 再补 168」自激：长会话来回滚 3 轮实测写 54 次、振荡 27 次，
+   * React 抛 `Maximum update depth exceeded`，整个 `<MessageList>` 被卸掉（prod 构建同样复现）。
+   * 现在判定交给 `decideAnchorCorrection`（反号放弃 / 连续次数到顶放弃 / 已判自激钉住），
+   * 且校正里不再同步 setState（改 rAF 合并），这条环两头都断了。
    */
   useLayoutEffect(() => {
     const scroll = scrollRef.current
@@ -495,11 +601,30 @@ export const MessageList = ({
     measureAnchorRef.current = null
     const rows = readRowSpans(scroll, content, anchor?.id ?? null)
     if (!skip && !positionOpeningEditor() && !stickyRef.current && !jumpRef.current) {
-      const shift = anchorShift(anchor, rows)
-      if (Math.abs(shift) >= 0.5) {
-        scroll.scrollTop += shift
+      const guard = anchorGuardRef.current
+      const decision = decideAnchorCorrection({
+        shift: anchorShift(anchor, rows),
+        previousShift: guard.previousShift,
+        sticky: stickyRef.current,
+        jump: jumpRef.current,
+        streak: guard.streak,
+        blocked: guard.blocked,
+      })
+      if (decision.apply) {
+        guard.previousShift = decision.shift
+        guard.streak += 1
+        scroll.scrollTop += decision.shift
         scrollTopRef.current = scroll.scrollTop
-        syncMetrics(scroll)
+        // 合并到下一帧，绝不在这里同步 setState（否则又是一条自激环）
+        syncMetricsSoon(scroll)
+      } else if (decision.reason === 'sign-flip' || decision.reason === 'streak-limit') {
+        // 判自激：本条链到此为止，等到用户下一次手势才解封
+        guard.blocked = true
+        guard.streak += 1
+      } else {
+        // 位置已经对上了（位移不到阈值 / 贴底 / 平滑滚动在路上）：链清零重数
+        guard.previousShift = 0
+        guard.streak = 0
       }
     }
     // 下一次提交的参照：本帧第一条可见行（内容坐标，滚动不会让它失效）

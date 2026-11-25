@@ -2,11 +2,11 @@
 
 > 本文件是 **#209「能力探测替代一切假设」** 的类别 3（平台 / 宿主）盘点结果，范围是全仓 `src/**`，扫描器为 `scripts/lib/hostCapabilityAudit.mjs`。
 >
-> **快照基准：`376b123`**（`origin/main` tip，2026-11-21 16:33:41 +0800）· 采集时间：2026-11-21 16:45 (+0800)
+> **快照基准：`77720a32`**（`origin/main` tip，2026-11-25 21:57:52 +0800）· 采集时间：2026-11-25 23:54 (+0800)
 >
-> **扫描范围**：`src/**` 的 **337** 个源文件。
+> **扫描范围**：`src/**` 的 **342** 个源文件。
 >
-> 拆分：`.ts` **253** / `.tsx` 83 / `.html` 1 = 337（#487 W1-A 新增 `src/services/consume/**` 9 个 `.ts`，W1-B 新增 `src/services/auth/**` 5 个 `.ts` 与 `src/components/auth/**` 3 个 `.tsx`，W1-C2 新增 `src/components/consume/**` 的 7 个面板文件，W1-C1 再新增 3 个 `.tsx`，「统一计量」再新增 `src/utils/money.ts` 1 个 `.ts`，「迁移尾巴」再新增 `src/legacy/migration/**` 4 个 `.ts` 与 1 个 `.tsx`，W1-B 后半再新增 `src/services/consumeClient.ts` 与 `src/components/auth/AccountRow.tsx`）。上一版写 190，是缺了 `#237`（`fetch` 通道计数、`readBytesOf`）与 `#243`（设备指纹）新增的 5 个文件。
+> 拆分：`.ts` **258** / `.tsx` 83 / `.html` 1 = 342（#487 W1-A 新增 `src/services/consume/**` 9 个 `.ts`，W1-B 新增 `src/services/auth/**` 5 个 `.ts` 与 `src/components/auth/**` 3 个 `.tsx`，W1-C2 新增 `src/components/consume/**` 的 7 个面板文件，W1-C1 再新增 3 个 `.tsx`，「统一计量」再新增 `src/utils/money.ts` 1 个 `.ts`，「迁移尾巴」再新增 `src/legacy/migration/**` 4 个 `.ts` 与 1 个 `.tsx`，W1-B 后半再新增 `src/services/consumeClient.ts` 与 `src/components/auth/AccountRow.tsx`）。上一版写 190，是缺了 `#237`（`fetch` 通道计数、`readBytesOf`）与 `#243`（设备指纹）新增的 5 个文件。
 >
 > **本盘点只审计、只出单、只做工具，不修任何代码。** 每条真实漏洞都另开独立 Issue（见「真实漏洞与拆单」），修复在各自单里做，不在 #209 的 PR 里改产品代码。
 >
@@ -36,14 +36,14 @@
 
 ## 盘点表
 
-**总计 157 条命中**（`已有兜底` 87 / `无风险` 54 / `真实漏洞` 5 / `需动态验证` 11）；风险分布：高 4、中 12、低 141。
+**总计 152 条命中**（`已有兜底` 86 / `无风险` 50 / `真实漏洞` 5 / `需动态验证` 11）；风险分布：高 4、中 12、低 136。
 
 | 文件:行 | 假设内容 | 类别 | 风险(高/中/低) | 处置(已有兜底/需探测/需动态验证/拆单) |
 | --- | --- | --- | --- | --- |
 | `src/app/theme.ts:6` | matchMedia 引入于 Chrome 9，83 必有 | 3 | 低 | 已有兜底 |
 | `src/app/viewport.ts:4` | matchMedia 引入于 Chrome 9，83 必有 | 3 | 低 | 已有兜底 |
 | `src/app/viewport.ts:144` | visualViewport 引入于 Chrome 61，83 必有；键盘弹出后的行为仍需真机确认 | 3 | 低 | 已有兜底 |
-| `src/components/attachments/useAttachmentDrafts.ts:210` | AbortController 引入于 Chrome 66，83 必有（启动守卫也把它列进 REQUIRED） | 3 | 低 | 已有兜底 |
+| `src/components/attachments/useAttachmentDrafts.ts:229` | AbortController 引入于 Chrome 66，83 必有（启动守卫也把它列进 REQUIRED） | 3 | 低 | 已有兜底 |
 | `src/components/base/Modal.tsx:63` | visualViewport 引入于 Chrome 61，83 必有；键盘弹出后的行为仍需真机确认 | 3 | 低 | 已有兜底 |
 | `src/components/base/anchored.ts:188` | ResizeObserver 引入于 Chrome 64，83 必有（启动守卫也把它列进 REQUIRED） | 3 | 低 | 已有兜底 |
 | `src/components/chatInput/ChatInput.tsx:191` | ResizeObserver 引入于 Chrome 64，83 必有（启动守卫也把它列进 REQUIRED） | 3 | 低 | 已有兜底 |
@@ -63,7 +63,7 @@
 | `src/components/settings/AppUpdateField.tsx:252` | AbortController 引入于 Chrome 66，83 必有（启动守卫也把它列进 REQUIRED） | 3 | 低 | 已有兜底 |
 | `src/components/settings/AppUpdateField.tsx:400` | AbortController 引入于 Chrome 66，83 必有（启动守卫也把它列进 REQUIRED） | 3 | 低 | 已有兜底 |
 | `src/components/settings/FeedbackDialog.tsx:242` | @capacitor/core 随包发布，函数一定在；它回答的是「跑在壳里吗」不是「插件在吗」 | 3 | 低 | 已有兜底 |
-| `src/components/settings/SettingsDialog.tsx:1331` | AbortController 引入于 Chrome 66，83 必有（启动守卫也把它列进 REQUIRED） | 3 | 低 | 已有兜底 |
+| `src/components/settings/SettingsDialog.tsx:1333` | AbortController 引入于 Chrome 66，83 必有（启动守卫也把它列进 REQUIRED） | 3 | 低 | 已有兜底 |
 | `src/index.html:120` | Intl.DisplayNames 引入于 Chrome 81，勉强在 83 之内，但语言数据（ICU）齐不齐要实测 | 3 | 中 | 需动态验证 |
 | `src/index.html:236` | CSS.escape 引入于 Chrome 46，83 必有（启动守卫也把它列进 REQUIRED） | 3 | 低 | 已有兜底 |
 | `src/index.html:278` | localStorage 在无痕 / 配额满 / 分区存储受限时抛错，写入必须自带 try…catch | 3 | 低 | 已有兜底 |
@@ -99,15 +99,9 @@
 | `src/services/attachments/imageSource.ts:387` | toBlob 的回调在部分 WebView 上会拿到 null 甚至不触发，静态判不出 | 3 | 中 | 需动态验证 |
 | `src/services/attachments/imageSource.ts:399` | Body.text/arrayBuffer 引入于 Chrome 76，83 必有 | 3 | 低 | 已有兜底 |
 | `src/services/attachments/imageSource.ts:545` | toBlob 的回调在部分 WebView 上会拿到 null 甚至不触发，静态判不出 | 3 | 中 | 需动态验证 |
-| `src/services/attachments/parsers/docx.ts:1118` | Body.text/arrayBuffer 引入于 Chrome 76，83 必有 | 3 | 低 | 已有兜底 |
-| `src/services/attachments/parsers/docx.ts:1157` | Body.text/arrayBuffer 引入于 Chrome 76，83 必有 | 3 | 低 | 已有兜底 |
-| `src/services/attachments/parsers/pdf.ts:280` | Body.text/arrayBuffer 引入于 Chrome 76，83 必有 | 3 | 低 | 已有兜底 |
-| `src/services/attachments/parsers/txt.ts:621` | Body.text/arrayBuffer 引入于 Chrome 76，83 必有 | 3 | 低 | 已有兜底 |
-| `src/services/attachments/sha256.ts:138` | Body.text/arrayBuffer 引入于 Chrome 76，83 必有 | 3 | 低 | 已有兜底 |
-| `src/services/attachments/sha256.ts:144` | Body.text/arrayBuffer 引入于 Chrome 76，83 必有 | 3 | 低 | 已有兜底 |
-| `src/services/auth/store.ts:118` | localStorage 在无痕 / 配额满 / 分区存储受限时抛错，写入必须自带 try…catch | 3 | 低 | 已有兜底 |
-| `src/services/auth/store.ts:127` | localStorage 在无痕 / 配额满 / 分区存储受限时抛错，写入必须自带 try…catch | 3 | 低 | 已有兜底 |
-| `src/services/auth/store.ts:129` | localStorage 在无痕 / 配额满 / 分区存储受限时抛错，写入必须自带 try…catch | 3 | 低 | 已有兜底 |
+| `src/services/auth/store.ts:134` | localStorage 在无痕 / 配额满 / 分区存储受限时抛错，写入必须自带 try…catch | 3 | 低 | 已有兜底 |
+| `src/services/auth/store.ts:143` | localStorage 在无痕 / 配额满 / 分区存储受限时抛错，写入必须自带 try…catch | 3 | 低 | 已有兜底 |
+| `src/services/auth/store.ts:145` | localStorage 在无痕 / 配额满 / 分区存储受限时抛错，写入必须自带 try…catch | 3 | 低 | 已有兜底 |
 | `src/services/chat/appAssets.ts:14` | createImageBitmap 引入于 Chrome 50，83 必有 | 3 | 低 | 已有兜底 |
 | `src/services/chat/appAssets.ts:16` | createImageBitmap 引入于 Chrome 50，83 必有 | 3 | 低 | 已有兜底 |
 | `src/services/chat/appAssets.ts:22` | URL.createObjectURL 引入于 Chrome 8，83 必有 | 3 | 低 | 已有兜底 |
@@ -118,21 +112,20 @@
 | `src/services/chat/autoTitle.ts:307` | AbortController 引入于 Chrome 66，83 必有（启动守卫也把它列进 REQUIRED） | 3 | 低 | 已有兜底 |
 | `src/services/chat/background.ts:19` | URL.revokeObjectURL 引入于 Chrome 8，83 必有 | 3 | 低 | 已有兜底 |
 | `src/services/chat/background.ts:23` | URL.createObjectURL 引入于 Chrome 8，83 必有 | 3 | 低 | 已有兜底 |
+| `src/services/chat/db.ts:265` | 配额溢出只能靠捕获 QuotaExceededError 区分「满了」和「不可用」 | 3 | 低 | 已有兜底 |
 | `src/services/chat/drafts.ts:229` | URL.createObjectURL 引入于 Chrome 8，83 必有 | 3 | 低 | 已有兜底 |
 | `src/services/chat/drafts.ts:300` | URL.revokeObjectURL 引入于 Chrome 8，83 必有 | 3 | 低 | 已有兜底 |
-| `src/services/chat/history/deepseekShare.ts:100` | @capacitor/core 随包发布，函数一定在；它回答的是「跑在壳里吗」不是「插件在吗」 | 3 | 低 | 已有兜底 |
-| `src/services/chat/history/deepseekShare.ts:116` | @capacitor/core 随包发布，函数一定在；它回答的是「跑在壳里吗」不是「插件在吗」 | 3 | 低 | 已有兜底 |
+| `src/services/chat/history/deepseekShare.ts:296` | @capacitor/core 随包发布，函数一定在；它回答的是「跑在壳里吗」不是「插件在吗」 | 3 | 低 | 已有兜底 |
+| `src/services/chat/history/deepseekShare.ts:312` | @capacitor/core 随包发布，函数一定在；它回答的是「跑在壳里吗」不是「插件在吗」 | 3 | 低 | 已有兜底 |
 | `src/services/chat/history/importArchive.ts:45` | Body.text/arrayBuffer 引入于 Chrome 76，83 必有 | 3 | 低 | 已有兜底 |
 | `src/services/chat/history/importArchive.ts:146` | Body.text/arrayBuffer 引入于 Chrome 76，83 必有 | 3 | 低 | 已有兜底 |
 | `src/services/chat/history/importFailure.ts:147` | navigator.onLine 是「有没有网卡」不是「能不能连上」，只能当弱信号用 | 3 | 低 | 已有兜底 |
 | `src/services/chat/history/urlImport.ts:208` | @capacitor/core 随包发布，函数一定在；它回答的是「跑在壳里吗」不是「插件在吗」 | 3 | 低 | 已有兜底 |
 | `src/services/chat/history/urlImport.ts:1289` | @capacitor/core 随包发布，函数一定在；它回答的是「跑在壳里吗」不是「插件在吗」 | 3 | 低 | 已有兜底 |
-| `src/services/chat/history/zipReader.ts:52` | Body.text/arrayBuffer 引入于 Chrome 76，83 必有 | 3 | 低 | 已有兜底 |
-| `src/services/chat/history/zipReader.ts:70` | Body.text/arrayBuffer 引入于 Chrome 76，83 必有 | 3 | 低 | 已有兜底 |
 | `src/services/chat/history/zipWriter.ts:142` | blob.stream() 引入于 Chrome 76，83 必有 | 3 | 低 | 已有兜底 |
 | `src/services/chat/history/zipWriter.ts:142` | ReadableStream.getReader 引入于 Chrome 43，83 必有；真正要防的是 body 为 null | 3 | 低 | 已有兜底 |
-| `src/services/chat/store.ts:1921` | AbortController 引入于 Chrome 66，83 必有（启动守卫也把它列进 REQUIRED） | 3 | 低 | 已有兜底 |
-| `src/services/chat/store.ts:2034` | AbortController 引入于 Chrome 66，83 必有（启动守卫也把它列进 REQUIRED） | 3 | 低 | 已有兜底 |
+| `src/services/chat/store.ts:2188` | AbortController 引入于 Chrome 66，83 必有（启动守卫也把它列进 REQUIRED） | 3 | 低 | 已有兜底 |
+| `src/services/chat/store.ts:2301` | AbortController 引入于 Chrome 66，83 必有（启动守卫也把它列进 REQUIRED） | 3 | 低 | 已有兜底 |
 | `src/services/consume/http.ts:244` | AbortController 引入于 Chrome 66，83 必有（启动守卫也把它列进 REQUIRED） | 3 | 低 | 已有兜底 |
 | `src/services/consume/http.ts:258` | Body.text/arrayBuffer 引入于 Chrome 76，83 必有 | 3 | 低 | 已有兜底 |
 | `src/services/consume/http.ts:274` | @capacitor/core 随包发布，函数一定在；它回答的是「跑在壳里吗」不是「插件在吗」 | 3 | 低 | 已有兜底 |
@@ -146,14 +139,14 @@
 | `src/services/diagnostics/collector.ts:504` | registerPlugin 一定返回代理对象，但原生侧没注册时调用只会 reject；插件在不在要探测 | 3 | 低 | 已有兜底 |
 | `src/services/diagnostics/collector.ts:564` | localStorage 在无痕 / 配额满 / 分区存储受限时抛错，写入必须自带 try…catch | 3 | 低 | 已有兜底 |
 | `src/services/diagnostics/collector.ts:570` | localStorage 在无痕 / 配额满 / 分区存储受限时抛错，写入必须自带 try…catch | 3 | 低 | 已有兜底 |
-| `src/services/diagnostics/collector.ts:937` | Body.text/arrayBuffer 引入于 Chrome 76，83 必有 | 3 | 低 | 已有兜底 |
-| `src/services/diagnostics/collector.ts:937` | fetch 响应体 clone | 3 | 中 | 需探测 |
-| `src/services/diagnostics/collector.ts:997` | 依赖 fetch 是本尊：页面把 window.fetch 换成包装后，任何「原生 fetch」假设（bind、clone、body 流）都不再成立 | 3 | 高 | 需探测 |
-| `src/services/diagnostics/collector.ts:999` | 依赖 fetch 是本尊：页面把 window.fetch 换成包装后，任何「原生 fetch」假设（bind、clone、body 流）都不再成立 | 3 | 高 | 需探测 |
-| `src/services/diagnostics/collector.ts:1146` | 依赖 fetch 是本尊：页面把 window.fetch 换成包装后，任何「原生 fetch」假设（bind、clone、body 流）都不再成立 | 3 | 高 | 需探测 |
-| `src/services/diagnostics/collector.ts:1479` | localStorage 在无痕 / 配额满 / 分区存储受限时抛错，写入必须自带 try…catch | 3 | 低 | 已有兜底 |
-| `src/services/diagnostics/collector.ts:1489` | localStorage 在无痕 / 配额满 / 分区存储受限时抛错，写入必须自带 try…catch | 3 | 低 | 已有兜底 |
-| `src/services/diagnostics/collector.ts:1509` | registerPlugin 一定返回代理对象，但原生侧没注册时调用只会 reject；插件在不在要探测 | 3 | 中 | 需动态验证 |
+| `src/services/diagnostics/collector.ts:996` | Body.text/arrayBuffer 引入于 Chrome 76，83 必有 | 3 | 低 | 已有兜底 |
+| `src/services/diagnostics/collector.ts:996` | fetch 响应体 clone | 3 | 中 | 需探测 |
+| `src/services/diagnostics/collector.ts:1056` | 依赖 fetch 是本尊：页面把 window.fetch 换成包装后，任何「原生 fetch」假设（bind、clone、body 流）都不再成立 | 3 | 高 | 需探测 |
+| `src/services/diagnostics/collector.ts:1058` | 依赖 fetch 是本尊：页面把 window.fetch 换成包装后，任何「原生 fetch」假设（bind、clone、body 流）都不再成立 | 3 | 高 | 需探测 |
+| `src/services/diagnostics/collector.ts:1205` | 依赖 fetch 是本尊：页面把 window.fetch 换成包装后，任何「原生 fetch」假设（bind、clone、body 流）都不再成立 | 3 | 高 | 需探测 |
+| `src/services/diagnostics/collector.ts:1538` | localStorage 在无痕 / 配额满 / 分区存储受限时抛错，写入必须自带 try…catch | 3 | 低 | 已有兜底 |
+| `src/services/diagnostics/collector.ts:1548` | localStorage 在无痕 / 配额满 / 分区存储受限时抛错，写入必须自带 try…catch | 3 | 低 | 已有兜底 |
+| `src/services/diagnostics/collector.ts:1568` | registerPlugin 一定返回代理对象，但原生侧没注册时调用只会 reject；插件在不在要探测 | 3 | 中 | 需动态验证 |
 | `src/services/diagnostics/transport.http.ts:60` | toDataURL 引入于 Chrome 2，83 必有 | 3 | 低 | 已有兜底 |
 | `src/services/diagnostics/transport.http.ts:66` | FileReader 引入于 Chrome 6，83 必有 | 3 | 低 | 已有兜底 |
 | `src/services/diagnostics/transport.http.ts:283` | @capacitor/core 随包发布，函数一定在；它回答的是「跑在壳里吗」不是「插件在吗」 | 3 | 低 | 已有兜底 |
@@ -196,6 +189,8 @@
 | `src/utils/capabilities.ts:256` | 依赖 fetch 是本尊：页面把 window.fetch 换成包装后，任何「原生 fetch」假设（bind、clone、body 流）都不再成立 | 3 | 高 | 需探测 |
 | `src/utils/clipboard.ts:7` | navigator.clipboard 非安全上下文下整体为 undefined（局域网 http 打开就不是安全上下文） | 3 | 低 | 已有兜底 |
 | `src/utils/clipboard.ts:8` | navigator.clipboard 非安全上下文下整体为 undefined（局域网 http 打开就不是安全上下文） | 3 | 低 | 已有兜底 |
+| `src/utils/readBlob.ts:4` | Body.text/arrayBuffer 引入于 Chrome 76，83 必有 | 3 | 低 | 已有兜底 |
+| `src/utils/readBlob.ts:7` | FileReader 引入于 Chrome 6，83 必有 | 3 | 低 | 已有兜底 |
 | `src/utils/usePresence.ts:19` | matchMedia 引入于 Chrome 9，83 必有 | 3 | 低 | 已有兜底 |
 
 ## 高危结论：依赖 fetch 是本尊
@@ -238,7 +233,7 @@
 
 - `Intl.DisplayNames`（2 处：`src/index.html:120`、`src/services/diagnostics/capabilityTruth.ts:80`）：Chrome 81 才有，落在 83 之内，但语言数据（ICU）齐不齐要看具体机型；`src/index.html` 启动守卫已把它列进 `REQUIRED`，探不到会画提示页。
   **口径留痕**：`src/index.html:120` 那一行是**注释**（注释里写着「不检查 Intl.DisplayNames」），扫描器只做字面量匹配，注释行也算命中——为保住「0 命中就是真的 0 命中」，这条不一致不改规则，在这里写明。
-- `Capacitor.registerPlugin`（6 处：`src/services/appUpdate.ts:40`、`src/services/diagnostics/collector.ts:504`、`src/services/diagnostics/collector.ts:1509`、`src/services/exportText.ts:19`、`src/services/invite/fingerprint.ts:232`、`src/components/settings/AppUpdateField.tsx:103` 的 `registerPlugin('Browser')`）：`registerPlugin` 永远返回代理对象，插件没注册时只会在调用时 reject。**全仓 `isPluginAvailable` 命中数为 0**，也就是没有任何一处正面探测「原生侧到底注册没注册」。已人工核对：`android/app/src/main/java/com/example/deepseekchat/MainActivity.java:49-52` 注册了 4 个插件，Java 侧 `@PluginMethod` 名字与 JS 调用一一对应，**没有名字对不上的情况**；所有调用点也都有 `try…catch` 降级。但「插件注册失败 / 被裁剪 / 旧版本 APK 没有这个插件」这条路径仍无正面探测。本轮 #243 新增的 `DeviceFingerprint`（`invite/fingerprint.ts` 的 `registerPlugin`）也计入这几处；`CheckoutBrowser`（原 `ours/transport.ts:37`，`/buy` 收银台的原生桥）已随 #331 的旧支付链路停用一起删除，那条 `需动态验证` 命中不再存在。
+- `Capacitor.registerPlugin`（6 处：`src/services/appUpdate.ts:42`、`src/services/diagnostics/collector.ts:504`、`src/services/diagnostics/collector.ts:1568`、`src/services/exportText.ts:19`、`src/services/invite/fingerprint.ts:232`、`src/components/settings/AppUpdateField.tsx:111` 的 `registerPlugin('Browser')`）：`registerPlugin` 永远返回代理对象，插件没注册时只会在调用时 reject。`isPluginAvailable` 全仓只有 2 处（`src/utils/capabilities.ts:218` / `:223` 的 `hasPlugin()`，`#212` 的统一探测口），也就是说**没有一处**把 `registerPlugin` 的注册结果做成正面探测——`hasPlugin()` 回答的是「这个插件能不能用」，不是「刚才那次注册成功了没有」。已人工核对：`android/app/src/main/java/com/example/deepseekchat/MainActivity.java:49-52` 注册了 4 个插件，Java 侧 `@PluginMethod` 名字与 JS 调用一一对应，**没有名字对不上的情况**；所有调用点也都有 `try…catch` 降级。但「插件注册失败 / 被裁剪 / 旧版本 APK 没有这个插件」这条路径仍无正面探测。本轮 #243 新增的 `DeviceFingerprint`（`invite/fingerprint.ts` 的 `registerPlugin`）也计入这几处；`CheckoutBrowser`（原 `ours/transport.ts:37`，`/buy` 收银台的原生桥）已随 #331 的旧支付链路停用一起删除，那条 `需动态验证` 命中不再存在。
 - `canvas.toBlob`（1 处：`src/services/chat/appAssets.ts:60`）：回调可能拿到 `null`，个别 WebView 上不触发。
 - `new AudioContext({ sampleRate })`（1 处：`src/services/speech/readAloud.ts:92`）：采样率选项与自动播放策略在真机上表现不一致。
 - `visualViewport`：API 在（Chrome 61），键盘弹出后的 `resize` / `scroll` 时序与去抖仍需真机确认（这一条是人工补记，扫描器的结论本来就在 `已有兜底` 里）。
@@ -253,7 +248,6 @@
 | --- | --- |
 | `navigator.share` / `canShare`（Web Share） | 未使用，分享走系统剪贴板 |
 | `Notification` | 未使用（推送走原生插件） |
-| `QuotaExceededError` | 未使用——见下：`localStorage` 写入全带 `try…catch`，但**没有一处**区分「配额满了」和「存储不可用」 |
 | `AbortSignal.timeout` / `AbortSignal.any` | 未使用，超时自己 `setTimeout` + `abort()` |
 | `TransformStream` | 未使用 |
 | `CompressionStream` | 未使用 |
@@ -264,14 +258,14 @@
 
 **本轮复算推翻了上一版的一条结论**：上一版把 `Capacitor.isPluginAvailable` 记进这张 0 命中清单，写「插件存在性没有任何正面探测」。复算现在有 **2 处命中**（`src/utils/capabilities.ts:218` 的 `typeof capacitor.isPluginAvailable !== 'function'` 记为 `无风险`、`:223` 的调用点记为 `已有兜底`）——`#212` 统一探测口时补上的。所以它从 0 命中清单里挪走了，见「各能力命中数」表。
 
-剩下这条仍然是坏消息：`QuotaExceededError` 0 命中意味着 `localStorage` 写入虽然全带 `try…catch`，但**没有一处**区分「配额满了」和「存储不可用」，配额满时用户看到的现象与隐私模式一致。
+**本轮复算还把 `QuotaExceededError` 挪出了这张清单**：`src/services/chat/db.ts:265` 的 `classifyStorageFailure` 用 `case 'QuotaExceededError':`（连同 Firefox 的 `NS_ERROR_DOM_QUOTA_REACHED`，`:266`）把写失败分成 `quota` / `clone` / `unavailable` / `unknown` 四档 —— 配额满与存储不可用从此是两条不同的用户文案与处置（配额档会先清孤儿 blob 再重写，见 `reclaimQuotaSpace`）。上一版写的「没有一处区分『配额满了』和『存储不可用』」随存储链路改造失效，本表跟着改。`QuotaExceededError` 是**异常名**而不是 API（Chrome 83 一样会抛），所以扫描器记 `无风险`，见「各能力命中数」表。
 
 ## 各能力命中数
 
 | 能力 | 命中 | 已有兜底 | 无风险 | 真实漏洞 | 需动态验证 |
 | --- | --- | --- | --- | --- | --- |
-| `Body.text/arrayBuffer` | 27 | 13 | 14 | 0 | 0 |
 | `localStorage` | 24 | 22 | 2 | 0 | 0 |
+| `Body.text/arrayBuffer` | 20 | 12 | 8 | 0 | 0 |
 | `AbortController` | 19 | 19 | 0 | 0 | 0 |
 | `Capacitor.isNativePlatform` | 15 | 2 | 13 | 0 | 0 |
 | `URL.revokeObjectURL` | 8 | 2 | 6 | 0 | 0 |
@@ -283,6 +277,7 @@
 | `Intl.DisplayNames` | 4 | 2 | 0 | 0 | 2 |
 | `fetch 页面级拦截` | 4 | 0 | 0 | 4 | 0 |
 | `navigator.clipboard` | 4 | 3 | 1 | 0 | 0 |
+| `FileReader` | 3 | 0 | 3 | 0 | 0 |
 | `ReadableStream.getReader` | 3 | 2 | 1 | 0 | 0 |
 | `canvas.toBlob` | 3 | 0 | 0 | 0 | 3 |
 | `navigator.onLine` | 3 | 3 | 0 | 0 | 0 |
@@ -290,13 +285,13 @@
 | `AudioContext` | 2 | 1 | 0 | 0 | 1 |
 | `CSS.escape` | 2 | 2 | 0 | 0 | 0 |
 | `Capacitor.isPluginAvailable` | 2 | 1 | 1 | 0 | 0 |
-| `FileReader` | 2 | 0 | 2 | 0 | 0 |
 | `createImageBitmap` | 2 | 2 | 0 | 0 | 0 |
 | `Blob.prototype.stream` | 1 | 0 | 1 | 0 | 0 |
+| `QuotaExceededError` | 1 | 0 | 1 | 0 | 0 |
 | `canvas.toDataURL` | 1 | 0 | 1 | 0 | 0 |
 | `fetch 响应体 clone` | 1 | 0 | 0 | 1 | 0 |
 
-**总计 157 条命中**（`已有兜底` 87 / `无风险` 54 / `真实漏洞` 5 / `需动态验证` 11）；风险分布：高 4、中 12、低 141。
+**总计 152 条命中**（`已有兜底` 86 / `无风险` 50 / `真实漏洞` 5 / `需动态验证` 11）；风险分布：高 4、中 12、低 136。
 
 ## 未覆盖的边界
 
@@ -304,11 +299,12 @@
 2. **`src/polyfills/legacy.ts` 的 11 个 polyfill 不在本表**：那是类别 1（JS 语言能力），有独立门禁 `pnpm run check:legacy`。
 3. **CSS 能力（flex gap 等）不在本表**：类别 2，有独立门禁 `pnpm run check:gap`。
 4. **安全上下文没实测**：`navigator.clipboard` 只在 `http://localhost` / https 下存在，局域网 http 打开时整段为 `undefined`；代码里有 `?.` + `execCommand` 兜底，但 `execCommand` 这条路径没在真机上验过。
-5. **存储配额没实测**：见上一节 `QuotaExceededError`。
+5. **存储配额没实测**：`QuotaExceededError` 现在有 1 处命中（`src/services/chat/db.ts:265` 的写失败分级），但「配额真的满了会怎样」没有任何真机 / 模拟器证据；`navigator.storage.estimate()`（`db.ts` 的 `estimateStorage`）在 WebView 上报的真实配额与 `usage` 也没实测。
 7. **注释行也算命中**：`src/index.html:17` 是注释里的 `Intl.DisplayNames` 字样，扫描器按字面量匹配，注释行照记（见「需动态验证」）。
 6. **没有跑任何设备 / 模拟器**：所有「必然存在」结论都是按 Chromium 版本号推的（`chrome ≤ 83`），不是实测。
 
 ## 复核记录
+- 复核（2026-11-25，基准 `77720a32`，单元 `gate/last2`）：**整表由生成器重写**（`node scripts/gen-capabilities-docs.mjs`）：扫描范围 337 → **342** 个 `.ts/.tsx/.html`、命中 157 → **152 条**（`已有兜底` 86 / `无风险` 50 / `真实漏洞` 5 / `需动态验证` 11；风险 高 4 / 中 12 / 低 136），明细表 **25 条**旧 `文件:行` 指不到实时命中、已按复算重锚（`attachments/parsers/*`、`history/zipReader.ts` 等条目随文件重排/删除消失，不是漏了）。**`QuotaExceededError` 从「0 命中清单」挪进「各能力命中数」**：`src/services/chat/db.ts:265` 的 `classifyStorageFailure` 用 `case 'QuotaExceededError'`（连同 `NS_ERROR_DOM_QUOTA_REACHED`）把写失败分成 `quota` / `clone` / `unavailable` / `unknown` 四档，上一版「没有一处区分『配额满了』和『存储不可用』」的结论随之失效；「未覆盖的边界」第 5 条改成「配额真的满了会怎样仍然没实测」。
 
 - 复核（2026-11-21 11:56，基准 `171f02f`，本单 #679）：新增 `src/services/consume/confirmEffect.ts` 1 个 `.ts`，扫描范围 277 → **278** 个源文件（`.ts` 206 → **207**）。新文件不碰 `window` / `document` / `navigator` / 原生桥（只做 `Promise` 与纯函数判定），**命中数与风险分布未变**（143 条 / 高 4 / 中 12 / 低 127），明细表未动。
 - 复核（2026-11-20 18:55，基准 `ffb305f`，本单 #542）：**第一次由生成器写盘**（`node scripts/gen-capabilities-docs.mjs`），不再手抄数字。命中总数 128 → **130 条**（`无风险` 39 → **41**，`已有兜底` 75 / `真实漏洞` 5 / `需动态验证` 9 不变）；风险分布 低 114 → **116**（高 4 / 中 10 不变）。各能力表：`Body.text/arrayBuffer` 16 → **17**、`Capacitor.isNativePlatform` 11 → **12**。明细表整表重写：127 行 → **130 行**，其中 **42 处旧 `文件:行` 已指不到实时命中**（漂移），另 10 行过去只写文件名 / 函数名、没有行号，现在一律带 `文件:行`；人的现场说明（`#104` / `#412` / `#434` / `#498` 等）按「同文件同能力、行数未变就沿用原文」保留。

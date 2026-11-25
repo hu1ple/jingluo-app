@@ -30,7 +30,8 @@
  * - host.md：扫描范围文件数、`总计 … 条命中` 的 verdict / 风险分布、**整张明细表**（`文件:行` 从这里来）、
  *   各能力命中数表、「0 命中清单」之外的第二个总计行；
  * - api.md：扫描范围、§一 合计表、类别 1 命中总数句、§二 标题处数、§二 明细表的 `文件:行`（按文件内
- *   出现顺序重锚）、§三 每行的命中 / 涉及文件数；
+ *   出现顺序重锚）、§三 每行的命中 / 涉及文件数，**以及整表的行集合**（实时复算多出一个 API 时补行、
+ *   并按命中数降序重排 —— 六列都是算出来的，没有人的判断，见 genApi 里的注释）；
  * - css.md：§0 扫描范围 / 口径拆分 / 命中总数、§1 逐特性表的命中与分类列 + 合计行；
  * - 四份文档的 `快照基准：<sha>`（同一个 commit，改动 sha 时顺带刷新 `采集时间`）。
  *
@@ -442,27 +443,62 @@ const genApi = (doc) => {
   const anchored = reanchorApiRows(lines)
   changes.push(...anchored.changes)
 
-  // §三 按 API 汇总：命中 / 涉及文件
+  // §三 按 API 汇总：命中 / 涉及文件，**并且补齐漏掉的 API 行**
+  //
+  // 以前这里只改「文档里已有的行」的计数：实时复算多出一个 API（例如 `structuredClone` 因为
+  // `src/services/chat/db.ts` 新增了一处能力探测而进入类别 1）时，脚本一个字都不说，
+  // 于是表格看起来「一致」，实际上整行缺席 —— `capabilities-docs-sync.test.mjs` 的「漏记了这些 API」
+  // 断言才是唯一会红的地方。§三 的六列（API / 首次支持 / 命中 / 涉及文件 / 判定 / 已兜底）
+  // 全部由 `scripts/lib/apiAssumptionAudit.mjs` 算出来，没有一格是人的判断，所以这里直接补行。
   const header = findLine(
     lines,
     (l) => l.startsWith('|') && l.includes('首次支持') && l.includes('命中'),
     'api.md §三 表',
   )
-  for (let i = header + 2; i < lines.length && lines[i].startsWith('|'); i += 1) {
+  let tableEnd = header + 2
+  while (tableEnd < lines.length && lines[tableEnd].startsWith('|')) tableEnd += 1
+
+  const documented = new Set()
+  const tableRows = []
+  for (let i = header + 2; i < tableEnd; i += 1) {
     const row = splitRow(lines[i])
-    const known = apiLabels(plain(row.cells[0]))
-    if (known.length === 0) continue
-    const count = known.reduce((sum, bucket) => sum + bucket.count, 0)
-    const files = new Set(known.flatMap((bucket) => bucket.files))
-    const next2 = cell(String(count))
-    const next3 = cell(String(files.size))
-    if (row.cells[2] !== next2 || row.cells[3] !== next3) {
-      changes.push({ before: `${plain(row.cells[0])}：${row.cells[2].trim()}/${row.cells[3].trim()}`, after: `${count}/${files.size}` })
-      row.cells[2] = next2
-      row.cells[3] = next3
-      lines[i] = joinRow(row)
+    const label = plain(row.cells[0])
+    const known = apiLabels(label)
+    let count = 0
+    if (known.length > 0) {
+      for (const bucket of known) documented.add(bucket.api)
+      count = known.reduce((sum, bucket) => sum + bucket.count, 0)
+      const fileCount = new Set(known.flatMap((bucket) => bucket.files)).size
+      const next2 = cell(String(count))
+      const next3 = cell(String(fileCount))
+      if (row.cells[2] !== next2 || row.cells[3] !== next3) {
+        changes.push({ before: `${label}：${row.cells[2].trim()}/${row.cells[3].trim()}`, after: `${count}/${fileCount}` })
+        row.cells[2] = next2
+        row.cells[3] = next3
+      }
     }
+    // 单元格一律按 `| a | b |` 归一（历史行里出现过手写空格不齐），顺带把改过的计数写回去
+    tableRows.push({ label, count, line: joinRow({ lead: '', cells: row.cells.map((text) => cell(text.trim())), tail: '' }) })
   }
+
+  // 实时复算里有、表里没有的 API：补一行（六列都是算出来的）
+  const added = []
+  for (const bucket of API.byApi) {
+    if (documented.has(bucket.api)) continue
+    added.push({
+      label: bucket.api,
+      count: bucket.count,
+      line: `|${cell(`\`${bucket.api}\``)}|${cell(String(bucket.firstSupported))}|${cell(String(bucket.count))}|${cell(String(bucket.files.length))}|${cell(`\`${bucket.verdict}\``)}|${cell(bucket.covered ? '是' : '否')}|`,
+    })
+    changes.push({ before: '（缺行）', after: `${bucket.api}：${bucket.count}/${bucket.files.length}` })
+  }
+
+  // 与 `summarize()` 同一口径排序（命中数降序，同数按 API 名升序），补完行再整表写回 ——
+  // 写回是无条件的：只改动计数、不补行的那些轮次同样要落盘。
+  const sorted = [...tableRows, ...added].sort((a, b) =>
+    b.count === a.count ? a.label.localeCompare(b.label) : b.count - a.count,
+  )
+  lines.splice(header + 2, tableRows.length, ...sorted.map((row) => row.line))
 
   return changes.filter(Boolean)
 }

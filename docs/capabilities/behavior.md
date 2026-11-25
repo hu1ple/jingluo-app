@@ -8,7 +8,7 @@
 （主战场），宽度 360 / 390 / 412 三档。复现脚本与原始读数在
 [`docs/ui/209-behavior/`](../ui/209-behavior/README.md)。
 
-> - 快照基准：`376b123`（`origin/main` tip，2026-11-21 16:33:41 +0800）· 采集时间：2026-11-21 16:45 (+0800)
+> - 快照基准：`77720a32`（`origin/main` tip，2026-11-25 21:57:52 +0800）· 采集时间：2026-11-25 23:54 (+0800)
 > - 本轮只重打基准：四条假设的实测读数来自已提交的 `docs/ui/209-behavior/*.json`，本轮没有设备可重跑，数字一个没动（见文末「未测边界」）
 > - 表里的**行号**与**合计数字**都在快照基准上复算过；`tests/unit/capabilities-docs-sync.test.mjs` 会拿本表的行数 / 处置分布 / 风险分布去对，文档落后于代码就红
 > - 判定规则只在 `scripts/lib/behaviorAssumptionAudit.mjs`；改口径要同时改那个模块与 `tests/unit/behavior-assumption-audit.test.mjs`
@@ -18,7 +18,7 @@
 | 文件:行 | 假设内容 | 类别 | 风险(高/中/低) | 处置(已有兜底/需探测/需动态验证/拆单) |
 | --- | --- | --- | --- | --- |
 | `src/components/base/Modal.module.css:128` `.footer` 只有 `display:flex` + `justify-content:flex-end` + `gap:8px`，无 `flex-wrap`、无移动端 `white-space` 放宽 | 窄屏按钮会换行 | 4 | 中 | 需动态验证 |
-| `src/components/settings/Settings.module.css:787` `.deleteActions` 有 `flex-wrap: wrap`；`:795` 移动端再给 `white-space:normal; overflow-wrap:anywhere; max-width:100%` | 窄屏按钮会换行 | 4 | 低 | 已有兜底 |
+| `src/components/settings/Settings.module.css:1211` `.deleteActions` 有 `flex-wrap: wrap`；`:1219` 起的 `@media not all and (min-width: 768px)` 里再给 `white-space:normal; overflow-wrap:anywhere; max-width:100%` | 窄屏按钮会换行 | 4 | 低 | 已有兜底 |
 | `src/components/settings/AppUpdateField.module.css:21` 卡片上限 `min(70vh, calc(var(--modal-viewport-height, 100vh) - 32px))`；`:33` 矮屏（含 360×740）再降到 `62vh` | 弹窗内容超出会滚动 | 4 | 低 | 已有兜底 |
 | `src/components/settings/AppUpdateField.module.css:54` `.main { overflow-y: auto }` + `:52` `min-height: 0` + `:57` `touch-action: pan-y` | 弹窗内容超出会滚动 | 4 | 低 | 已有兜底 |
 | `src/components/settings/Settings.module.css:69` `.content`（`flex:1 0 0`、`min-height:0`、`:77` `overflow-y:auto`）是实测滚动宿主；`:818` 卡片给 `max-height: calc(var(--modal-viewport-height, 100vh) - 32px)` | 弹窗内容超出会滚动 | 4 | 低 | 已有兜底 |

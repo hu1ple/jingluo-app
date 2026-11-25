@@ -82,6 +82,27 @@
  * `cross-runner` → **必须改成等终态（until 轮询），不允许加 sleep 把窗口撑开**。所以 cross-runner
  * 条目**不进 quarantine**（隔离=跳过=不再产生证据，等于把这条 flake 从视野里删掉），
  * 也不会被「跑绿」自动销账（红的那台机器这轮可能根本没跑）。
+ *
+ * ---- 写入口径：**普通跑测试不许写这张表** ----
+ *
+ * 这张表是**豁免/处置清单**，不是日志。它一旦在「没人做决定」的情况下被自动改写，两件事同时坏掉：
+ *
+ *   1. **它污染「改了哪些文件」**：`tests/flaky-registry.json` 是 git 跟踪的，跑一次 `pnpm test`
+ *      就多一处 `M`，而本地入口（`pnpm dev-check`）正是用 `git status --untracked-files=all` 算
+ *      「你改了哪些文件」再据此判断「这条红是不是你造成的」—— 归因从此不可信，而「红可归因」是
+ *      这套门禁的地基；
+ *   2. **它让豁免不需要人做决定**：`reason` 由 runner 自己拼成「红：<runner> / 绿：<runner>」，
+ *      这不是「判定」，是「记录自己刚看见了什么」。于是「豁免必须带 reason / evidence / followUp /
+ *      到期日，且必须是一次决定」这条纪律被从后门废掉。
+ *
+ * 所以：**默认只读**。本轮观察到的抖动写进不跟踪的临时位置（`buildObservation()` 产出的
+ * 「观察记录」，形状见下），要落进仓库必须显式 `--record-flaky` + 人填 `--reason` / `--follow-up`
+ * （校验在 `validateHumanRegistration()`，缺一条就拒绝写入）。
+ *
+ * 观察记录（`{ kind: "flaky-observation" }`）与登记簿是**两份东西**：
+ *   · 登记簿 = 决定（`kind: same-runner | cross-runner`，带 reason / followUp，会绕过/隔离用例）；
+ *   · 观察记录 = 证据（`observed.flaky[]` / `observed.crossRunner[]` + `wouldRecord`），**不放行任何文件**，
+ *     只是把「刚才看见了什么」和「要登记该跑哪条命令」摆到人面前。
  */
 
 /** 默认策略：与 docs/TESTING-POLICY.md 第 10 节一致 */
@@ -116,7 +137,7 @@ export const KIND_TEXT = Object.freeze({
 
 /** 登记簿自带的说明（落盘时保留，避免每次跑测试把文件头注释洗掉） */
 export const REGISTRY_NOTE =
-  'Flaky 登记簿（Issue #406 / #456）。两类条目：kind="same-runner"（同 runner 上「失败→重跑通过」）由 tests/run-layer.mjs 自动登记；kind="cross-runner"（同 commit + 同用例 + 结果不同 + runner 不同）由跨 runner 运行记录聚合后登记，处置红线是「改成等终态，禁止加 sleep」。另有一类 infraSignatures（#611）：按**签名**登记「runner 自己崩了」（node --test 的 IPC 反序列化失败），不放行任何文件 —— 命中只触发「判 INFRA + 单文件重跑一次」，重跑仍是同一签名依旧判红。形状与判据见 scripts/flaky-registry.mjs 文件头与 docs/TESTING-POLICY.md 第 11 节。'
+  'Flaky 登记簿（Issue #406 / #456）——**豁免/处置清单，不是日志**：普通跑测试只读，本轮观察到的抖动写在不跟踪的观察记录里（OS 临时目录，--registry-out 可改）；要落进这张表必须显式 --record-flaky 并给出人写的 --reason 与 --follow-up（脚本会拒绝自动拼装的「红：…/绿：…」）。两类条目：kind="same-runner"（同 runner 上「失败→重跑通过」）、kind="cross-runner"（同 commit + 同用例 + 结果不同 + runner 不同），后者处置红线是「改成等终态，禁止加 sleep」。另有一类 infraSignatures（#611）：按**签名**登记「runner 自己崩了」（node --test 的 IPC 反序列化失败），不放行任何文件 —— 命中只触发「判 INFRA + 单文件重跑一次」，重跑仍是同一签名依旧判红。形状与写入口径见 scripts/flaky-registry.mjs 文件头与 docs/TESTING-POLICY.md 第 11.1.1 节。'
 
 /** 空登记簿（第一次跑、文件缺失/损坏时的兜底：不因为登记簿坏了而阻断测试） */
 export const emptyRegistry = () => ({
@@ -212,9 +233,13 @@ export const normalizeRegistry = (raw) => {
       lastGreen: typeof value.lastGreen === 'string' ? value.lastGreen : null,
       lastRedAt: typeof value.lastRedAt === 'string' ? value.lastRedAt : null,
       ...(typeof value.reason === 'string' && value.reason ? { reason: value.reason } : {}),
+      // 写入口径（见文件头）：登记必须是一次**人的决定** —— `followUp` 是「谁在什么时候修」，
+      // `recordedAt` 是「哪天决定的」。老条目没有这两项也能读（不因为升级登记簿形状就红），
+      // 但它们缺席本身就是信号：这条是自动写进来的，不是决定。
+      ...(typeof value.followUp === 'string' && value.followUp ? { followUp: value.followUp } : {}),
+      ...(typeof value.recordedAt === 'string' && value.recordedAt ? { recordedAt: value.recordedAt } : {}),
       // 门禁优化第 7 条：quarantine 是豁免，必须带承接单与到期日。
       // 这里**必须透传**：run-layer 每轮都会 normalize + 落盘，不透传 = 人写的到期日在下次 flake 事件里被静默洗掉。
-      ...(typeof value.followUp === 'string' && value.followUp ? { followUp: value.followUp } : {}),
       ...(typeof value.reviewAfter === 'string' && value.reviewAfter ? { reviewAfter: value.reviewAfter } : {}),
     }
   }
@@ -276,7 +301,7 @@ export const recordRecurringRed = (registry, test, { today = dayOf(), at = stamp
  * #456：额外的 `runner`（`resolveRunnerIdentity()` 的返回值，或用 `id` 字符串）会写进 `runners[]`，
  * 并进 `evidence`（带上当时的结果）。判据本身没变 —— 这条路径记的是 `kind: "same-runner"`。
  */
-export const recordFlaky = (registry, test, { today = dayOf(), at = stampOf(), reason, runner, evidence } = {}) => {
+export const recordFlaky = (registry, test, { today = dayOf(), at = stampOf(), reason, followUp, runner, evidence } = {}) => {
   const policy = { ...DEFAULT_POLICY, ...(registry.policy ?? {}) }
   const entry = registry.tests[test] ?? {
     test,
@@ -303,6 +328,12 @@ export const recordFlaky = (registry, test, { today = dayOf(), at = stampOf(), r
   if (runnerId && !(entry.runners ?? []).includes(runnerId)) entry.runners = [...(entry.runners ?? []), runnerId].slice(-20)
   if (evidence) entry.evidence = [...(entry.evidence ?? []), evidence].slice(-12)
   if (reason) entry.reason = reason
+  // 写入口径（文件头）：`followUp` 只在**人显式登记**时出现，它是「谁在什么时候修」这句决定的一部分；
+  // 自动观察路径（run-layer 默认只读）不写这两个字段 —— 观察记录不是豁免。
+  if (followUp) {
+    entry.followUp = followUp
+    entry.recordedAt = at
+  }
   // 连续 N 次 flaky → quarantine（跳过但每周提醒）。日期只记第一次进隔离区的那天。
   // #456：cross-runner 条目**不**进隔离区 —— 隔离＝跳过＝不再产生证据，等于把这条 flake 从视野里删掉。
   if (entry.kind !== KINDS.crossRunner && entry.streak >= policy.quarantineAfter && !entry.quarantinedAt) {
@@ -328,6 +359,7 @@ export const recordCrossRunner = (registry, test, {
   evidence = [],
   commit,
   reason,
+  followUp,
 } = {}) => {
   const entry = registry.tests[test] ?? {
     test,
@@ -354,6 +386,10 @@ export const recordCrossRunner = (registry, test, {
   entry.quarantinedAt = null
   if (commit) entry.lastCrossRunnerCommit = commit
   if (reason) entry.reason = reason
+  if (followUp) {
+    entry.followUp = followUp
+    entry.recordedAt = at
+  }
   registry.tests[test] = entry
   return entry
 }
@@ -717,3 +753,104 @@ export const scanTimingWindows = (source = '') => {
   })
   return found
 }
+
+// ─────────────────── 写入口径：默认只读 + 「登记必须是一次人的决定」 ───────────────────
+
+/**
+ * 观察记录（**不跟踪**，写进 OS 临时目录）—— 与登记簿是两份东西：
+ *   · 登记簿（`tests/flaky-registry.json`）= 决定，带 `reason` / `followUp`，会参与隔离/豁免；
+ *   · 观察记录 = 证据，`observed` 里只是「本轮看见了什么」，`wouldRecord` 是「如果人决定登记，
+ *     条目会长这样」。**它不放行任何文件，也不参与任何判定**。
+ */
+export const OBSERVATION_KIND = 'flaky-observation'
+
+export const OBSERVATION_NOTE =
+  '这是 run-layer 的**观察记录**，不是豁免：默认模式下 tests/flaky-registry.json 只读，本轮观察到的抖动只写在这里。要真的登记（会参与隔离/放行判定）必须显式 --record-flaky 并给出人写的 --reason 与 --follow-up。'
+
+/**
+ * `reason` 是不是 runner 自己拼出来的「红：…/绿：…」。
+ *
+ * 为什么必须挡：那种字符串描述的是「我刚看见两次结果不同」，不是「我判定它该豁免、因为…」。
+ * 它由机器生成、不含处置、不含责任人 —— 写进登记簿就成了「豁免不需要人做决定」的后门。
+ * 这条判据宽松到只抓明显的自动拼装，不替人审措辞：真正的要求在 `validateHumanRegistration` 的长度与 followUp。
+ */
+export const looksAutoReason = (reason) => {
+  const text = String(reason ?? '').trim()
+  if (!text) return false
+  // 自动拼装的两副原样面孔：`红：<runner> / 绿：<runner>`、`红 <runner> / 绿 <runner>`
+  if (/^红\s*[:：]/.test(text) && /绿\s*[:：]/.test(text)) return true
+  // `红:/绿:` 出现在任意位置也算（自动拼装可能被别的前缀包一层，比如加个时间戳）
+  if (/红\s*[:：]\s*\S+\s*\/\s*绿\s*[:：]/.test(text)) return true
+  return false
+}
+
+/** 人写的理由/跟进最少多少字：太短的「flaky」「先跳过」等于没写 */
+export const MIN_REASON_LENGTH = 12
+export const MIN_FOLLOWUP_LENGTH = 8
+
+/**
+ * 显式登记的准入检查（`--record-flaky` 的守卫）。
+ *
+ * 三条必须同时满足，缺一条就**拒绝写入**（不是警告后照写）：
+ *   1. `reason` 是人写的（长度够 + 不是 `looksAutoReason` 的自动拼装）；
+ *   2. `followUp` 存在且够长 —— 「谁在什么时候修」是豁免会过期的那半个机制；
+ *   3. 两者都不能是占位符（`TODO` / `xxx` / `-`）。
+ *
+ * 返回 `{ ok, problems[] }`；调用方拿 problems 原文打给人看，不要自己再编措辞。
+ */
+export const validateHumanRegistration = ({ reason, followUp } = {}) => {
+  const problems = []
+  const why = String(reason ?? '').trim()
+  const next = String(followUp ?? '').trim()
+  const placeholder = (text) => /^(todo|tbd|fixme|xxx+|\.+|-+|n\/a|待补|待定)$/i.test(text)
+  if (!why) problems.push('缺 --reason：要写清「为什么这是抖动、不是真红」（至少一句话，人写的）')
+  else if (looksAutoReason(why)) problems.push(`--reason 是 runner 自动拼的「红：…/绿：…」，那不是决定（收到：${why.slice(0, 80)}）`)
+  else if (why.length < MIN_REASON_LENGTH) problems.push(`--reason 太短（${why.length} < ${MIN_REASON_LENGTH} 字）：这不是给人看的理由`)
+  else if (placeholder(why)) problems.push(`--reason 是占位符（${why}）`)
+  if (!next) problems.push('缺 --follow-up：要写清「谁在什么时候修」（豁免会过期，得有人接着）')
+  else if (next.length < MIN_FOLLOWUP_LENGTH) problems.push(`--follow-up 太短（${next.length} < ${MIN_FOLLOWUP_LENGTH} 字）：写清责任人与时间`)
+  else if (placeholder(next)) problems.push(`--follow-up 是占位符（${next}）`)
+  return { ok: problems.length === 0, problems }
+}
+
+/**
+ * 组装观察记录（纯函数，自证与 runner 共用）。
+ *
+ * `observed.flaky` / `observed.crossRunner` 是**本轮新看见**的（不是登记簿的全量）；
+ * `wouldRecord` 是「如果人决定登记，条目会长这样」—— 它让「登记该写什么」不用人再从终端日志里抄。
+ * `registerCommand` 是那条要人自己跑的命令：**把决定留给人的成本压到一行**，而不是替他跑。
+ */
+export const buildObservation = ({
+  mode = 'read-only',
+  layer = '',
+  runner = '',
+  commit = '',
+  generatedAt = stampOf(),
+  flaky = [],
+  crossRunner = [],
+  registerCommand = '',
+} = {}) => ({
+  schemaVersion: 1,
+  kind: OBSERVATION_KIND,
+  note: OBSERVATION_NOTE,
+  mode,
+  generatedAt,
+  layer,
+  runner,
+  commit,
+  observed: {
+    // 「本次观察到 N 次抖动」里的 N 只数**新看见**的：已知分叉照旧列出（`new: false`），
+    // 免得同一份证据每轮都当成新发现刷屏。
+    total: flaky.length + crossRunner.filter((item) => item.new !== false).length,
+    flaky,
+    crossRunner,
+  },
+  wouldRecord: {
+    kinds: { ...KIND_TEXT },
+    tests: Object.fromEntries([
+      ...flaky.map((item) => [item.test, item]),
+      ...crossRunner.filter((item) => item.new !== false).map((item) => [item.test, item]),
+    ]),
+  },
+  registerCommand,
+})

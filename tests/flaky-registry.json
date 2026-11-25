@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "note": "Flaky 登记簿（Issue #406 / #456）。两类条目：kind=\"same-runner\"（同 runner 上「失败→重跑通过」）由 tests/run-layer.mjs 自动登记；kind=\"cross-runner\"（同 commit + 同用例 + 结果不同 + runner 不同）由跨 runner 运行记录聚合后登记，处置红线是「改成等终态，禁止加 sleep」。形状与判据见 scripts/flaky-registry.mjs 文件头与 docs/TESTING-POLICY.md 第 11 节；另有一类 infraSignatures（#611）：按**签名**登记「runner 自己崩了」（IPC 反序列化失败），不放行任何文件，命中只触发 INFRA 判定 + 单文件重跑。",
+  "note": "Flaky 登记簿（Issue #406 / #456）——**豁免/处置清单，不是日志**：普通跑测试只读，本轮观察到的抖动写在不跟踪的观察记录里（OS 临时目录，--registry-out 可改）；要落进这张表必须显式 --record-flaky 并给出人写的 --reason 与 --follow-up（脚本会拒绝自动拼装的「红：…/绿：…」）。两类条目：kind=\"same-runner\"（同 runner 上「失败→重跑通过」）、kind=\"cross-runner\"（同 commit + 同用例 + 结果不同 + runner 不同），后者处置红线是「改成等终态，禁止加 sleep」。另有一类 infraSignatures（#611）：按**签名**登记「runner 自己崩了」（node --test 的 IPC 反序列化失败），不放行任何文件 —— 命中只触发「判 INFRA + 单文件重跑一次」，重跑仍是同一签名依旧判红。形状与写入口径见 scripts/flaky-registry.mjs 文件头与 docs/TESTING-POLICY.md 第 11.1.1 节。",
   "policy": {
     "quarantineAfter": 3,
     "recurrenceWindowDays": 21,

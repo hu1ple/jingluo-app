@@ -459,7 +459,7 @@ tsc 不读 `.gradle`、oxlint 只扫 `src`、单测不碰 Android、产物扫描
 | 环节 | 行为 | 证据出口 |
 | --- | --- | --- |
 | 失败用例 | 自动**重跑 1 次**（`--no-retry` 可关） | 终端 `↻ 红了…按 flaky 判据重跑一次` |
-| 重跑通过 | 标 `PASS(flaky)`，当绿放行，但**必须登记** | 终端 `FLAKY <文件>` / `--json` 的 `flaky` 字段 / job summary |
+| 重跑通过 | 标 `PASS(flaky)`，当绿放行，但**必须留痕**（默认只**观察**、不写仓库，见 11.1.1） | 终端 `FLAKY <文件>` / `--json` 的 `flaky` 字段 / job summary |
 | 重跑仍红 | 真红，照旧失败 | `--json` 的 `results[].ok=false` |
 | 连续 3 次 flaky | 进 **quarantine**：默认跳过该用例（`--include-quarantined` / `--case` 可强制跑） | 终端 `QUARANTINED`、job summary |
 | quarantine 期间 | **每 7 天**提醒一次修复（同一天只提醒一次） | 终端 `⏰ flaky 每周提醒` |
@@ -470,10 +470,46 @@ tsc 不读 `.gradle`、oxlint 只扫 `src`、单测不碰 Android、产物扫描
 | 每次 run | **三态**判定（真红 / flaky / runner-dependent）落到终态、`--json` 与 job summary | job summary 的「三态」表 |
 | 每次 run | 时序窗口**静态提示**（`waitForTimeout` / 固定 sleep / 依赖动画时长），警告级、不阻塞 | 终端 `⚠ 时序窗口静态提示` / `--json` 的 `timingWarnings` |
 
-登记簿：`tests/flaky-registry.json`，每条 `{ test, kind, firstSeen, count, lastSeen, runners[], evidence[] }`
+登记簿：`tests/flaky-registry.json`，每条 `{ test, kind, firstSeen, count, lastSeen, runners[], evidence[], reason?, followUp? }`
 + `streak` / `history` / `quarantinedAt` / `lastGreen` / `lastRedAt`
 （`kind` = `"same-runner"` | `"cross-runner"`；形状与判据见 `scripts/flaky-registry.mjs` 文件头）。
-**别手改字段**：只能通过跑测试更新；唯一需要人介入的是把 quarantine 里的用例修掉、把 cross-runner 的用例改成等终态。
+**别手改字段**：登记只能靠 `--record-flaky` + 人写的 `reason` / `followUp`（见下节）；
+唯一需要人动手的是把 quarantine 里的用例修掉、把 cross-runner 的用例改成等终态。
+
+#### 11.1.1 写入口径：普通跑测试**只读**，登记是一次决定
+
+> 这条是 2026-11 补的（门禁优化）。以前 `run-layer` 跑完一轮就无条件 `writeFile` 登记簿，于是：
+>
+> 1. **它污染「改了哪些文件」**。`tests/flaky-registry.json` 是 git 跟踪的，跑一次 `pnpm test`
+>    工作区就多一处 `M`（哪怕只是把 `lastGreen` 从旧时刻刷成现在，或者新登记一条别人的用例）。
+>    本地入口 `pnpm dev-check` 正是用 `git status --untracked-files=all` 算「你改了哪些文件」、
+>    再据此判断「这条红是不是你造成的」—— 测试一跑，归因就不可信，而「红可归因」是这套门禁的地基。
+> 2. **它让豁免不需要人做决定**。原来 `reason` 是 runner 自己拼的
+>    `红：local:host#normal / 绿：local:host#busy` —— 那不是判定，是「我刚看见两次结果不同」。
+>    于是「豁免必须带 reason / evidence / followUp / 到期日，且必须是一次决定」直接被后门废掉。
+
+| 场景 | 行为 |
+| --- | --- |
+| 默认（`pnpm test` / `node tests/run-layer.mjs unit` 等） | 登记簿**只读**；本轮观察到的抖动写进**不跟踪**的观察记录：`<OS 临时目录>/deepseek-app-flaky-observations/observed-<commit>.json`（`--registry-out <path>` 可改）。终端明说「本次观察到 N 次抖动，已写到 <path>；要登记请跑 `<命令>`」 |
+| 显式登记 | `--record-flaky --reason "<为什么这是抖动，不是真红>" --follow-up "<谁在什么时候修>"`。**缺一条就拒绝写入**（exit 2，一个用例都不跑），`reason` 若仍是自动拼装的「红：…/绿：…」也拒绝 |
+| `--cross-runner-scan` | 与上面同一口径：默认只产报告 + 观察记录，`--record-flaky`（带 reason/followUp）才写仓库 |
+| 观察记录 vs 登记簿 | 观察记录 `{ kind: "flaky-observation", observed: {...}, wouldRecord: {...} }` 是**证据**：不放行任何文件、不参与隔离判定；登记簿才是**决定** |
+
+```bash
+# 只看本轮观察到什么（不动仓库；默认就是这个行为）
+node tests/run-layer.mjs unit
+
+# 真的登记一条（人写的理由 + 跟进，缺一条会被拒）
+node tests/run-layer.mjs unit --record-flaky \
+  --reason "只在 LANG=en_US 下红：i18n 默认语言跟着环境走，这条用例没坏" \
+  --follow-up "#999 钉住语言后复核 / 2026-12-05 前"
+
+# 自证：默认只读 / 显式模式缺 reason 被拒 / 自动拼装的理由写不进去
+node tests/run-layer.mjs --selftest-write-policy
+```
+
+**代价与取舍**：默认模式下 streak / quarantine 计数不再跨轮累积（只有人显式登记时才累积）。
+这是故意的 —— 隔离区（跳过用例）本身就是一种豁免，累积它同样得有人按过手印。
 
 判据的单测：`tests/unit/flaky-registry.test.mjs`（16 条：8 条 #406 的复发/隔离规则 + 8 条 #456 的跨 runner /
 三态 / 静态提示，其中 5 条是「不该命中」的负向对照）。
@@ -551,7 +587,7 @@ tsc 不读 `.gradle`、oxlint 只扫 `src`、单测不碰 Android、产物扫描
 | --- | --- | --- |
 | 1 记录 | 每次 run 写一份 `{ commit, runner, results[] }`；runner 身份 = CI 的 `runner.name`（本地 = hostname + 负载档），附负载快照 `loadavg/cpus/freeMem` | `tests/run-layer.mjs` → `.flaky-runs/`（`FLAKY_RUNS_DIR` 可改） |
 | 2 聚合 | 把同一 commit 的记录放到一起，逐用例比结论 | `node tests/run-layer.mjs --cross-runner-scan --record-dir <dir>`（纯 Node、不跑用例、< 1s） |
-| 3 登记 | 命中的写进 `tests/flaky-registry.json`（`kind`/`runners`/`evidence`），并出 job summary | 同上；同一份证据不重复计数（幂等） |
+| 3 登记 | 命中的写进 `tests/flaky-registry.json`（`kind`/`runners`/`evidence`），并出 job summary。**默认只写观察记录**（见 11.1.1）；落进仓库要 `--record-flaky --reason ... --follow-up ...` | 同上；同一份证据不重复计数（幂等） |
 
 「runner 不同」的口径（为什么要给本地也编个身份）：CI 每个 job 一台新 VM，`runner.name` 不同就是不同机器；
 本地只有一台机器，但它在「空载 / 正常 / 满载」三种状态下就是三种执行环境 —— 这正是要看见的变量，

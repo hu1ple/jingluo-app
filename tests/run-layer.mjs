@@ -17,6 +17,7 @@ import {
   DEFAULT_POLICY,
   KINDS,
   TRI_STATE_ACTION,
+  buildObservation,
   buildRunRecord,
   dayOf,
   describeEntry,
@@ -34,6 +35,7 @@ import {
   scanTimingWindows,
   summarizeTriState,
   triStateOf,
+  validateHumanRegistration,
 } from '../scripts/flaky-registry.mjs'
 
 const TESTS_DIR = path.dirname(fileURLToPath(import.meta.url))
@@ -327,6 +329,23 @@ const DEFAULT_SHARD_WEIGHT_MS = 30000
  * 21 天内复发 ≥2 次就当红处理（禁止用重跑洗白真红，规则见 docs/TESTING-POLICY.md 第 10 节）。
  */
 const FLAKY_FILE = path.join(TESTS_DIR, 'flaky-registry.json')
+/**
+ * **写入口径**：`tests/flaky-registry.json` 是**豁免/处置清单**，不是日志 —— 所以普通跑测试**只读**。
+ *
+ * 为什么必须这样（两条，都是本轮在治的病）：
+ *   1. 它是 git 跟踪的。跑一次 `pnpm test` 就多一处 `M`，而本地入口（`pnpm dev-check`）用
+ *      `git status --untracked-files=all` 算「你改了哪些文件」并据此判断「这条红是不是你造成的」
+ *      —— 测试一跑，工作区就多一个 `M tests/flaky-registry.json`，**归因从此不可信**。
+ *   2. 自动写入 = 豁免不需要人做决定。`reason` 由 runner 拼成「红：…/绿：…」，那不是判定，
+ *      是把「豁免必须带 reason / evidence / followUp / 到期日」这条纪律从后门废掉。
+ *
+ * 于是：默认把本轮**观察到的抖动**写进不跟踪的临时位置（`--registry-out` 可改），
+ * 要落进仓库必须显式 `--record-flaky` + 人写的 `--reason` / `--follow-up`（缺一条就拒绝写入）。
+ * 判据与形状见 `scripts/flaky-registry.mjs` 文件头与 docs/TESTING-POLICY.md 第 11 节。
+ */
+const FLAKY_OBSERVATION_DIR = path.join(tmpdir(), 'deepseek-app-flaky-observations')
+/** 观察记录的文件名：按 commit 分（同一份代码的重复观察互相覆盖，不会积成一堆没人看的文件） */
+const observationFileFor = (commit) => path.join(FLAKY_OBSERVATION_DIR, `observed-${String(commit || 'unknown').slice(0, 12)}.json`)
 /**
  * #456：跨 runner 判定要的**运行记录**目录。每个 run 在这里留一份「同 commit 上这台 runner 跑出了
  * 什么」的原始事实（`{ commit, runner, results[] }`），跨 runner 判据（`scanCrossRunner`）就是拿它们
@@ -725,6 +744,79 @@ const alreadyRecorded = (entry, group) => {
 }
 
 /**
+ * 登记簿落盘的**唯一出口**（写仓库 or 写观察记录，二选一）。
+ *
+ * 为什么收敛成一个函数：以前这里有 2 处 `writeFile(registryPath, …)`（跑完一轮 + `--cross-runner-scan`），
+ * 两处都无条件写 —— 于是「谁都能改豁免表」成了默认行为。现在判据只有一份：`record` 为真才写仓库文件，
+ * 否则写观察记录。想加第三条写路径，就得先回答「谁授权、reason 从哪来」。
+ *
+ * 写失败不许把整轮结果弄丢（只读文件系统 / 沙箱里没有这个目录）：返回 `{ wrote: 'none', error }`，
+ * 由调用方在终端点名。它只是留痕的副本，终端与 `--json` 里已经有一份完整名单。
+ */
+async function persistFlaky({ record, registryPath, observationPath, registry, observation }) {
+  const asText = (value) => `${JSON.stringify(value, null, 2)}\n`
+  const target = record ? registryPath : observationPath
+  try {
+    if (record) {
+      await writeFile(registryPath, asText(registry))
+    } else {
+      await mkdir(path.dirname(observationPath), { recursive: true })
+      await writeFile(observationPath, asText(observation))
+    }
+    return { wrote: record ? 'registry' : 'observation', path: target }
+  } catch (error) {
+    return { wrote: 'none', path: target, error: error.message }
+  }
+}
+
+/**
+ * 终端里把「写了 / 没写」说清。
+ *
+ * 默认模式的输出必须**自己解释**「为什么仓库文件没变」，否则下一个人会以为是漏写，
+ * 或者顺手手工补一条 —— 那正是这条纪律塌掉的方式（豁免变成了默认动作）。
+ */
+function reportFlakyWrite({ record, count, persisted, observationPath, layer, registryPath }) {
+  if (persisted.wrote === 'none') {
+    console.log(`\n⚠ flaky ${record ? '登记簿' : '观察记录'}写入失败（${persisted.error}）：本轮名单只在终端与 --json 报告里`)
+    return
+  }
+  if (record) {
+    console.log(`\nflaky 登记：${count} 条写进 ${rel(registryPath)}（reason / followUp 是本次命令行给的）`)
+    return
+  }
+  if (count === 0) {
+    console.log(`\nflaky 观察：本轮没有新的抖动；登记簿 ${rel(registryPath)} 只读，未写入任何文件。`)
+    return
+  }
+  console.log(`\nflaky 观察：本次观察到 ${count} 次抖动，已写到 ${observationPath}`)
+  console.log(`  登记簿 ${rel(registryPath)} **只读**（观察记录不是豁免，不放行任何文件）。要登记请跑：`)
+  console.log(`    ${registerCommandFor({ layer })}`)
+}
+
+/** 终端里那条「要登记请跑」的命令：把做决定的成本压到一行，而不是替他跑（观察记录路径单独一行，免得被当注释吞掉） */
+const registerCommandFor = ({ layer }) =>
+  [
+    'node tests/run-layer.mjs',
+    layer || '<unit|integration|regression|server|all>',
+    '--record-flaky',
+    '--reason "<为什么这是抖动、不是真红>"',
+    '--follow-up "<谁在什么时候修>"',
+  ].join(' ')
+
+/**
+ * 把「拟登记的条目」摆给人看（观察记录里用）。
+ *
+ * 故意**不带** `reason`：自动拼装的「红：…/绿：…」已经证明过会冒充决定（见文件头的两条理由），
+ * 所以观察记录里只放**事实**（kind / 次数 / runner / 证据），理由那一栏留白等人填。
+ * `autoReason` 单独留一份原始形态，好让人一眼看出「这是机器说的」。
+ */
+const proposedEntry = (entry) => {
+  if (!entry) return null
+  const { reason, followUp, recordedAt, ...facts } = entry
+  return { ...facts, ...(reason ? { autoReason: reason } : {}), needsHuman: ['reason', 'followUp'] }
+}
+
+/**
  * #456 §1：本轮记录落盘 + 跨 runner 聚合 + 登记。
  *
  * 返回 `{ all, registered, records }`：
@@ -732,7 +824,7 @@ const alreadyRecorded = (entry, group) => {
  *     否则「已经登记过」的条目下一轮就看不见了；
  *   · `registered` 是这一轮**新**落进登记簿的（终端与 summary 只说新发现，避免刷屏）。
  */
-async function registerCrossRunner({ registry, plan, shard, identity, commit, results, startedAt, totalMs, recordDir, writeRecord, today }) {
+async function registerCrossRunner({ registry, plan, shard, identity, commit, results, startedAt, totalMs, recordDir, writeRecord, today, registration }) {
   if (writeRecord) {
     const record = buildRunRecord({
       layer: plan.join('+'),
@@ -760,7 +852,8 @@ async function registerCrossRunner({ registry, plan, shard, identity, commit, re
       runners: group.runners,
       evidence: group.evidence,
       commit: group.commit,
-      reason: `红：${group.redRunners.join(', ')} / 绿：${group.greenRunners.join(', ')}`,
+      // 人显式登记时用他写的理由与跟进；否则这只是「我看见了什么」的观察文本（观察记录里的 autoReason）。
+      ...(registration?.reason ? { reason: registration.reason, followUp: registration.followUp } : { reason: `红：${group.redRunners.join(', ')} / 绿：${group.greenRunners.join(', ')}` }),
     })
     registered.push(group)
   }
@@ -792,7 +885,7 @@ async function scanTimingWarnings(items) {
  * 为什么单独一个入口：CI 里「哪个分片红了」和「同 SHA 的另一次 attempt / 另一台机器绿了」是两份
  * 互不相干的 artifact，只有把它们下载到一起才判得出「runner-dependent」。这条命令就是那个聚合点。
  */
-async function crossRunnerScan({ recordDir, registryPath, json }) {
+async function crossRunnerScan({ recordDir, registryPath, registryOut, record = false, reason, followUp, json }) {
   let registry = emptyRegistry()
   try {
     registry = normalizeRegistry(JSON.parse(await readFile(registryPath, 'utf8')))
@@ -801,6 +894,11 @@ async function crossRunnerScan({ recordDir, registryPath, json }) {
   const records = await readRunRecords(recordDir)
   const all = scanCrossRunner(records)
   const registered = []
+  /**
+   * 写入口径与跑测试那条路完全一致（见 FLAKY_FILE 上方注释）：`record` 为真才写仓库文件，
+   * 而且 reason/followUp 是人填的（启动时已校验）；否则只用**观察**形态记下事实，
+   * 自动拼装的「红：…/绿：…」降级成 `autoReason`，永远不会成为登记理由。
+   */
   for (const group of all) {
     if (alreadyRecorded(registry.tests[group.test], group)) continue
     recordCrossRunner(registry, group.test, {
@@ -808,7 +906,7 @@ async function crossRunnerScan({ recordDir, registryPath, json }) {
       runners: group.runners,
       evidence: group.evidence,
       commit: group.commit,
-      reason: `红：${group.redRunners.join(', ')} / 绿：${group.greenRunners.join(', ')}`,
+      ...(record ? { reason, followUp } : { reason: `红：${group.redRunners.join(', ')} / 绿：${group.greenRunners.join(', ')}` }),
     })
     registered.push(group)
   }
@@ -819,7 +917,7 @@ async function crossRunnerScan({ recordDir, registryPath, json }) {
   if (!all.length) {
     console.log('结论：没有「同 commit + 同用例 + 结果不同 + runner 不同」的分叉（判据没有空跑以外的输出）。')
   } else {
-    console.log(`\nCROSS-RUNNER（runner-dependent，${all.length} 条分叉；本轮新登记 ${registered.length} 条）`)
+    console.log(`\nCROSS-RUNNER（runner-dependent，${all.length} 条分叉；${record ? '本轮新登记' : '本轮新观察'} ${registered.length} 条${record ? '' : '，未写仓库'}）`)
     for (const group of all) {
       const isNew = registered.includes(group)
       console.log(`  ${isNew ? 'NEW  ' : '已知 '} ${group.test}（commit ${group.commit}）`)
@@ -828,20 +926,37 @@ async function crossRunnerScan({ recordDir, registryPath, json }) {
       console.log(`        ⟹ 处置：${TRI_STATE_ACTION['runner-dependent']}`)
     }
   }
+  const observationPath = registryOut ?? observationFileFor(commits.at(-1) ?? 'scan')
+  const observation = buildObservation({
+    mode: record ? 'recorded' : 'read-only',
+    layer: 'cross-runner-scan',
+    runner: `${commits.length} 个 commit / ${runners.length} 个 runner`,
+    commit: commits.join(','),
+    generatedAt: new Date().toISOString(),
+    crossRunner: registered.map((group) => ({
+      ...proposedEntry(registry.tests[group.test]),
+      new: true,
+      redRunners: group.redRunners,
+      greenRunners: group.greenRunners,
+      commit: group.commit,
+    })),
+    registerCommand: `${registerCommandFor({ layer: '--cross-runner-scan' })}  # 本次观察记录：${observationPath}`,
+  })
+  const persisted = await persistFlaky({ record, registryPath, observationPath, registry, observation })
   const payload = {
     version: 1,
     generatedAt: new Date().toISOString(),
+    mode: record ? 'recorded' : 'read-only',
     recordDir: dirLabel(recordDir),
     records: records.map((item) => ({ commit: item.commit, runner: item.runner?.id, results: item.results?.length ?? 0, startedAt: item.startedAt })),
     commits,
     runners,
     crossRunner: all,
     registered: registered.map((item) => ({ test: item.test, commit: item.commit })),
+    write: { wrote: persisted.wrote, path: rel(persisted.path) || persisted.path, ...(persisted.error ? { error: persisted.error } : {}) },
   }
   if (json) await writeFile(path.resolve(json), `${JSON.stringify(payload, null, 2)}\n`)
-  await writeFile(registryPath, `${JSON.stringify(registry, null, 2)}\n`).catch((error) => {
-    console.log(`\n⚠ flaky 登记簿写入失败（${error.message}）：本轮结论只在终端与 --json 报告里`)
-  })
+  reportFlakyWrite({ record, count: registered.length, persisted, observationPath, layer: '--cross-runner-scan', registryPath })
   if (STEP_SUMMARY) {
     const lines = ['## 跨 runner 判定（flaky cross-runner scan）', '']
     lines.push(
@@ -850,7 +965,7 @@ async function crossRunnerScan({ recordDir, registryPath, json }) {
       `| 判定 | 数量 | 处置 |`,
       `| --- | --- | --- |`,
       `| runner-dependent（跨 runner 结论不一致） | ${all.length} | ${TRI_STATE_ACTION['runner-dependent']} |`,
-      `| 本轮新登记 | ${registered.length} | 写进 \`tests/flaky-registry.json\`（kind: cross-runner） |`,
+      `| ${record ? '本轮新登记' : '本轮新观察'} | ${registered.length} | ${record ? '写进 `tests/flaky-registry.json`（kind: cross-runner）' : '只写观察记录（登记簿只读，见 docs/TESTING-POLICY.md §11.1.1）'} |`,
     )
     if (all.length) {
       lines.push('', '### 结论不一致的用例', '')
@@ -991,6 +1106,111 @@ test('取消点必须落在「导入中」窗口内（只在慢环境红）', as
   return ok ? 0 : 1
 }
 
+/**
+ * 写入口径自证（`--selftest-write-policy`）：把「跑测试不改仓库里的豁免表」钉成**可复跑的判据**，
+ * 而不是靠人盯 `git status`。
+ *
+ * 六拍（[3][6] 是负向对照 —— 少了它们，「拒绝写入」可能只是「永远不写」）：
+ *   [1] 默认模式：只写观察记录，仓库路径**字节不变**；
+ *   [2] 观察记录是 `kind: "flaky-observation"`，`wouldRecord` 有条目但**不带** reason / followUp
+ *       （观察不是豁免：理由那一栏必须留给人）；
+ *   [3] 负向对照：`--record-flaky` 却缺 reason / followUp → 拒绝，两条问题都点出来；
+ *   [4] 负向对照：自动拼装的「红：…/绿：…」被拒 —— 这就是本轮清掉那条脏条目的判据；
+ *   [5] 人写的 reason + followUp → 通过，且显式模式**真的**改了登记簿文件、条目里带 reason / followUp；
+ *   [6] 负向对照：显式模式 + 自动拼装理由 → 拒绝，文件保持 [5] 的样子（「写」这条路上不能绕过校验）。
+ */
+async function selftestWritePolicy() {
+  const workdir = await mkdtemp(path.join(tmpdir(), 'flaky-write-selftest-'))
+  const registryPath = path.join(workdir, 'flaky-registry.json')
+  const observationPath = path.join(workdir, 'flaky-observations.json')
+  const beats = []
+  let ok = true
+  const fail = (message) => {
+    beats.push(`FAIL  ${message}`)
+    return false
+  }
+  const AUTO_REASON = '红：local:selftest#normal / 绿：local:selftest#busy'
+  const HUMAN_REASON = '只在 LANG=en_US 下红：i18n 默认语言跟着环境走，这条用例没坏（环境红，不是抖动）'
+  const HUMAN_FOLLOW_UP = '#999 钉住语言后复核 / 2026-12-05 前'
+  try {
+    const repoBefore = `${JSON.stringify(emptyRegistry(), null, 2)}\n`
+    await writeFile(registryPath, repoBefore)
+
+    // 造一条「本轮观察到」的抖动（same-runner：重跑才通过）
+    const registry = emptyRegistry()
+    const entry = recordFlaky(registry, 'tests/unit/example.test.mjs', { today: '2026-01-02', reason: AUTO_REASON })
+    const observation = buildObservation({
+      mode: 'read-only',
+      layer: 'unit',
+      runner: 'selftest',
+      commit: 'selftest-write-policy',
+      generatedAt: '2026-01-02T00:00:00.000Z',
+      flaky: [proposedEntry(entry)],
+      registerCommand: `${registerCommandFor({ layer: 'unit' })}  # 本次观察记录：${observationPath}`,
+    })
+
+    // [1] 默认：写观察记录，仓库文件字节不变
+    const readOnly = await persistFlaky({ record: false, registryPath, observationPath, registry, observation })
+    const repoAfterDefault = await readFile(registryPath, 'utf8')
+    ok = (readOnly.wrote === 'observation' && repoAfterDefault === repoBefore
+      ? beats.push(`PASS  [1] 默认只写观察记录（${readOnly.wrote}）→ 登记簿 ${registryPath} 字节不变`)
+      : fail(`[1] 默认模式动了仓库登记簿（wrote=${readOnly.wrote}，变化=${repoAfterDefault !== repoBefore}）`)) && ok
+
+    // [2] 观察记录的形状：是证据，不是豁免
+    const observed = JSON.parse(await readFile(observationPath, 'utf8'))
+    const proposed = Object.values(observed.wouldRecord?.tests ?? {})
+    ok = (observed.kind === 'flaky-observation'
+      && proposed.length === 1
+      && !('reason' in proposed[0])
+      && typeof proposed[0].autoReason === 'string'
+      && !('followUp' in proposed[0])
+      ? beats.push('PASS  [2] 观察记录 = 证据（kind: flaky-observation，只有 autoReason，无 reason/followUp）')
+      : fail(`[2] 观察记录长得像豁免（kind=${observed.kind}，条目字段=${JSON.stringify(Object.keys(proposed[0] ?? {}))}）`)) && ok
+
+    // [3] 缺 reason / followUp → 拒绝
+    const missing = validateHumanRegistration({})
+    ok = (!missing.ok && missing.problems.length === 2
+      ? beats.push(`PASS  [3] 缺 reason/followUp 被拒（${missing.problems.length} 条问题）`)
+      : fail(`[3] 缺 reason/followUp 没被拒（ok=${missing.ok}，problems=${JSON.stringify(missing.problems)}）`)) && ok
+
+    // [4] 自动拼装的「红：…/绿：…」→ 拒绝
+    const auto = validateHumanRegistration({ reason: AUTO_REASON, followUp: HUMAN_FOLLOW_UP })
+    ok = (!auto.ok
+      ? beats.push('PASS  [4] 自动拼装的「红：…/绿：…」被拒（那不是决定）')
+      : fail('[4] 自动拼装的理由被当成人的决定放行了')) && ok
+
+    // [5] 人写的 reason + followUp → 通过，并且显式模式真的落盘
+    // （显式模式走的是「recordFlaky 带上人给的两句话」那条路，与 run-layer 里的调用保持一致）
+    const human = validateHumanRegistration({ reason: HUMAN_REASON, followUp: HUMAN_FOLLOW_UP })
+    const humanRegistry = emptyRegistry()
+    recordFlaky(humanRegistry, 'tests/unit/example.test.mjs', { today: '2026-01-02', reason: HUMAN_REASON, followUp: HUMAN_FOLLOW_UP })
+    const recorded = human.ok
+      ? await persistFlaky({ record: true, registryPath, observationPath, registry: humanRegistry, observation })
+      : { wrote: 'rejected' }
+    const repoAfterRecord = await readFile(registryPath, 'utf8')
+    const recordedEntry = JSON.parse(repoAfterRecord).tests['tests/unit/example.test.mjs']
+    ok = (human.ok && recorded.wrote === 'registry' && repoAfterRecord !== repoBefore
+      && recordedEntry?.reason === HUMAN_REASON && recordedEntry?.followUp === HUMAN_FOLLOW_UP && recordedEntry?.recordedAt
+      ? beats.push('PASS  [5] 人写的 reason+followUp → 显式模式真的写了登记簿（条目带 reason / followUp / recordedAt）')
+      : fail(`[5] 显式模式没按预期落盘（ok=${human.ok}，wrote=${recorded.wrote}，条目=${JSON.stringify(recordedEntry ?? null)}）`)) && ok
+
+    // [6] 负向对照：显式模式 + 自动拼装理由 → 拒绝，文件不变
+    const autoRecord = validateHumanRegistration({ reason: AUTO_REASON, followUp: HUMAN_FOLLOW_UP })
+    const refusedWrite = autoRecord.ok ? await persistFlaky({ record: true, registryPath, observationPath, registry, observation }) : null
+    const repoAfterAuto = await readFile(registryPath, 'utf8')
+    ok = (!autoRecord.ok && refusedWrite === null && repoAfterAuto === repoAfterRecord
+      ? beats.push('PASS  [6] 负向对照：显式模式 + 自动拼装理由 → 拒绝，登记簿保持 [5] 的样子')
+      : fail('[6] 「写」这条路上绕过了校验：自动拼装理由被写进了登记簿')) && ok
+  } finally {
+    await rm(workdir, { recursive: true, force: true }).catch(() => {})
+  }
+  console.log(`\n写入口径自证（临时目录 ${workdir}，跑完已清理；不碰仓库里的 tests/flaky-registry.json）`)
+  for (const line of beats) console.log(`  ${line}`)
+  console.log(`\n自证结论：${ok ? 'PASS —— 默认只读（抖动只写观察记录）、显式登记要人写 reason/followUp、自动拼装的理由写不进去' : 'FAIL —— 写入口径不可信，见上面失败项'}`)
+  return ok ? 0 : 1
+}
+
+
 async function main() {
   const argv = process.argv.slice(2)
   let layer, only = '', caseName = '', json, failedFrom, timeoutMs = 180000, shard = null, jobs
@@ -1001,10 +1221,18 @@ async function main() {
   // #456：`--record-dir` 指的是运行记录（跨 runner 判据的输入）写哪；`--registry` 换登记簿文件（自证/沙箱用）
   let recordDir = FLAKY_RUNS_DIR
   let registryPath = FLAKY_FILE
+  /**
+   * 写入口径（见 FLAKY_FILE 上方注释）：默认只读仓库里的豁免表，观察到的抖动写进
+   * `--registry-out <path>`（默认 OS 临时目录）。只有 `--record-flaky` 才写仓库文件，且必须带人写的
+   * `--reason` / `--follow-up` —— 豁免是一次决定，不是 runner 的副作用。
+   */
+  let registryOut
+  let recordReason
+  let recordFollowUp
   const flags = new Set()
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
-    if (['--only', '--case', '--json', '--failed-from', '--timeout-ms', '--shard', '--jobs', '--record-dir', '--registry', '--reverse-sample'].includes(arg)) {
+    if (['--only', '--case', '--json', '--failed-from', '--timeout-ms', '--shard', '--jobs', '--record-dir', '--registry', '--reverse-sample', '--registry-out', '--reason', '--follow-up'].includes(arg)) {
       const value = argv[++i]
       if (!value || value.startsWith('--')) throw new Error(`Missing value: ${arg}`)
       if (arg === '--only') only = value
@@ -1017,8 +1245,11 @@ async function main() {
       if (arg === '--record-dir') recordDir = path.resolve(value)
       if (arg === '--registry') registryPath = path.resolve(value)
       if (arg === '--reverse-sample') reverseSampleCount = Number(value)
+      if (arg === '--registry-out') registryOut = path.resolve(value)
+      if (arg === '--reason') recordReason = value
+      if (arg === '--follow-up') recordFollowUp = value
     } else if (
-      ['--bail', '--list', '--baseline', '--write-weights', '--no-retry', '--include-quarantined', '--no-record', '--no-reverse-sample', '--cross-runner-scan', '--selftest-cross-runner'].includes(arg)
+      ['--bail', '--list', '--baseline', '--write-weights', '--no-retry', '--include-quarantined', '--no-record', '--no-reverse-sample', '--cross-runner-scan', '--selftest-cross-runner', '--record-flaky', '--selftest-write-policy'].includes(arg)
     ) {
       flags.add(arg)
     }
@@ -1033,18 +1264,44 @@ async function main() {
   await loadTimeoutPolicy(timeoutExplicit ? timeoutMs : undefined)
   if (jobs !== undefined && (!Number.isSafeInteger(jobs) || jobs < 1)) throw new Error('jobs must be a positive integer')
   /**
+   * 写入口径（见 FLAKY_FILE 上方注释）：**先校验再跑**。
+   *
+   * 为什么先校验：`--record-flaky` 却缺 `reason`/`followUp` 是「参数错了」，不是「跑完才发现没写进去」。
+   * 花 3 分钟跑完一整层再报错，是最贵的失败点；这里一句话、exit 2、一个用例都不跑。
+   */
+  const RECORD_FLAKY = flags.has('--record-flaky')
+  const registration = validateHumanRegistration({ reason: recordReason, followUp: recordFollowUp })
+  if (RECORD_FLAKY && !registration.ok) {
+    console.error('✖ 拒绝写入 tests/flaky-registry.json —— 登记是一次**人的决定**，不是 runner 的副作用：')
+    for (const problem of registration.problems) console.error(`   · ${problem}`)
+    console.error('   例：node tests/run-layer.mjs unit --record-flaky \\')
+    console.error('         --reason "只在 LANG=en_US 下红：i18n 默认语言跟着环境走，不是这条用例坏了" \\')
+    console.error('         --follow-up "#999 钉住语言 / 2026-12-05 前"')
+    console.error('   想只看本轮观察到什么（不写仓库）：去掉 --record-flaky，观察记录会写到临时目录。')
+    process.exitCode = 2
+    return 2
+  }
+  /**
    * #456：两个「不跑用例」的入口，所以不要求给层：
    *   · `--cross-runner-scan`：只读运行记录、判跨 runner、登记、写 summary（CI 的汇总 job 用它）；
-   *   · `--selftest-cross-runner`：自证（造一个「只在慢环境红」的用例，两个负载档各跑一次）。
+   *   · `--selftest-cross-runner`：自证（造一个「只在慢环境红」的用例，两个负载档各跑一次）；
+   *   · `--selftest-write-policy`：自证写入口径（默认只读 / 显式模式缺 reason 拒绝）。
    */
+  if (flags.has('--selftest-write-policy')) return selftestWritePolicy()
   if (flags.has('--cross-runner-scan') || flags.has('--selftest-cross-runner')) {
     return flags.has('--selftest-cross-runner')
       ? selftestCrossRunner({ recordDir })
-      : crossRunnerScan({ recordDir, registryPath, json })
+      : crossRunnerScan({ recordDir, registryPath, registryOut, record: RECORD_FLAKY, reason: recordReason, followUp: recordFollowUp, json })
   }
   // #415：`all` 也要带 `server` —— 「接进 LAYERS 但不在 all 里」等于又留一个「全量跑不到」的口子
   const plan = layer === 'all' ? ['unit', 'regression', 'integration', 'server'] : [layer]
-  if (plan.some((name) => !LAYERS.includes(name))) throw new Error('Usage: node tests/run-layer.mjs <unit|integration|regression|server|e2e|device|all> [--only substring] [--case exact-path] [--shard 1/3] [--jobs N] [--timeout-ms 180000] [--json result.json] [--failed-from result.json] [--bail] [--list] [--no-retry] [--include-quarantined] [--record-dir dir] [--registry file] [--no-record] | node tests/run-layer.mjs --cross-runner-scan [--record-dir dir] [--registry file] [--json r.json] | node tests/run-layer.mjs --selftest-cross-runner')
+  if (plan.some((name) => !LAYERS.includes(name))) {
+    throw new Error(
+      'Usage: node tests/run-layer.mjs <unit|integration|regression|server|e2e|device|all> [--only substring] [--case exact-path] [--shard 1/3] [--jobs N] [--timeout-ms 180000] [--json result.json] [--failed-from result.json] [--bail] [--list] [--no-retry] [--include-quarantined] [--record-dir dir] [--registry file] [--registry-out file] [--no-record] [--record-flaky --reason "<为什么是抖动>" --follow-up "<谁在什么时候修>"]'
+      + ' | node tests/run-layer.mjs --cross-runner-scan [--record-dir dir] [--registry file] [--registry-out file] [--record-flaky --reason ... --follow-up ...] [--json r.json]'
+      + ' | node tests/run-layer.mjs --selftest-cross-runner | node tests/run-layer.mjs --selftest-write-policy',
+    )
+  }
   let failed
   if (failedFrom) {
     const report = JSON.parse(await readFile(failedFrom, 'utf8'))
@@ -1342,9 +1599,13 @@ async function main() {
           const previous = flakyRegistry.tests[name]
           const recurring = isRecurringRed(previous, flakyPolicy, today)
           const firstFailure = (result.tail ?? []).filter((line) => /✗|Error|FAIL/.test(line)).slice(-3).join(' ⏎ ')
+          // 写入口径（见 FLAKY_FILE 上方注释）：只有人显式 `--record-flaky` 时，reason / followUp 才是
+          // 人给的那两句话；默认只读模式下自动截的失败尾巴只是**观察事实**，最终以 `autoReason` 落到
+          // 观察记录里 —— 它永远不会冒充「登记理由」，也不会进仓库。
+          const registrationFields = RECORD_FLAKY ? { reason: recordReason, followUp: recordFollowUp } : { reason: firstFailure.slice(0, 300) }
           const entry = recurring
-            ? recordRecurringRed(flakyRegistry, name, { today, reason: firstFailure.slice(0, 300) })
-            : recordFlaky(flakyRegistry, name, { today, reason: firstFailure.slice(0, 300) })
+            ? recordRecurringRed(flakyRegistry, name, { today, ...registrationFields })
+            : recordFlaky(flakyRegistry, name, { today, ...registrationFields })
           if (recurring) {
             say(
               `   ⚠ 重跑通过，但它在 ${flakyPolicy.recurrenceWindowDays} 天内已复发 ≥2 次 —— 按真红处理（不许用重跑洗白）`,
@@ -1911,6 +2172,7 @@ async function main() {
     recordDir,
     writeRecord: !flags.has('--no-record'),
     today,
+    registration: RECORD_FLAKY ? { reason: recordReason, followUp: recordFollowUp } : null,
   })
   const crossRunnerFiles = new Set(crossRunner.all.map((item) => item.test))
   for (const item of results) {
@@ -1932,17 +2194,34 @@ async function main() {
    *   · `--json` 报告：`flaky` / `quarantined` 字段（CI 的 artifact 里能查历史）；
    *   · `GITHUB_STEP_SUMMARY`：PR 页面直接能看到名字（有该环境变量就写，不需要改 ci.yml）。
    */
-  // 登记簿落盘失败（只读文件系统 / 沙箱里没有这个目录）不许把整轮结果弄丢：它只是留痕的副本，
+  // 落盘走唯一出口 `persistFlaky()`：默认只写**观察记录**（不跟踪），`--record-flaky` 才写仓库登记簿。
+  // 写失败（只读文件系统 / 沙箱里没有这个目录）不许把整轮结果弄丢：它只是留痕的副本，
   // 终端与 --json 里已经有一份完整名单。
-  await writeFile(registryPath, JSON.stringify(flakyRegistry, null, 2) + '\n').catch((error) => {
-    console.log(`\n⚠ flaky 登记簿写入失败（${error.message}）：本轮名单只在终端与 --json 报告里`)
+  const observationPath = registryOut ?? observationFileFor(commit)
+  const observation = buildObservation({
+    mode: RECORD_FLAKY ? 'recorded' : 'read-only',
+    layer: plan.join('+'),
+    runner: identity.id,
+    commit,
+    generatedAt: new Date().toISOString(),
+    flaky: flakyRuns.map((name) => proposedEntry(flakyRegistry.tests[name])).filter(Boolean),
+    crossRunner: crossRunner.all.map((item) => ({
+      ...(proposedEntry(flakyRegistry.tests[item.test]) ?? { test: item.test }),
+      new: crossRunner.registered.includes(item),
+      redRunners: item.redRunners,
+      greenRunners: item.greenRunners,
+      commit: item.commit,
+    })),
+    registerCommand: `${registerCommandFor({ layer: plan.join('+') })}  # 本次观察记录：${observationPath}`,
   })
+  const persisted = await persistFlaky({ record: RECORD_FLAKY, registryPath, observationPath, registry: flakyRegistry, observation })
+  reportFlakyWrite({ record: RECORD_FLAKY, count: observation.observed.total, persisted, observationPath, layer: plan.join('+'), registryPath })
   if (flakyRuns.length) {
-    console.log(`\nFLAKY（重跑才通过，${flakyRuns.length} 个；已登记 ${rel(registryPath)}）`)
+    console.log(`\nFLAKY（重跑才通过，${flakyRuns.length} 个；${RECORD_FLAKY ? `已登记 ${rel(registryPath)}` : `本次只观察，未写仓库（${rel(registryPath)} 只读）`}）`)
     for (const name of flakyRuns) console.log(`  FLAKY  ${name} —— ${describeEntry(flakyRegistry.tests[name])}`)
   }
   if (crossRunner.all.length) {
-    console.log(`\nCROSS-RUNNER（同 commit、同用例、换 runner 结论不同，${crossRunner.all.length} 个分叉；本轮新登记 ${crossRunner.registered.length} 个 → ${rel(registryPath)}）`)
+    console.log(`\nCROSS-RUNNER（同 commit、同用例、换 runner 结论不同，${crossRunner.all.length} 个分叉；本轮新观察 ${crossRunner.registered.length} 个${RECORD_FLAKY ? ` → 已登记 ${rel(registryPath)}` : ' → 观察记录，未写仓库'}）`)
     for (const item of crossRunner.all) {
       const isNew = crossRunner.registered.includes(item)
       console.log(`  ${isNew ? 'NEW' : '已知'}  ${item.test}（commit ${item.commit}）`)
@@ -2018,11 +2297,11 @@ async function main() {
       }
     }
     if (flakyRuns.length) {
-      lines.push('', `### flaky（重跑才通过）${flakyRuns.length} 个 —— 不阻塞合并，但必须留痕`, '')
+      lines.push('', `### flaky（重跑才通过）${flakyRuns.length} 个 —— 不阻塞合并，但必须留痕${RECORD_FLAKY ? '' : '（本轮只观察，未写仓库登记簿）'}`, '')
       for (const name of flakyRuns) lines.push(`- \`${name}\` —— ${describeEntry(flakyRegistry.tests[name])}`)
     }
     if (crossRunner.all.length) {
-      lines.push('', `### runner-dependent ${crossRunner.all.length} 个（本轮新登记 ${crossRunner.registered.length} 个）—— **必须改成等终态，禁止加 sleep**`, '')
+      lines.push('', `### runner-dependent ${crossRunner.all.length} 个（本轮新${RECORD_FLAKY ? '登记' : '观察'} ${crossRunner.registered.length} 个）—— **必须改成等终态，禁止加 sleep**`, '')
       for (const item of crossRunner.all) {
         lines.push(`- \`${item.test}\`：红 ${item.redRunners.join(', ')} / 绿 ${item.greenRunners.join(', ')}（commit ${item.commit}）`)
       }
@@ -2121,6 +2400,19 @@ async function main() {
       },
       retried: infraRetried.map((r) => ({ file: r.file })),
       fail: infraFails.map((r) => ({ file: r.file, note: infraFailNote() })),
+    },
+    /**
+     * 写入口径（见 FLAKY_FILE 上方注释）：默认 `mode: "read-only"` —— 仓库里的登记簿**没有被改**，
+     * 本轮观察到的抖动在 `path` 里，`observed` 是条数；只有人显式 `--record-flaky` 才会是 `"recorded"`。
+     * 这份字段的意义是：报告自己就能回答「这次跑测试有没有动过豁免表」。
+     */
+    flakyWrite: {
+      mode: RECORD_FLAKY ? 'recorded' : 'read-only',
+      wrote: persisted.wrote,
+      path: persisted.path.startsWith(ROOT) ? rel(persisted.path) : persisted.path,
+      registry: rel(registryPath),
+      observed: observation.observed.total,
+      ...(persisted.error ? { error: persisted.error } : {}),
     },
     results,
   }

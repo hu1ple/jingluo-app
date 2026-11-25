@@ -396,16 +396,23 @@ set -a; . /opt/caddy/caddy.env; set +a
 ./caddy-alidns reload --config /opt/caddy/Caddyfile --adapter caddyfile --address unix//run/caddy/admin.sock
 ```
 
-## 8. GitHub Release 流水线
+## 8. GitHub Release 流水线（**已删除**：~~`.github/workflows/release.yml`~~，`ce7968e3` / 2026-11-24）
 
-`.github/workflows/release.yml`，**手动 `workflow_dispatch` 触发**（裁决 #614 决定 2 之后：正式发布渠道是
-GitHub Release，dl 只是历史分发，所以「发 Release」不再由 tag push 自动跑，也**不再读 `releases.json`**）：
+**今天仓库里没有任何发布流水线。** 正式发布由**人**在签名机上手工 `gh release create`（命令见
+[`docs/RELEASE-MANUAL.md`](RELEASE-MANUAL.md) §6.1 做法 A，清单见 [`docs/RELEASE-CHECKLIST.md`](RELEASE-CHECKLIST.md) D2）；
+CI 里唯一能出签名包的是 `.github/workflows/build-apk.yml`（手动 `workflow_dispatch`、Environment `apk-signing`
+需 reviewer 批准、`permissions: contents: read`）—— 它**只上传 Actions artifact**，不建 Release、不推 tag、
+不碰版本号，两条路的关系见 MANUAL §3.0。
+
+下面这段是那个已删除的 workflow 当年做的事，**留作「手工发 Release 时要自己补哪几步」的核对清单**
+（它末期的形态是手动 `workflow_dispatch`；裁决 #614 决定 2 之后已不读 `releases.json`）：
 
 1. 校验输入 `tag` 存在且形如 `v<version>`（不存在 → 提示先 push tag）；
 2. 校验 **tag 指向的 commit** 里 `package.json` 的 `version` == tag 版本、`androidVersionCode` 为正整数；
 3. 取 APK 字节：`apk_url`（https 直链）→ 已有 Release 的 `.apk` 资产 → `https://dl.rose7.cn/apk/<artifactPrefix>-<ver>.apk`
    （当前 `jingluo-chat`；#836 之前的版本是 `deepseek-chat`，那个回退路径对老版本仍然有效）
-   依次尝试；算 `sha256` / `md5` / size。**这里只是取字节，不做任何清单校验**，**不在 CI 里构建 APK**；
+   依次尝试；算 `sha256` / `md5` / size。**这里只是取字节，不做任何清单校验**，当初那个 workflow **也不构建 APK**
+   （今天能出包的 CI 路是 `build-apk.yml`，它只产 artifact，见上）；
 4. `node scripts/check-apk-debuggable.mjs`：debuggable 包或判不出来 → 拒（fail-closed）；
 5. 由 `CHANGELOG.md` 同版本小节生成 notes，并把 sha256 写进正文；
 6. 用内置 `GITHUB_TOKEN`（`permissions: contents: write`）`gh release create <tag> --target <commit sha> --notes-file notes.md`；Release 已存在则 `gh release upload --clobber` + `gh release edit`；

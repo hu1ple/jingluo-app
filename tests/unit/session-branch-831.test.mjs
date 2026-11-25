@@ -440,17 +440,19 @@ test('⑤ 附件按引用共享：两侧 id 相同、存储只一份；原件不
   const parent = await seedParent()
   // 父会话的一条提问同时带文档附件（att- 前缀）与图片原件
   const attachmentsBefore = await rawKeys('attachments')
-  await attachments.putAttachment({
-    id: ATT_ID,
-    filename: '合同.txt',
-    mimeType: 'text/plain',
-    size: 3,
-    sha256: ATT_SHA,
-    localPath: await attachments.saveAttachmentBlob(ATT_SHA, new Blob(['abc'], { type: 'text/plain' })),
-    status: 'success',
-    characterCount: 3,
-    createdAt: NOW,
-  })
+  await attachments.saveNewAttachment(
+    {
+      id: ATT_ID,
+      filename: '合同.txt',
+      mimeType: 'text/plain',
+      size: 3,
+      sha256: ATT_SHA,
+      status: 'success',
+      characterCount: 3,
+      createdAt: NOW,
+    },
+    new Blob(['abc'], { type: 'text/plain' })
+  )
   await db.saveFiles([{ id: IMG_ID, blob: new Blob(['PNG'], { type: 'image/png' }) }])
   const withFiles = {
     ...parent,

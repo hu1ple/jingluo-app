@@ -2,7 +2,7 @@
  * PDF 文本解析（Issue #480）：**只处理有文本层的 PDF**。
  *
  * 契约（lead 定，全组一致）：`parsePdfFile(file: Blob, options?: ParseOptions): Promise<ParsedDocument>`
- * - 入参是 Blob（内部 `arrayBuffer()` 交给 pdfjs），不是原始字节数组：附件存的是 Blob；
+ * - 从本地附件 Blob 读取字节后交给 pdfjs；
  * - 限制值全部来自 `../limits.js`（`pdfMaxBytes` / `pdfMaxPages` / `pdfMinCharsPerPage` / `pdfTimeoutMs`），
  *   本文件不写阈值；
  * - 逐页输出格式与 #480 正文一致：
@@ -47,6 +47,7 @@
  *   实测取文本不依赖它（pdfjs 只会打一条 fetchStandardFontData 警告），先省这 0.87 MB。
  *   若后续出现「有文本层但提取出来是空/乱码」的真实案例，再把它加进 `config/pdfjs.json` 拷进来。
  */
+import { readBlobBuffer } from '../../../utils/readBlob.js'
 import { recordError } from '../../diagnostics/collector.js'
 import { ATTACHMENT_LIMITS } from '../limits.js'
 import type { ParsedDocument, ParseOptions } from '../types.js'
@@ -275,9 +276,9 @@ export const assertPdfAcceptable = (bytes: Uint8Array, sizeBytes: number): void 
  */
 export const parsePdfFile = async (file: Blob, options: ParseOptions = {}): Promise<ParsedDocument> => {
   const sizeBytes = file.size
-  // 先挡体积再读字节：超限文件连 arrayBuffer 都不该调用
+  // 先挡体积再读字节，避免载入超限文件。
   assertPdfSize(sizeBytes)
-  const bytes = new Uint8Array(await file.arrayBuffer())
+  const bytes = new Uint8Array(await readBlobBuffer(file))
   assertPdfAcceptable(bytes, sizeBytes)
 
   const signal = options.signal

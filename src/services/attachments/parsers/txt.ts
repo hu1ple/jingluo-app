@@ -22,6 +22,7 @@
  *  - 无论哪种情况都不截断正文：`text` 是完整解析结果，裁剪交给 ContextBuilder 按预算做。
  */
 import { formatImportBytes } from '../../chat/history/importLimit.js'
+import { readBlobBuffer } from '../../../utils/readBlob.js'
 import { ATTACHMENT_LIMITS } from '../limits.js'
 import type { ParsedDocument, ParseOptions } from '../types.js'
 
@@ -604,7 +605,7 @@ const assertNotAborted = (signal: AbortSignal | undefined, filename: string): vo
 /**
  * TXT 解析器对外入口（#480 全组统一契约）：manager 静态 import 这个名字。
  *
- * 入参是 `Blob`（`File` 也可，`File extends Blob`）：内部 `arrayBuffer()` 取字节再走同步核心。
+ * 从 Blob 或 File 取出字节，再交给同步解码核心。
  * 即使是小文件也保持 `async`，保证 manager 拿到的一律是 Promise（不出现同步抛/异步抛两种形态）。
  *
  * 失败一律 reject {@link TxtParseError}；有损解码走 `warnings`，不 reject。
@@ -618,7 +619,7 @@ export const parseTxtFile = async (
   if (options !== undefined && options.onProgress) {
     options.onProgress({ stage: 'read' })
   }
-  const buffer = await file.arrayBuffer()
+  const buffer = await readBlobBuffer(file)
   assertNotAborted(options === undefined ? undefined : options.signal, filename)
   if (options !== undefined && options.onProgress) {
     options.onProgress({ stage: 'decode' })

@@ -1,4 +1,5 @@
 import { Inflate } from 'fflate'
+import { readBlobBuffer } from '../../../utils/readBlob.js'
 
 const READ_CHUNK_BYTES = 256 * 1024
 // 控制每轮同步解压的工作量；输出交给调用方保存后才继续读取。
@@ -49,7 +50,7 @@ const duplicated = (path: string): never => {
 
 /** 本地文件头签名 PK\x03\x04，用于在解析前区分 ZIP 与其他文件。 */
 export const isZipFile = async (file: File) => {
-  const bytes = new Uint8Array(await file.slice(0, 4).arrayBuffer())
+  const bytes = new Uint8Array(await readBlobBuffer(file.slice(0, 4)))
   return bytes.length === 4 && bytes.every((byte, index) => byte === [0x50, 0x4b, 3, 4][index])
 }
 
@@ -67,7 +68,7 @@ const readBytes = async (file: File, start: number, length: number) => {
   if (start < 0 || length < 0 || start + length > file.size) {
     invalid()
   }
-  const bytes = new Uint8Array(await file.slice(start, start + length).arrayBuffer())
+  const bytes = new Uint8Array(await readBlobBuffer(file.slice(start, start + length)))
   if (bytes.length !== length) {
     invalid()
   }

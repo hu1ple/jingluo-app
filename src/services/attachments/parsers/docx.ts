@@ -38,6 +38,7 @@
  *
  * 老内核：目标 ES2017 / Chromium 83，不用 `??=` / `||=` / 私有字段 / 顶层 await。
  */
+import { readBlobBuffer } from '../../../utils/readBlob.js'
 import { readArchive, readEntry, skipEntry } from '../../chat/history/zipReader.js'
 import { ATTACHMENT_LIMITS } from '../limits.js'
 import type { ParsedDocument, ParseOptions } from '../types.js'
@@ -1115,7 +1116,7 @@ export const parseDocxFile = async (
   }
   checkAbort()
 
-  const head = new Uint8Array(await file.slice(0, 4).arrayBuffer())
+  const head = new Uint8Array(await readBlobBuffer(file.slice(0, 4)))
   if (!hasZipMagic(head)) {
     throw new DocxParseError(
       'not_docx',
@@ -1154,7 +1155,7 @@ export const parseDocxFile = async (
         throw new DocxParseError('corrupt_archive', 'DOCX 压缩包内存在重复条目，拒绝解析')
       }
       const blob = await readEntry(entry)
-      entries.set(entry.path, new Uint8Array(await blob.arrayBuffer()))
+      entries.set(entry.path, new Uint8Array(await readBlobBuffer(blob)))
     }
   } catch (error) {
     if (isDocxParseError(error)) {

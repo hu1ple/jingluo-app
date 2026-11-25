@@ -64,8 +64,17 @@ export const POLYFILL_DIR = 'src/polyfills/'
 // 方法类调用的前缀：`x.at(` / `x?.at(` / `x[0].at(` / `(a||[]).at(` 都要抓得到
 const RECEIVER = '[A-Za-z0-9_$\\])?]'
 
-const callPattern = (name) => new RegExp(`${RECEIVER}\\s*\\.\\s*${name}\\s*\\(`, 'g')
-const staticPattern = (owner, name) => new RegExp(`\\b${owner}\\s*\\.\\s*${name}\\s*\\(`, 'g')
+/**
+ * 可选类型实参：`Promise.withResolvers<T>()` / `structuredClone<T>(x)`。
+ *
+ * 为什么必须有这一段（#761 实测）：原来的规则是「名字后面紧跟 `(`」，于是 `.withResolvers<number>()`
+ * 这种**带泛型的调用形式完全抓不到** —— 门禁在 TS 代码里最常见的写法上静默失效，而它看起来一切正常
+ * （命中数只少那么一两个，没人对账）。泛型只吃 `<...>`，不含 `(`、`)`、`{`、`}`、`;`，深度 ≤ 2 层。
+ */
+const TYPE_ARGS = '(?:\\s*<(?:[^<>(){};]|<[^<>(){};]*>){0,120}>)?'
+
+const callPattern = (name) => new RegExp(`${RECEIVER}\\s*\\.\\s*${name}${TYPE_ARGS}\\s*\\(`, 'g')
+const staticPattern = (owner, name) => new RegExp(`\\b${owner}\\s*\\.\\s*${name}${TYPE_ARGS}\\s*\\(`, 'g')
 
 /**
  * 版本表 + 匹配规则。`id` 是稳定标识（测试与文档都按它对齐），`source` 注明版本号出处：

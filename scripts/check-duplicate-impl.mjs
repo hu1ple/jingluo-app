@@ -28,18 +28,27 @@
  * 用法：
  *   node scripts/check-duplicate-impl.mjs
  *   pnpm run check:dup-impl
+ *   node scripts/check-duplicate-impl.mjs --selftest   # 自带负向对照（6 拍，临时仓库，不碰本仓）
  *
  * 退出码：
  *   0  干净（没有字节相同的两份实现）
  *   1  发现重复，逐组打印 `sha256  文件A  文件B…`
  *   2  用法 / 环境错误
  */
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+import { renderSelftest } from './lib/auditDebt.mjs'
+
+/**
+ * 仓库根。`CHECK_DUP_IMPL_ROOT` 只给 `--selftest` 用（它在一个临时仓库上跑），
+ * 是测试注入口、不是运行开关：正常调用不设这个变量。
+ */
+const ROOT = path.resolve(process.env.CHECK_DUP_IMPL_ROOT ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'))
 
 /** 扫这些目录（相对仓库根） */
 const SCAN_DIRS = ['scripts', 'tests', 'src']
@@ -77,6 +86,68 @@ const walk = (dir, out) => {
   }
   return out
 }
+
+
+/**
+ * `--selftest`：**故意做错必须被拦**。临时仓库（`CHECK_DUP_IMPL_ROOT`）五拍：
+ *   ① 两个内容不同的文件 → exit 0
+ *   ② 把其中一个原样复制一份（**字节完全相同**）→ **必 exit 1**，印出 sha256 与两个路径，并给处理方式
+ *   ③ 两个空文件（字节也相同）→ exit 0（空文件不构成「两份实现」）
+ *   ④ 改掉副本里一个字节 → exit 0（证明「红来自字节相同」，不是「名字相同」）
+ *   ⑤ 扫描范围为空 → exit 2（不谎报通过）
+ */
+const selftest = () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'check-dup-impl-selftest-'))
+  const cases = []
+  const gate = () => {
+    const result = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
+      encoding: 'utf8',
+      env: { ...process.env, CHECK_DUP_IMPL_ROOT: tmp },
+    })
+    return { status: result.status, out: `${result.stdout ?? ''}${result.stderr ?? ''}` }
+  }
+  const write = (rel, text) => {
+    fs.mkdirSync(path.dirname(path.join(tmp, rel)), { recursive: true })
+    fs.writeFileSync(path.join(tmp, rel), text, 'utf8')
+  }
+  try {
+    write('scripts/a.mjs', 'export const a = 1\n')
+    write('tests/b.mjs', 'export const b = 2\n')
+    cases.push({ name: '① 两份不同实现 → exit 0', ok: gate().status === 0 })
+
+    write('tests/b-copy.mjs', 'export const a = 1\n')
+    const dup = gate()
+    cases.push({
+      name: '② 原样复制一份 → exit 1',
+      ok: dup.status === 1 && dup.out.includes('scripts/a.mjs') && dup.out.includes('tests/b-copy.mjs'),
+      detail: `exit ${dup.status}`,
+    })
+    cases.push({
+      name: '② 报错带 sha256 + 处理方式（删副本 / 抽共用模块）',
+      ok: /sha256 [0-9a-f]{64}/.test(dup.out) && dup.out.includes('删掉副本'),
+    })
+
+    fs.rmSync(path.join(tmp, 'tests/b-copy.mjs'))
+    write('scripts/empty1.mjs', '')
+    write('tests/empty2.mjs', '')
+    cases.push({ name: '③ 两个空文件 → exit 0（不算两份实现）', ok: gate().status === 0 })
+
+    write('tests/b-copy.mjs', 'export const a = 1 \n')
+    cases.push({ name: '④ 副本差一个字节 → exit 0（判据是字节相同，不是名字相同）', ok: gate().status === 0 })
+
+    fs.rmSync(path.join(tmp, 'scripts'), { recursive: true })
+    fs.rmSync(path.join(tmp, 'tests'), { recursive: true })
+    fs.rmSync(path.join(tmp, 'src'), { recursive: true, force: true })
+    cases.push({ name: '⑤ 三个扫描目录都不在 → exit 2（不谎报通过）', ok: gate().status === 2 })
+  } catch (error) {
+    cases.push({ name: 'selftest 自身抛错', ok: false, detail: error.message })
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true })
+  }
+  return renderSelftest('check:dup-impl', cases)
+}
+
+if (process.argv.includes('--selftest')) process.exit(selftest() ? 0 : 1)
 
 const files = []
 for (const dir of SCAN_DIRS) walk(path.join(ROOT, dir), files)

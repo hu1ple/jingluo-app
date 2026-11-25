@@ -1,0 +1,30 @@
+{
+  "gate": "check-capabilities",
+  "note": "能力假设盘点的账本（#209）。这里每一条都是**已认领但还没修**的真实缺陷：有到期日、有承接单，到期或数量增长都会让 check:capabilities 红。新增缺陷请先修，再决定要不要登记 —— 登记要写清 why / issue / expires，expires 不许超过今天 + 90 天。账目 id = 类别|文件|能力名，故意不含行号（行号会随正确改动漂移）。",
+  "entries": {
+    "css|src/components/messages/MessageList.module.css|scrollbar-gutter": {
+      "count": 5,
+      "why": "5 处 `scrollbar-gutter` 没有 `@supports` 兜底：Chromium 94 以下是空转，滚动条一出现列表宽度就跳，而构建期与 390/360 的高版本截图都看不出来。修法是按 docs/capabilities/css.md 的渐进降级补 `@supports` 或改 padding-right 补偿（同目录还有一个 check:gutter 门禁在管这件事，两条口径要一起改）。",
+      "issue": "#209",
+      "expires": "2027-01-15"
+    },
+    "host|src/services/diagnostics/collector.ts|fetch 页面级拦截": {
+      "count": 3,
+      "why": "3 处「依赖 window.fetch 是本尊」的页面级拦截（bind / clone / body 流）。一旦宿主或别的 SDK 在页面里包了一层 fetch，诊断通路整条哑掉且不报错 —— 用户那边表现为「日志不传了」，我们这边没有任何信号。属于发出去收不回来的那类，故排在最短的到期日。",
+      "issue": "#209",
+      "expires": "2026-12-20"
+    },
+    "host|src/services/diagnostics/collector.ts|fetch 响应体 clone": {
+      "count": 1,
+      "why": "响应体 clone 依赖本尊 fetch 的 Response 语义；包装层若丢掉 clone 或改成一次性流，这里会抛 TypeError 并被静默吞掉（诊断数据缺一块，看不出缺）。与上面 3 处同一张单。",
+      "issue": "#209",
+      "expires": "2026-12-20"
+    },
+    "host|src/utils/capabilities.ts|fetch 页面级拦截": {
+      "count": 1,
+      "why": "能力探测模块里的同一假设：探测结论建立在「fetch 是本尊」之上，包装后就探测错，且错的方向是「以为自己有拦截能力」—— 比探测不到更坏。",
+      "issue": "#209",
+      "expires": "2026-12-20"
+    }
+  }
+}

@@ -336,10 +336,37 @@ const readEventKinds = () => {
 const readBaseline = () => {
   const full = path.join(ROOT, BASELINE_FILE)
   if (!fs.existsSync(full)) {
-    return { knownGaps: [], metaDebt: [] }
+    return { knownGaps: [], metaDebt: [], reviewBy: null }
   }
   const parsed = JSON.parse(fs.readFileSync(full, 'utf8'))
-  return { knownGaps: parsed.knownGaps ?? [], metaDebt: parsed.metaDebt ?? [] }
+  return { knownGaps: parsed.knownGaps ?? [], metaDebt: parsed.metaDebt ?? [], reviewBy: parsed.reviewBy ?? null }
+}
+
+/**
+ * 登记簿的**复核期限**（`reviewBy: YYYY-MM-DD`）。
+ *
+ * 「只能减不能增」只约束了「加不进来」，没约束「减不掉就永远挂着」—— 一条一直在违反的
+ * 登记，只要它不动，就永远不触发「基线失效」。所以再加一道日期：过了 `reviewBy`，
+ * 这本登记簿整体作废（FAIL），必须逐条重新认领（续期＝改日期，进 diff 有人看见）。
+ * 到期红拦的不是别人的改动，是「这笔账没人再看」—— 与 `scripts/lib/auditDebt.mjs` 同一口径。
+ */
+const checkReviewDeadline = (baseline, failures) => {
+  if (!baseline.reviewBy) {
+    failures.push({
+      rule: '基线无期限',
+      detail: `${BASELINE_FILE} 缺 reviewBy（登记簿没有复核期限 = 永久豁免）`,
+      fix: '在基线里加 `"reviewBy": "YYYY-MM-DD"`（≤ 90 天），到期逐条重新认领',
+    })
+    return
+  }
+  const today = process.env.AUDIT_TODAY ?? new Date().toISOString().slice(0, 10)
+  if (today > baseline.reviewBy) {
+    failures.push({
+      rule: '基线到期',
+      detail: `${BASELINE_FILE} 的复核期限 ${baseline.reviewBy} 已过（今天 ${today}）`,
+      fix: '逐条确认还欠不欠：欠的更新 reviewBy 续期（≤ 90 天）并写清还差什么，已经修好的直接删掉该行',
+    })
+  }
 }
 
 const checkDeadKinds = (kinds, sites, failures) => {
@@ -513,6 +540,7 @@ const known = []
 checkDeadKinds(kinds, sites, failures)
 checkCriticalPaths(sites, baseline, strict, failures, known)
 checkMeta(sites, baseline, failures)
+checkReviewDeadline(baseline, failures)
 
 console.log(`log-coverage：EventKind ${kinds.length} 种，调用点 ${sites.length} 处（src/**）`)
 const byKind = new Map()

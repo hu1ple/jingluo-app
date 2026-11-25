@@ -83,9 +83,36 @@
  *
  * 退出码：0 合格（可能有「账期内的漂移」提示）/ 1 有死引用，或有未记账·已到期的漂移，或账本形状不合规 /
  * 2 环境不具备（找不到 docs 目录）。
+ * ## 「指得着」还不够：可选的内容断言 `路径:行 ⇒ 片段`（本单新增）
  *
- * 维护提示：这个门禁验的是「引用还指得着」，**不验**「文档描述的行为是否还对」。后者只能读代码
- * 复核；别把这里变绿当成文档正确。
+ * 上面四关只验「文件在、行在、行不是空行/结构行」，**不验这一行是不是文档说的那段东西**。
+ * 于是 `docs/ci-self-hosted-runner.md` 里 12 处 `ci.yml:…` 从很早以前就指错了（`393` 是空行、
+ * `413` 是另一段注释、`945` 指到 android assets、`1081` 是孤立的 `#`），门禁却一直绿：
+ * 只要行号还落在文件内、且不是空行，它就永远绿。这比死链更阴 —— 死链至少会红。
+ *
+ * 但**不能靠猜**：文档里引用旁边那句话是给人看的（表格三种写法并存、散文里一会儿「的」
+ * 一会儿「（」），拿它去猜「期望片段」实测会凭空造出几百条假红（按「紧跟其后的内联 code」
+ * 推断，本单量到 287 处带行号引用里 238 处判不符 —— 绝大多数是真引用，只是旁边那句话不是
+ * 源码）。假红一多，红灯就再也不等于坏。
+ *
+ * 所以做成**显式 opt-in**：作者自己把期望片段写进同一个内联 code 里，用 `⇒` 分隔：
+ *
+ *   - `` `scripts/check-doc-refs.mjs:281 ⇒ const last = end === null ? start` ``
+ *     → 片段必须出现在 281 行（有区间就落在 [起行, 止行] 内；跨行片段按空白归一后比对）；
+ *   - `` `.github/workflows/ci.yml ⇒ - name: Build (internal)` ``（**不带行号**）→ 片段必须
+ *     出现在该文件**某处**。这是给「高频位移」文件准备的档：不钉行号（行号天天漂），
+ *     只钉「这东西还在这个文件里」—— 改名/删除会红，插行不会红。
+ *
+ * 没写片段的引用**照旧**只验到「行在、非空行」，不新增任何义务：仓库里现有 689 处带行号
+ * 引用一个字都不用改（实测新增红 0 条）。
+ *
+ * 分隔符为什么是 `⇒`（量过，不是随手挑的）：`→` 在内联 code 里出现 52 处，全是「流程/映射」
+ * 语义（`utils/savePlainText.ts → services/exportText.ts::saveTextFile`），第一版用它当场把
+ * 那份 README 咬成假红；`=` 59 处全是配置键（`caps.asr=false`），形状跟 `路径 = 片段` 一样；
+ * `（= ` 7 处是「等同」语义。`⇒` 0 处 → 选它。
+ *
+ * 维护提示：这个门禁验的是「引用还指得着」+「写了片段的那些，片段还对得上」，
+ * **不验**「文档描述的行为是否还对」。后者只能读代码复核；别把这里变绿当成文档正确。
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -257,6 +284,53 @@ const suffixHits = (index, file) => {
 }
 
 /**
+ * 「路径 ⇒ 片段」（不带行号）：片段必须出现在该文件的**某处**。
+ * 找不到 = 这文件里没有这东西了（改名 / 删除 / 文档说的是别处的东西）→ FAIL。
+ */
+const judgeExpectInFile = (target, expect, suffix) => {
+  const text = linesOf(target).join('\n')
+  if (normalise(text).includes(normalise(expect))) return { verdict: 'ok', kind: 'content-ok', target, suffix }
+  return {
+    verdict: 'fail',
+    kind: 'content-missing',
+    target,
+    suffix,
+    message:
+      `内容断言不符：该文件里找不到 ${JSON.stringify(expect)}` +
+      '（`路径 ⇒ 片段` 要求这段文字还在这个文件里；改名 / 删除 / 搬走了就改锚点）',
+  }
+}
+
+/**
+ * 「路径:行 ⇒ 片段」：片段必须出现在 [起行, 止行] 之内（跨行比对，空白归一）。
+ * 不符时给两样东西：锚点这一行**实际**是什么 + 片段**现在**在几行 —— 修的人不必自己找。
+ */
+const judgeExpectAtLine = (target, lines, start, last, expect, suffix) => {
+  const want = normalise(expect)
+  if (normalise(lines.slice(start - 1, last).join('\n')).includes(want)) {
+    return { verdict: 'ok', kind: 'content-ok', target, suffix }
+  }
+  const elsewhere = []
+  lines.forEach((line, i) => {
+    if (normalise(line).includes(want)) elsewhere.push(i + 1)
+  })
+  const where =
+    elsewhere.length === 0
+      ? '整个文件里都找不到这段文字（内容可能已被改写 / 删除 —— 那就不是「改行号」能修的：改锚点或改结论）'
+      : `这段文字现在在 ${elsewhere.slice(0, 5).join(' / ')}${elsewhere.length > 5 ? ` …（共 ${elsewhere.length} 行命中）` : ''} 行`
+  return {
+    verdict: 'fail',
+    kind: 'content-mismatch',
+    target,
+    suffix,
+    message:
+      `内容断言不符：[${start}${last === start ? '' : `-${last}`}] 这一行是 ${JSON.stringify(
+        (lines[start - 1] ?? '').trim().slice(0, 80),
+      )}；${where}`,
+  }
+}
+
+/**
  * 判定一处引用：
  * { verdict: 'ok' | 'warn' | 'fail', kind, target?, message? }
  */
@@ -333,7 +407,10 @@ const judgeRef = (index, ref, docDir) => {
   }
   if (target.endsWith('/'))
     return { verdict: 'ok', kind: 'dir', target, suffix: suffixResolved }
-  if (!hasLine) return { verdict: 'ok', kind: 'path', target, suffix: suffixResolved }
+  if (!hasLine) {
+    if (ref.expect) return judgeExpectInFile(target, ref.expect, suffixResolved)
+    return { verdict: 'ok', kind: 'path', target, suffix: suffixResolved }
+  }
 
   // ---- 行号 ----
   const lines = linesOf(target)
@@ -376,6 +453,7 @@ const judgeRef = (index, ref, docDir) => {
       )}），改用函数名/常量名定位更稳`,
     }
   }
+  if (ref.expect) return judgeExpectAtLine(target, lines, start, last, ref.expect, suffixResolved)
   return { verdict: 'ok', kind: 'line', target, suffix: suffixResolved }
 }
 
@@ -414,6 +492,56 @@ const SKIP_REASONS = {
   'ambiguous-bare': '裸文件名无行号，仓库里同名多个（不定位行号，只放行）',
 }
 
+/**
+ * 「内容断言」：`路径:行 ⇒ 片段` / `路径 ⇒ 片段`（`⇒` 见文件头，为什么不是 `→` / `=`）。
+ */
+const ANNOT_RE = /^([.A-Za-z0-9_@][\w.@/+-]*\.[A-Za-z0-9]{1,8}):(\d+)(?:[-–](\d+))?\s*⇒\s*(\S[\s\S]*)$/
+const ANNOT_NOLINE_RE = /^([.A-Za-z0-9_@][\w.@/+-]*\.[A-Za-z0-9]{1,8})\s*⇒\s*(\S[\s\S]*)$/
+
+/** 一行里的内联 code span（含内容在行内的起止偏移） */
+const codeSpans = (line) => {
+  const out = []
+  const re = /`([^`]+)`/g
+  let m
+  while ((m = re.exec(line)) !== null) {
+    out.push({ text: m[1], start: m.index + 1, end: m.index + 1 + m[1].length })
+  }
+  return out
+}
+
+/**
+ * 抽出本行的内容断言：`Map<路径在行内的起始偏移, {file, start, end, expect}>`，
+ * 外加一个「把 `⇒ 片段` 那一段抹成空格」的行。
+ *
+ * 为什么要抹：片段里常常又写着别的文件名（`⇒ image: playwright/…`），不抹的话它会被当成
+ * 一条独立引用再去判一次，凭空多出红、也多出一条对不上的断言。
+ */
+const annotationsOf = (line) => {
+  const annots = new Map()
+  const spans = codeSpans(line)
+  if (spans.length === 0) return { annots, masked: line }
+  let masked = line
+  for (const span of spans) {
+    const hit = ANNOT_RE.exec(span.text)
+    const noLine = hit ? null : ANNOT_NOLINE_RE.exec(span.text)
+    if (!hit && !noLine) continue
+    const expect = (hit ? hit[4] : noLine[2]).trim()
+    if (!expect) continue
+    annots.set(span.start, {
+      file: hit ? hit[1] : noLine[1],
+      start: hit ? Number(hit[2]) : null,
+      end: hit && hit[3] !== undefined ? Number(hit[3]) : null,
+      expect,
+    })
+    const arrow = span.start + span.text.indexOf('⇒')
+    masked = masked.slice(0, arrow) + ' '.repeat(span.end - arrow) + masked.slice(span.end)
+  }
+  return { annots, masked }
+}
+
+/** 归一空白后比对：多空格 / 跨行不算错，改一个字符算错 */
+const normalise = (s) => s.replace(/\s+/g, ' ').trim()
+
 const extractRefs = (text, skipped) => {
   const refs = []
   const lines = text.split(/\r?\n/)
@@ -428,16 +556,19 @@ const extractRefs = (text, skipped) => {
     }
     if (inFence) return
     const strikes = strikeSpans(line)
+    const { annots, masked } = annotationsOf(line)
     REF_RE.lastIndex = 0
     let m
-    while ((m = REF_RE.exec(line)) !== null) {
+    while ((m = REF_RE.exec(masked)) !== null) {
       const file = m[1]
+      const annot = annots.get(m.index)
       const before = m.index === 0 ? '' : line[m.index - 1]
       // 删除线里的路径 = 「曾有、现已删除」的记录（迁移/删除清单要写清删了什么）。
       // 以前这类引用被下面 `before === '~'` 那条规则**静默丢掉**（一个看不见的后门：
       // 任何文档只要给死引用套一层 `~~` 就能过门禁，且没人知道发生过）。
       // 现在单独计数并打印 —— 放行是**显式**的，能数出来，也能被 review 看到。
       if (strikes.some(([start, end]) => m.index >= start && m.index + m[0].length <= end)) {
+        annots.delete(m.index)
         refs.push({
           file,
           start: m[2] === undefined ? null : Number(m[2]),
@@ -475,12 +606,31 @@ const extractRefs = (text, skipped) => {
           // 仍然入列：judgeRef 会尝试后缀唯一匹配
         }
       }
+      let expect = null
+      if (annot) {
+        annots.delete(m.index)
+        expect = annot.expect
+      }
       refs.push({
         file,
         start: m[2] === undefined ? null : Number(m[2]),
         end: m[3] === undefined ? null : Number(m[3]),
         line: i + 1,
         raw: m[0],
+        expect,
+      })
+    }
+    // 内容断言自带路径，不依赖 REF_RE 认不认它：`.github/**` 这类以点开头的路径会被
+    // 「前面是 `.`，算名字的一部分」那条规则跳过 —— 而 `ci.yml` 正是本单要咬的那份文档。
+    // 所以断言自己成一条引用：照样过「文件存在 / 行在 / 非空行」，再加内容比对。
+    for (const [, annot] of annots) {
+      refs.push({
+        file: annot.file,
+        start: annot.start,
+        end: annot.end,
+        line: i + 1,
+        raw: annot.file + (annot.start === null ? '' : `:${annot.start}`) + ` ⇒ ${annot.expect}`,
+        expect: annot.expect,
       })
     }
   })
@@ -560,6 +710,15 @@ const auditOtherExt = (text, index, docRel, out) => {
  */
 const DEAD_KINDS = new Set(['missing-file', 'ambiguous'])
 const DRIFT_KINDS = new Set(['blank-line', 'out-of-range'])
+/**
+ * 内容断言不符（`路径:行 ⇒ 片段`）：与死引用同档，**永远拦、不记账**。
+ *
+ * 记账是给「定位失效但结论还对」的行号漂移用的（读者多翻两下仍能找到）。内容断言不符不是
+ * 这个形状：文档说「这一行是 `X`」，而这一行不是 —— 结论和代码已经不一致了，容忍它等于
+ * 允许文档说谎。不想被这一档管，办法是**别写断言**（把 `⇒ 片段` 删掉就回到「只验行在」，
+ * 那是 diff 里看得见的降级），而不是写了再给它记账。
+ */
+const CONTENT_KINDS = new Set(['content-mismatch', 'content-missing'])
 
 /** 一句话事故：这条不修，读者会遇到什么 */
 const ACCIDENT = {
@@ -567,6 +726,8 @@ const ACCIDENT = {
   ambiguous: '同名文件不止一个，读者不知道该看哪一份 —— 引用等于没写。',
   'blank-line': '引用指到空行：读者跳过去只看到空白，这条引用就失去了定位能力，只能整篇翻。',
   'out-of-range': '行号越界：文件比引用短，读者翻到底也找不到 —— 要么结论漂走了，要么文件被删改过。',
+  'content-mismatch': '引用指着的这一行不是文档说的那段代码：行号还在、非空行，所以老判据永远绿 —— 读者跳过去会读到**别的东西**，然后按错的代码理解结论。',
+  'content-missing': '文档写着「这个文件里有 X」，但那文件里已经没有 X 了（改名 / 删除 / 搬走）—— 读者按这条引用会扑空。',
 }
 
 /** 一条能直接敲的修复入口（不是「请修正」这种空话） */
@@ -578,6 +739,8 @@ const fixOf = (item) => {
     return `rg --files | grep -E '/${target.split('/').pop()}$'   # 看是哪几份同名，引用补成仓库相对路径`
   if (item.kind === 'out-of-range')
     return `wc -l ${target}   # 把行号收进文件内，或改成「函数名/常量名」定位`
+  if (CONTENT_KINDS.has(item.kind))
+    return `grep -nF -- "${(item.expect ?? '<片段>').trim()}" ${target}   # 报错里已给出「现在在几行」，照它改行号；改没了就换锚点或改结论`
   return `grep -n "<你引用的那个符号>" ${target}   # 拿到真实行号改对；符号改名了就改引用`
 }
 
@@ -585,7 +748,7 @@ const fixOf = (item) => {
 const debtKeyOf = (item) => `${item.doc}::${item.raw}`
 
 /**
- * `--selftest`：**故意做错必须被拦**。六拍，全在一个临时仓库里跑（`CHECK_DOC_REFS_ROOT`），
+ * `--selftest`：**故意做错必须被拦**。十六拍，全在一个临时仓库里跑（`CHECK_DOC_REFS_ROOT`），
  * 不碰真仓库的任何文件：
  *   ① 干净 → exit 0
  *   ② 写一个不存在的路径（死引用）→ **必 exit 1**，且印「事故 + 修法」
@@ -593,12 +756,26 @@ const debtKeyOf = (item) => `${item.doc}::${item.raw}`
  *   ④ 同一处漂移记进账（未到期）→ **必 exit 0**（容忍在账期内的漂移）
  *   ⑤ 同一本账改成已过期 → **必 exit 1**
  *   ⑥ 账本条目没有到期日 → **必 exit 1**（永久豁免不存在）
+ *
+ * 内容断言（`路径:行 ⇒ 片段`，本单新增的新档）：
+ *   ⑦ 行号对 + 片段对 → exit 0
+ *   ⑧ 行号差一行 → **必 exit 1**，且报「内容断言不符」+「这段文字现在在 2 / 5 行」
+ *   ⑨ 片段在同一文件里出现两次、但行号取对了 → **不许**红（合法重复不误伤）
+ *   ⑩ `路径 ⇒ 片段`（不带行号）片段在文件里 → exit 0
+ *   ⑪ `路径 ⇒ 片段`（不带行号）片段不在文件里 → **必 exit 1**
+ *   ⑫ 文档里的 `→` 调用链写法 → **不许**被当成内容断言
+ *
+ * 死账（账面比实际多，lead 裁决 2026-11-26）：
+ *   ⑬ 原文已从正文消失、账还挂着 → **必 exit 1**，点名该笔 + 提示 `--prune`
+ *   ⑭ `--prune` 删掉死账 → exit 0，账本里那条真没了，再跑门禁已绿
+ *   ⑮ 原文还在正文里、只是判定变绿 → **仍判红**（账实不符），但
+ *   ⑯ `--prune` **不许删它**（判据被改松时不能顺手销账）
  */
 const selftest = () => {
   const tmp = mkdtempSync(path.join(os.tmpdir(), 'check-doc-refs-selftest-'))
   const cases = []
-  const gate = (root) => {
-    const result = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
+  const gate = (root, args = []) => {
+    const result = spawnSync(process.execPath, [fileURLToPath(import.meta.url), ...args], {
       encoding: 'utf8',
       env: { ...process.env, CHECK_DOC_REFS_ROOT: root },
     })
@@ -668,6 +845,97 @@ const selftest = () => {
       ok: shapeless.status === 1 && shapeless.out.includes('expires'),
       detail: `exit ${shapeless.status}`,
     })
+
+    // 先把账本抹干净（上一拍留下的是「形状不合规」的账本，会一直红）
+    writeFileSync(ledger, JSON.stringify({ gate: 'check-doc-refs', entries: {} }), 'utf8')
+
+    // ---- ⑦~⑫ 内容断言 `路径:行 ⇒ 片段` ----
+    // nums.ts：`const A = 1` 故意**出现两次**（第 2 行、第 5 行）——合法重复，不能误伤
+    writeFileSync(path.join(tmp, 'src', 'nums.ts'), '// head\nconst A = 1\nconst B = 2\n// tail\nconst A = 1\n', 'utf8')
+
+    writeFileSync(doc, '行号对、片段对：`src/nums.ts:2 ⇒ const A = 1`\n', 'utf8')
+    const annotOk = gate(tmp)
+    cases.push({ name: '⑦ 行号对 + 片段对 → exit 0', ok: annotOk.status === 0, detail: `exit ${annotOk.status}` })
+
+    writeFileSync(doc, '行号差一行：`src/nums.ts:3 ⇒ const A = 1`\n', 'utf8')
+    const annotBad = gate(tmp)
+    cases.push({
+      name: '⑧ 行号差一行 → exit 1，且报「内容断言不符」+ 片段现在在哪几行',
+      ok:
+        annotBad.status === 1 &&
+        annotBad.out.includes('内容断言不符') &&
+        annotBad.out.includes('现在在 2 / 5 行'),
+      detail: `exit ${annotBad.status}`,
+    })
+
+    writeFileSync(doc, '片段重复但行号取对：`src/nums.ts:5 ⇒ const A = 1`\n', 'utf8')
+    const annotDup = gate(tmp)
+    cases.push({
+      name: '⑨ 片段在文件里出现两次、行号取对了 → 不许红（合法重复不误伤）',
+      ok: annotDup.status === 0,
+      detail: `exit ${annotDup.status}`,
+    })
+
+    writeFileSync(doc, '不带行号、片段在文件里：`src/nums.ts ⇒ const B = 2`\n', 'utf8')
+    const fileLevelOk = gate(tmp)
+    cases.push({ name: '⑩ `路径 ⇒ 片段` 片段在文件里 → exit 0', ok: fileLevelOk.status === 0, detail: `exit ${fileLevelOk.status}` })
+
+    writeFileSync(doc, '不带行号、片段不在文件里：`src/nums.ts ⇒ const Z = 9`\n', 'utf8')
+    const fileLevelBad = gate(tmp)
+    cases.push({
+      name: '⑪ `路径 ⇒ 片段` 片段不在文件里 → exit 1',
+      ok: fileLevelBad.status === 1 && fileLevelBad.out.includes('内容断言不符'),
+      detail: `exit ${fileLevelBad.status}`,
+    })
+
+    writeFileSync(doc, '调用链写法：`src/nums.ts → src/thing.ts`（不是内容断言）\n', 'utf8')
+    const arrowNotAssertion = gate(tmp)
+    cases.push({
+      name: '⑫ 文档里的 `→` 调用链写法不被当成内容断言',
+      ok: arrowNotAssertion.status === 0,
+      detail: `exit ${arrowNotAssertion.status}`,
+    })
+
+    // ---- ⑬~⑯ 死账：账面比实际多 = 红；`--prune` 只删真死的 ----
+    writeFileSync(doc, '这行已经改成 `src/thing.ts:3` 了\n', 'utf8')
+    writeFileSync(
+      ledger,
+      JSON.stringify({ gate: 'check-doc-refs', entries: { [key]: { count: 1, why: 'selftest', issue: '#0', expires: soon } } }),
+      'utf8',
+    )
+    const shrink = gate(tmp)
+    cases.push({
+      name: '⑬ 死账（原文已不在正文里）→ exit 1，点名该笔 + 提示 --prune',
+      ok: shrink.status === 1 && shrink.out.includes('账面比实际多') && shrink.out.includes('--prune') && shrink.out.includes(key),
+      detail: `exit ${shrink.status}`,
+    })
+    const pruned = gate(tmp, ['--prune'])
+    cases.push({
+      name: '⑭ `--prune` 删死账 → exit 0，账本里那条真没了',
+      ok: pruned.status === 0 && !readFileSync(ledger, 'utf8').includes('src/thing.ts:2'),
+      detail: `exit ${pruned.status}`,
+    })
+    cases.push({ name: '⑭b 销账之后门禁已经绿', ok: gate(tmp).status === 0 })
+
+    const okKey = 'docs/probe.md::src/thing.ts:1'
+    writeFileSync(doc, '这里引用是有效的：`src/thing.ts:1`\n', 'utf8')
+    writeFileSync(
+      ledger,
+      JSON.stringify({ gate: 'check-doc-refs', entries: { [okKey]: { count: 1, why: 'selftest', issue: '#0', expires: soon } } }),
+      'utf8',
+    )
+    const stillGreenRed = gate(tmp)
+    cases.push({
+      name: '⑮ 原文还在、只是判定变绿 → 仍判红（账实不符）',
+      ok: stillGreenRed.status === 1 && stillGreenRed.out.includes('账面比实际多'),
+      detail: `exit ${stillGreenRed.status}`,
+    })
+    const kept = gate(tmp, ['--prune'])
+    cases.push({
+      name: '⑯ `--prune` 不许删「原文还在正文里」的账（判据被改松时不能顺手销账）',
+      ok: kept.status === 0 && readFileSync(ledger, 'utf8').includes(okKey),
+      detail: `exit ${kept.status} / 账本里还有这行=${readFileSync(ledger, 'utf8').includes(okKey)}`,
+    })
   } catch (error) {
     cases.push({ name: 'selftest 自身抛错', ok: false, detail: error.message })
   } finally {
@@ -706,19 +974,26 @@ const main = () => {
   const otherExt = []
   /** 靠后缀唯一匹配才定位到的引用（#678 新纳入判定） */
   const suffixJudged = []
+  /** 带内容断言（`路径 ⇒ 片段`）而被「连内容一起验」的引用 */
+  const asserted = []
+
+  /** 文档正文（`--prune` 判「这条引用的原文还在不在」用；不在就说明这账是真死了） */
+  const docTexts = new Map()
 
   for (const full of files) {
     const rel = toPosix(path.relative(ROOT, full))
     const docDir = toPosix(path.relative(ROOT, path.dirname(full))) || '.'
     const text = readFileSync(full, 'utf8')
+    docTexts.set(rel, text)
     const localSkips = []
     for (const ref of extractRefs(text, localSkips)) {
       const result = judgeRef(index, ref, docDir)
-      const record = { doc: rel, docLine: ref.line, raw: ref.raw, ...result }
+      const record = { doc: rel, docLine: ref.line, raw: ref.raw, expect: ref.expect ?? null, ...result }
       if (isExempt(rel)) {
         exempt.push(record)
         continue
       }
+      if (CONTENT_KINDS.has(result.kind) || result.kind === 'content-ok') asserted.push(record)
       if (result.suffix) suffixJudged.push(record)
       if (result.kind === 'deleted-marker') deleted.push(record)
       // judgeRef 层面的「不判定」也记账（裸名找不到 / 裸名多匹配且不定位行号）
@@ -740,6 +1015,7 @@ const main = () => {
 
   // 分级：死引用永远拦；行号漂移走账本（有到期日）。
   const deadRefs = fails.filter((f) => DEAD_KINDS.has(f.kind))
+  const contentFails = fails.filter((f) => CONTENT_KINDS.has(f.kind))
   const drift = fails.filter((f) => DRIFT_KINDS.has(f.kind))
   const actualDrift = new Map()
   for (const item of drift) {
@@ -761,7 +1037,75 @@ const main = () => {
   const redDrift = drift
     .filter((item) => redReason.has(debtKeyOf(item)))
     .map((item) => ({ ...item, why: redReason.get(debtKeyOf(item)) }))
-  const hardRed = deadRefs.length + redDrift.length
+
+  /**
+   * 死账（lead 裁决 2026-11-26）：**账面比实际多也判红**。
+   *
+   * 原来只印一句 `ℹ 提示`，理由是「修好一处缺陷的往往不是改账本的人，把别人的正确改动变成红灯
+   * 是老毛病」。但实测把它留成提示的代价更大：#761 记账时 20 处漂移，本单修完之后**9 笔账
+   * 谁都不会去看**——「只增不减」正是豁免表烂掉的开始，和「永久豁免」是同一个病。
+   *
+   * 现在按「账实不符本身就是要人做决定的事」处理：要么删账（`--prune`），要么重新论证。
+   * 摩擦与风险成正比：销账只要一条命令，而账本悄悄烂掉的代价是**下一轮没人信这张表**。
+   *
+   * 但要能**自我证伪**：`--prune` 只删「原文在这份文档里一次都不出现」的死账 —— 原文还在、
+   * 只是判定变绿了，说明判据可能被改松（或这条引用被改成了不判定的写法），**不许自动删**，
+   * 必须人工重新论证。否则 `--prune` 就成了一个「把还在违规的账顺手销掉」的后门。
+   */
+  const deadLedger = settled.shrink.map((item) => {
+    const key = item.key
+    const sep = key.indexOf('::')
+    const doc = key.slice(0, sep)
+    const raw = key.slice(sep + 2)
+    const text = docTexts.get(doc)
+    return {
+      key,
+      doc,
+      raw,
+      registered: item.registered,
+      actual: item.found?.count ?? 0,
+      entry: item.entry,
+      /** 原文还在正文里？还在 = 不是死账，`--prune` 不碰它 */
+      rawStillPresent: text !== undefined && text.includes(raw),
+      docStillScanned: text !== undefined,
+    }
+  })
+  const prunable = deadLedger.filter((item) => !item.rawStillPresent)
+  const keptShrink = deadLedger.filter((item) => item.rawStillPresent)
+
+  if (process.argv.includes('--prune')) {
+    if (debt.problems.length) {
+      console.error('❌ 账本形状本身不合规，先修账本再谈销账（不猜、不自动改坏账本）：')
+      for (const problem of debt.problems) console.error(`  ${problem}`)
+      process.exit(1)
+    }
+    if (!prunable.length) {
+      console.log(
+        keptShrink.length
+          ? `没有可自动销的死账。另有 ${keptShrink.length} 笔「原文还在、判定已不违规」的账 —— 这类不许自动删（判据可能被改松了），请人工重新论证后手改账本：`
+          : '没有可销的死账：账实相符。',
+      )
+      for (const item of keptShrink) console.log(`  ${item.key}  登记 ${item.registered}，实际 ${item.actual}（原文仍在正文里）`)
+      process.exit(0)
+    }
+    const parsed = JSON.parse(readFileSync(debt.file, 'utf8'))
+    for (const item of prunable) delete parsed.entries[item.key]
+    writeFileSync(debt.file, `${JSON.stringify(parsed, null, 2)}\n`, 'utf8')
+    console.log(`— prune：从 ${debt.shown} 删掉 ${prunable.length} 笔死账（原文已从正文里消失）——`)
+    for (const item of prunable) {
+      console.log(`  - ${item.key}  登记 ${item.registered}，实际 ${item.actual}${item.docStillScanned ? '' : '（文档已不在这场扫描里）'}`)
+    }
+    if (keptShrink.length) {
+      console.log(`\n⚠ 另有 ${keptShrink.length} 笔「原文还在、判定已不违规」的账**没动**，请人工重新论证：`)
+      for (const item of keptShrink) console.log(`  ${item.key}  登记 ${item.registered}，实际 ${item.actual}`)
+    }
+    console.log('\n下一步（本命令不替你 review）：')
+    console.log(`  git diff ${debt.shown}   # 只应少上面这几条，别的一行都不许动`)
+    console.log('  node scripts/check-doc-refs.mjs   # 必须 exit 0')
+    process.exit(0)
+  }
+
+  const hardRed = deadRefs.length + contentFails.length + redDrift.length + deadLedger.length
 
   if (json) {
     console.log(
@@ -772,6 +1116,7 @@ const main = () => {
           pathOnly: pathOnly.length,
           exempt: exempt.length,
           deletedMarkers: deleted.length,
+          asserted: asserted.length,
           fails,
           warns,
           debt: {
@@ -779,7 +1124,14 @@ const main = () => {
             entries: debt.entries.size,
             settled: settled.settled.length,
             redDrift: redDrift.map(({ key, why }) => ({ key, why })),
-            shrink: settled.shrink.map(({ key, registered, found }) => ({ key, registered, actual: found.count })),
+            // 死账（账实不符）已判红：`shrink` 里的每一条都是红，`prunable` 是 `--prune` 会删的那些
+            shrink: deadLedger.map(({ key, registered, actual, rawStillPresent }) => ({
+              key,
+              registered,
+              actual,
+              rawStillPresent,
+              prunable: !rawStillPresent,
+            })),
             problems: debt.problems,
           },
         },
@@ -793,6 +1145,10 @@ const main = () => {
   console.log('文档引用门禁（GitHub issue #290）')
   console.log(
     `  扫描 ${files.length} 个文档：带行号引用 ${withLine.length} 处 / 纯路径引用 ${pathOnly.length} 处`,
+  )
+  console.log(
+    `  其中带内容断言（\`路径 ⇒ 片段\`）${asserted.length} 处 —— 这 ${asserted.length} 处连「这一行是不是` +
+      '文档说的那段东西」一起验；没写断言的引用只验到「文件在、行在、非空行」',
   )
   console.log(`  豁免（历史取证只读）${exempt.length} 处，不判定、不影响退出码`)
   console.log(
@@ -871,6 +1227,9 @@ const main = () => {
   }
 
   printGroup('❌ 死引用（指向的文件不存在 / 同名多份，永远拦）', deadRefs, { full: true })
+  printGroup('❌ 内容断言不符（文档说这一行是 X，实际不是 —— 老判据永远绿的那一类）', contentFails, {
+    full: true,
+  })
   printGroup('❌ 行号漂移 · 未记账 / 已到期（新漂的一律红；到期即红）', redDrift, { full: true })
   printGroup(
     '⚠ 行号漂移 · 已记账在账期内（不拦，但每跑一次都会提醒）',
@@ -878,11 +1237,22 @@ const main = () => {
   )
   printGroup('WARN', warns)
 
-  if (settled.shrink.length) {
-    console.log(`ℹ 账面比实际多 ${settled.shrink.length} 笔（引用已改对，但账没销 —— 提示，不判红）：`)
-    for (const item of settled.shrink) {
-      console.log(`  ${item.key}  登记 ${item.registered}，实际 ${item.count}  → 从 scripts/audit-debt/check-doc-refs.json 删掉这一条`)
+  if (deadLedger.length) {
+    console.log(`❌ 账面比实际多 ${deadLedger.length} 笔（引用已改对 / 原文已不存在，但账没销 —— **判红**）：`)
+    for (const item of deadLedger) {
+      console.log(`  ${item.key}  登记 ${item.registered}，实际 ${item.actual}`)
+      if (item.rawStillPresent) {
+        console.log(
+          '      这段原文**还在正文里**，只是已经不再违规 → 可能是判据被改松、或这条引用被改成了不判定的写法。' +
+            '**`--prune` 不会动它**，要人工重新论证后手改账本。',
+        )
+      } else {
+        console.log('      原文在这份文档里一次都不出现了 → 死账。')
+      }
     }
+    console.log('')
+    console.log(`  销账：node scripts/check-doc-refs.mjs --prune` + `（只删上面「死账」那 ${prunable.length} 笔，删完请 review diff）`)
+    console.log('  不销的理由只有一个：这笔债还没解决、原文只是被改写 —— 那就把它重新登记（带新理由与到期日）。')
     console.log('')
   }
 
@@ -903,10 +1273,11 @@ const main = () => {
   }
 
   if (hardRed === 0 && debt.problems.length === 0) {
+    const assertedNote = asserted.length ? `；其中 ${asserted.length} 处内容断言也逐条对上了片段` : ''
     console.log(
       warns.length === 0
-        ? '合格：所有引用都指得着（文件存在、行号在文件内、不落在空行）。'
-        : '合格（有 WARN）：没有硬错误；WARN 项建议改用函数名/常量名定位。',
+        ? `合格：所有引用都指得着（文件存在、行号在文件内、不落在空行）${assertedNote}。`
+        : `合格（有 WARN）：没有硬错误${assertedNote}；WARN 项建议改用函数名/常量名定位。`,
     )
     process.exit(0)
   }

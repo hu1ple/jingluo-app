@@ -185,7 +185,7 @@ RFC1918 私有地址，是公网可路由的 IPv4 字面量（Issue #745 标题�
 | **活但纯拒绝用** | `legacyHosts` 里的 `123.207.199.196`、`62.106.70.167` | 表本身要留（老用户配置重写），**但值可以换成占位**：它只做 `includes()` 比对（`src/services/api/apiConfig.ts:168`），换成 `__REDACTED__` 后老配置会"失联"→ 需要同步改契约 |
 
 > `legacyHosts` 的判定值得单独说清：它**不是**"会去请求的地址"，而是"读到就当成没配过、
-> 回落当前默认"的重写表（`src/services/api/apiConfig.ts:175` 的 `dropLegacyHost`）。所以它
+> 回落当前默认"的重写表（`src/services/api/apiConfig.ts:186 ⇒ const dropLegacyHost`）。所以它
 > **没有"请求"风险，只有"泄漏"风险**。这正好是最适合"构建期占位"的一类 —— 见建议 A。
 
 ---

@@ -73,7 +73,7 @@ staging 地址是 `http://140.210.13.146:16000`（明文）。它今天撞三道
 | --- | --- | --- | --- | --- |
 | ① | 构建期（web 产物） | `scripts/lib/consumeEndpoints.mjs:185`，由 `scripts/build.mjs` 在打包前调用（调用点：`build.mjs` 里 `applyBaseOverrides(config, raw)` 那一处） | `consume.baseUrl` 必须 `https://`，唯一例外是本机回环（`scripts/lib/consumeEndpoints.mjs:164`） | `pnpm build` 在打第一个字节前就中止 |
 | ② | 构建期（gradle） | `android/app/build.gradle:209`（https）+ `android/app/build.gradle:212`（命中废弃域黑名单） | 黑名单 `android/app/build.gradle:141` 里**就含 `140.210.13.146`** | `assembleRelease` 在配置阶段 `GradleException` |
-| ③ | **运行时** | `src/services/consume/http.ts:179` | 同一套判据：非 https 且非回环 → 抛 `ConsumeConfigError` | **App 白屏** |
+| ③ | **运行时** | `src/services/consume/http.ts:339 ⇒ if (!baseUrl.toLowerCase().startsWith('https://') && !loopback && !insecureConsume)` | 同一套判据：非 https 且非回环 → 抛 `ConsumeConfigError`（`:310 ⇒ throw new ConsumeConfigError`） | **App 白屏** |
 
 > **2026-11-21 更新（#693 / #601 守卫的补正面）**：①②③ 三层现在都有**显式放行通道**（staging-only）——
 > web 构建期 `ALLOW_INSECURE_CONSUME=true`、原生构建期 `-PallowInsecureConsume=true`，产物带
@@ -199,7 +199,7 @@ console.log("A OK，将注入:", v);
 pnpm run check:consume-api          # 源码里不许有明文 http 副本（scripts/check-consume-api.mjs:183 那条判据）
 ```
 
-**构建日志必须自证「地址被覆盖了」**（`scripts/build.mjs:98` 打的这一行，别跳过）：
+**构建日志必须自证「地址被覆盖了」**（`scripts/build.mjs ⇒ 本次产物只认覆盖值` 这一行，别跳过）：
 
 ```bash
 grep -q 'override by CONSUME_BASE_OVERRIDE' /tmp/build.log && echo "覆盖生效" || echo "FAIL：日志里没有 override 那一行，产物仍打配置文件里的地址"

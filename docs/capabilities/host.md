@@ -197,15 +197,15 @@
 
 本类别唯一一条「引信已装好、还没扣扳机」的高危假设。
 
-**页面上换掉 `window.fetch` 的代码在 `src/services/diagnostics/collector.ts`：**
+**页面上换掉 `window.fetch` 的代码在 `src/services/diagnostics/collector.ts`。** 下面每处都用**两把锚**：先写函数名 / 唯一片段（给人看，行号漂了也找得到），再写 `路径:行 ⇒ 片段`（给门禁咬）。**不再写 `:1234` 这种没文件名的裸行号** —— 它不构成引用 token，`check:doc-refs` 结构性看不见（见 `docs/gates/audit-debt.md`「门禁看不见的写法」），行号漂到空行上也没人知道。
 
-- `:835` `let inNativeHttp = 0` —— 注释写的是「CapacitorHttp 内部会走 fetch：用它做重入标记」，即采集层自己知道 fetch 可能不是原生的；
-- `:887-945` `readBytesOf()` —— 体积读取三档：`Content-Length` 声明值 → 流式响应（`text/event-stream`）主动放弃、报 `BYTES_UNMEASURABLE` → 其余才 `response.clone().text()` 实测（见 #211，已修；`:846` 的 `Number('') === 0` 不再把「没有这个头」当成 0 字节）；
-- `:1037-1038` `if (typeof window.fetch !== 'function') return` / `const original = window.fetch.bind(window)` —— 把当时那个函数当作「原生 fetch」；
-- `:1078` `bytes: await readBytesOf(response)` —— 在把 `response` 交还调用方**之前** await（正因为这一行，`readBytesOf` 里任何会等到流关闭的读法都会卡住 SSE，见 #211）；
-- `:1108` `window.fetch = patched` —— 页面级替换；
-- `:1171-1241` `installCapacitorHttpHook()` —— 另外再包一层 `CapacitorHttp.get/post/…`；
-- `:1385-1399` `installHooks()` 由 `src/main.tsx:68` 的 `initDiagnostics()` 在启动时调用，只有显式传 `installHooks: false` 才不装 → 生产包里这层包装**一直是活的**。
+- `let inNativeHttp` —— 注释写的是「CapacitorHttp 内部会走 fetch：用它做重入标记」，即采集层自己知道 fetch 可能不是原生的：`src/services/diagnostics/collector.ts:916 ⇒ let inNativeHttp = 0`；
+- `readBytesOf()`（定义 `src/services/diagnostics/collector.ts:987 ⇒ export const readBytesOf = async (response: Response): Promise<number> => {`）—— 体积读取三档：`Content-Length` 声明值 → 流式响应（`text/event-stream`）主动放弃、报 `BYTES_UNMEASURABLE` → 其余才 `response.clone().text()` 实测（见 #211，已修；「没有这个头」不再被当成 0 字节，是 `parseContentLength()` 的事：`src/services/diagnostics/collector.ts:965 ⇒ const parseContentLength = (raw: string | null): number | null => {`）；
+- `installFetchHook()` 里的**两句**，今天已不相邻 —— 别再拿「/」并列写成一处（旧写法就是这么失效的）：先只判 fetch 在不在 `src/services/diagnostics/collector.ts:1114 ⇒ if (typeof window === 'undefined' || typeof window.fetch !== 'function') {`；再 `src/services/diagnostics/collector.ts:1128 ⇒ const original = window.fetch.bind(window)` —— 把当时那个函数当作「原生 fetch」；
+- `installFetchHook()` 里真正 await 体积的那一行（不是 `bytes:` 字段了，写法已改成先落变量）—— 在把 `response` 交还调用方**之前** await；正因为这一行，`readBytesOf` 里任何会等到流关闭的读法都会卡住 SSE（见 #211）：`src/services/diagnostics/collector.ts:1161 ⇒ const responseBytes = await readBytesOf(response)`；
+- 页面级替换：`src/services/diagnostics/collector.ts:1214 ⇒ window.fetch = patched as unknown as typeof window.fetch`；
+- `installCapacitorHttpHook()` —— 另外再包一层 `CapacitorHttp.get/post/…`：`src/services/diagnostics/collector.ts:1276 ⇒ const installCapacitorHttpHook = (): void => {`；
+- `installHooks()` —— 由 `initCollector()` 在启动时调用，只有显式传 `installHooks: false` 才不装 → 生产包里这层包装**一直是活的**：定义 `src/services/diagnostics/collector.ts:1505 ⇒ const installHooks = (): void => {`，开关 `src/services/diagnostics/collector.ts:1629 ⇒ if (options.installHooks !== false) {`，入口链路 `src/main.tsx:76 ⇒ void initDiagnostics({ facts: readDiagnosticsFacts })` → `initDiagnostics()` → `initCollector()`。
 
 **Capacitor 侧会在什么条件下再换一次：** Capacitor Android 运行时的 `native-bridge`（**不是本仓文件**，在 @capacitor/android 里）先存 `win.CapacitorWebFetch = window.fetch`，再 `window.fetch = async (…) => …`，整段由 `doPatchHttp` 控制；Android 上 `doPatchHttp` 要求 `CapacitorHttp.isEnabled()`，而它读的是 `plugins.CapacitorHttp.enabled`（默认 `false`）。**本仓 `capacitor.config.ts` 没有这个条目，所以今天 fetch 还是原生的。** 风险不在「现在就挂」，而在于：
 
@@ -220,8 +220,8 @@
 
 | 结论 | 位置 | 风险 | Issue |
 | --- | --- | --- | --- |
-| 页面级替换 `window.fetch`，并默认它是原生的 | `src/services/diagnostics/collector.ts:1117 ⇒ const channel = detectFetchChannel(window.fetch)`（同族 `:975`、`:977` 的桥接常量、`src/utils/capabilities.ts:256` 的通道识别正则） | 高 | #210 |
-| `readBytesOf()` 的 `response.clone().text()` 兜底：`bytes` 恒为 0，且兜底分支会阻塞流式响应 | `src/services/diagnostics/collector.ts:915`（配合 `:1078`） | 中 | #211（已修） |
+| 页面级替换 `window.fetch`，并默认它是原生的 | `src/services/diagnostics/collector.ts:1117 ⇒ const channel = detectFetchChannel(window.fetch)`（同族两个通道判定常量：`src/services/diagnostics/collector.ts:1067 ⇒ const BRIDGE_SOURCE_HINT`、`src/services/diagnostics/collector.ts:1063 ⇒ const ENGINE_NATIVE_HINT`；通道识别正则 `src/utils/capabilities.ts:256`） | 高 | #210 |
+| `readBytesOf()` 的 `response.clone().text()` 兜底：`bytes` 读不到时**今天**报「不可测」（`BYTES_UNMEASURABLE` = -1），不再拿 0 顶替「量不出来」；流式响应在碰 body 之前就放弃（#211 之前它会等到流关闭、把 SSE 卡住） | `src/services/diagnostics/collector.ts:996 ⇒ const text = await response.clone().text()`（调用点 `src/services/diagnostics/collector.ts:1161`；哨兵值 `src/services/diagnostics/collector.ts:944 ⇒ export const BYTES_UNMEASURABLE = -1`） | 中 | #211（已修） |
 
 两条都按类别 3 的规矩拆成独立 Issue 修复；#209 的 PR 只带扫描器、本文件与单测。
 

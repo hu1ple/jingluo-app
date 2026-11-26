@@ -353,6 +353,10 @@ export const en = {
   historyExportEmptySelection: 'No chats selected — nothing to export',
   // Sider 「history」row title + 「N selected」counter (multi-select footer, 2026-11 design)
   historySiderTitle: 'Chat history',
+  // Sider title search (2026-11 design): the box sits between 「new chat」 and 「chat history」
+  sessionSearchPlaceholder: 'Search chat titles...',
+  sessionSearchClear: 'Clear search',
+  sessionSearchEmpty: 'No matching chats',
   historyExportSelectedCount: '{count} selected',
   historyExportSelectedEmpty: 'Select at least one chat to export',
   historySelectModeEnter: 'Select',

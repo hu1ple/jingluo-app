@@ -344,6 +344,10 @@ export const zh = {
   historyExportEmptySelection: '没有勾选任何会话，无法导出',
   // 侧栏「历史对话」那一行的标题与「已选 N 项」计数（多选态底部操作条，设计稿 2026-11）
   historySiderTitle: '历史对话',
+  // 侧栏「按标题搜索会话」（设计稿 2026-11）：搜索框在「开启新对话」与「历史对话」之间
+  sessionSearchPlaceholder: '搜索会话标题...',
+  sessionSearchClear: '清除搜索',
+  sessionSearchEmpty: '没有找到匹配的会话',
   historyExportSelectedCount: '已选 {count} 项',
   historyExportSelectedEmpty: '请先勾选要导出的会话',
   historySelectModeEnter: '选择',

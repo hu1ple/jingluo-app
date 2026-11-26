@@ -95,6 +95,101 @@
 }
 
 /*
+ * 侧栏搜索框（设计稿 2026-11）：胶囊圆角、与「开启新对话」同宽（261px 内容宽里 width: 100%）。
+ * 位置在「开启新对话」与「历史对话」之间，`.sider` 是 flex 列 → 这里只给上间距 8px，
+ * 下面的表头自己带 20px 上内边距，两者不会叠成一坨。
+ *
+ * 视觉沿用输入区的「无边设计」#47：浅一档填充 + 圆角承载区域，聚焦时填充再深一档。
+ * 刻意不写 `:focus-visible`（Chromium 83 上是未知伪类，整条选择器被丢弃，见 #215）——
+ * 输入框的可见焦点由 `:focus-within` 的填充变化承担，83 上照常生效。
+ */
+.searchRow {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  height: 36px;
+  margin-top: 8px;
+  padding: 0 4px 0 10px;
+  border-radius: 100px;
+  background: var(--dsw-alias-bg-skeleton);
+  gap: 6px;
+  transition: background-color 0.18s ease;
+
+  &:focus-within {
+    background: var(--dsw-alias-interactive-bg-active);
+  }
+}
+
+/* 左侧放大镜：装饰性（`aria-hidden`），不参与点击 */
+.searchIcon {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 原生 `<input type="text">`：去掉浏览器默认的外观/内边距，视觉全部由 `.searchRow` 承载 */
+.searchInput {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  outline: none;
+
+  &::placeholder {
+    color: var(--dsw-alias-label-tertiary);
+  }
+}
+
+/*
+ * 「×」清除：只在输入框有内容时渲染（条件渲染，不用 `:has()` / 属性选择器遮一层 ——
+ * 那种写法在 WebView 83 上要么不生效要么需要能力探测）。
+ * 28px 见方的圆形热区在 36px 高的胶囊里居中，`data-testid=sider-search-clear` 供验收断言。
+ */
+.searchClear {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+
+  &:hover,
+  &:active {
+    background-color: var(--dsw-alias-interactive-bg-hover);
+    color: var(--dsw-alias-label-primary);
+  }
+
+  svg {
+    width: 14px;
+    height: 14px;
+  }
+}
+
+/* 无匹配时的一行提示：不能只剩一个空列表（用户会以为会话丢了，而不是「我搜的词没命中」） */
+.searchEmpty {
+  padding: 10px 10px 12px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/*
  * 「历史对话」那一行（默认态：标题 + 蓝色「选择」／多选态：蓝色「全选」+「取消」）。
  * 两态共用同一个容器与同一个行高（12 + 22 + 6 = 40px，两态都由这组值决定），切换时列表不跳动。
  *
@@ -512,6 +607,22 @@
     margin-top: 8px;
   }
 
+  /* 抽屉里搜索框与「开启新对话」同档放大（36 → 40px），
+     16px 字号同时避开 iOS 上「输入框字号 < 16px 时聚焦自动放大页面」的老毛病。 */
+  .searchRow {
+    height: 40px;
+  }
+
+  .searchInput {
+    font-size: 16px;
+    line-height: 22px;
+  }
+
+  .searchEmpty {
+    font-size: 14px;
+    line-height: 22px;
+  }
+
   .listHeaderTitle {
     font-size: 16px;
     line-height: 24px;
@@ -582,6 +693,10 @@
 /* #173-fallback:start —— 由 node scripts/gen-flex-gap-fallback.mjs 生成，勿手改（issue #173） */
 :global(html[data-flex-gap-fallback]) .top > *:not(:last-child) {
   margin-right: 8px;
+}
+
+:global(html[data-flex-gap-fallback]) .searchRow > *:not(:last-child) {
+  margin-right: 6px;
 }
 
 :global(html[data-flex-gap-fallback]) .selectionBar > *:not(:last-child) {

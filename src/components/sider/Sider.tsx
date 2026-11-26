@@ -1,9 +1,17 @@
 import clsx from 'clsx'
-import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useTranslate } from '../../i18n/index.js'
-import { IconPanelLeftOutline16, IconSettingsOutline16, IconTrashOutline16, NewChatIcon } from '../base/icons.js'
+import {
+  IconCloseOutline16,
+  IconPanelLeftOutline16,
+  IconSearchOutline16,
+  IconSettingsOutline16,
+  IconTrashOutline16,
+  NewChatIcon,
+} from '../base/icons.js'
 import { setSiderCollapsed } from '../../services/settings.js'
 import { groupSessions } from '../../services/chat/sessionGroups.js'
+import { filterSessionGroups } from '../../services/chat/sessionFilter.js'
 import { parentTitleOf } from '../../services/chat/sessionBranch.js'
 import { BackupError, exportHistory } from '../../services/chat/backup.js'
 import { saveHistoryArchive } from '../../services/chat/history/saveArchive.js'
@@ -36,6 +44,18 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
     return pinned.length > 0 ? [{ key: 'pinned', label: t('sessionPinnedGroup'), sessions: pinned }, ...result] : result
   }, [sessions, now, t])
   /**
+   * 侧栏「按标题搜索会话」（设计稿 2026-11，搜索框在「开启新对话」与「历史对话」之间）。
+   *
+   * 口径在 `services/chat/sessionFilter.ts`：**只匹配标题**（消息正文另属全文搜索）、`trim` + 大小写不敏感、
+   * 空查询返回全量、某时间分组过滤后为空则整组不显示。这里只负责把查询串接进去。
+   *
+   * 查询串是**纯展示态**：不写 settings、不入 IndexedDB —— 侧栏关掉/重开就回到默认全量列表，
+   * 不会出现「下次打开 App 列表只剩上次搜的那几条」这种莫名其妙的存量。
+   */
+  const [query, setQuery] = useState('')
+  const searchRef = useRef<HTMLInputElement>(null)
+  const filteredGroups = useMemo(() => filterSessionGroups(groups, query), [groups, query])
+  /**
    * #831：分支来源徽标要显示的父会话标题（`null` = 父会话不在本机 → 降级「来源已不在本机」）。
    * 一次 `Map` 算好传给每一行，比让每行自己订阅整个列表便宜：列表里 N 条会话时不会 N 次线性扫。
    */
@@ -64,7 +84,13 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
     setSelected((current) =>
       current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
     )
-  const selectAll = () => setSelected(sessions.map((session) => session.id))
+  /**
+   * 「全选」按**当前可见**的会话算：搜索时列表只剩命中的几条，若仍按全量勾选，
+   * 用户会导出一批屏幕上根本看不见的会话。空查询时 `filteredGroups` 覆盖全部会话（含置顶组），
+   * 行为与以前完全一致。
+   */
+  const selectAll = () =>
+    setSelected(filteredGroups.flatMap((group) => group.sessions.map((session) => session.id)))
 
   /**
    * 导出勾选的会话：空选择要给明确提示，不能静默什么都不发生。
@@ -191,6 +217,45 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
         {t('newChat')}
       </button>
       {/*
+        搜索框（设计稿 2026-11）：胶囊圆角、与「开启新对话」同宽，左放大镜、右侧「×」只在有内容时出现。
+        用原生 `<input type="text">` + `inputMode="search"`，**不用 `type="search"`** ——
+        iOS 会再画一个自带的清除按钮，和右侧我们自己的「×」并排出现两个，点哪个都可能不是用户想要的。
+        没有会话时不渲染（搜一个空列表没有意义，且此时「历史对话」那一行本来也不显示）。
+      */}
+      {sessions.length > 0 ? (
+        <div className={styles.searchRow}>
+          <span className={styles.searchIcon} aria-hidden="true">
+            <IconSearchOutline16 />
+          </span>
+          <input
+            ref={searchRef}
+            type="text"
+            inputMode="search"
+            className={styles.searchInput}
+            data-testid="sider-search"
+            value={query}
+            placeholder={t('sessionSearchPlaceholder')}
+            aria-label={t('sessionSearchPlaceholder')}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          {/* 「×」只在有内容时出现；点它清空查询并把焦点留在输入框（否则要再点一次才能接着输入） */}
+          {query.length > 0 ? (
+            <button
+              type="button"
+              className={styles.searchClear}
+              data-testid="sider-search-clear"
+              aria-label={t('sessionSearchClear')}
+              onClick={() => {
+                setQuery('')
+                searchRef.current?.focus()
+              }}
+            >
+              <IconCloseOutline16 />
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {/*
         「历史对话」那一行：默认态 = 标题 + 右侧蓝色「选择」；多选态整行换成「全选 + 取消」。
         两个态共用同一个容器，行高一致，切换时列表不跳动。
       */}
@@ -232,7 +297,16 @@ export const Sider = ({ mobile = false }: { mobile?: boolean }) => {
       ) : null}
       <div className={styles.listWrap}>
         <div className={styles.list} data-testid="sider-list">
-          {groups.map((group) => (
+          {/*
+            一条都没命中时给一行明确提示：不能只剩一个空白的列表（用户会以为会话丢了，
+            而不是「我搜的词没有匹配」）。只在**真的搜了**（trim 后非空）时出现。
+          */}
+          {query.trim() !== '' && filteredGroups.length === 0 ? (
+            <div className={styles.searchEmpty} data-testid="sider-search-empty">
+              {t('sessionSearchEmpty')}
+            </div>
+          ) : null}
+          {filteredGroups.map((group) => (
             <div key={group.key} className={styles.section}>
               <div className={styles.sectionHeader}>{group.label}</div>
               {group.sessions.map((session) => (

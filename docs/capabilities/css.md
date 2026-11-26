@@ -13,9 +13,9 @@
 
 | 项 | 值 |
 | --- | --- |
-| 扫描范围 | `src/**` 全部源文件 **396** 个（`.css` **51** 个，其中 `*.module.css` **43** 个；其余 `.ts / .tsx / .html` 共 **345** 个） |
-| 口径拆分 | 51 `.css` + 261 `.ts` + 83 `.tsx` + 1 `.html` = 396 |
-| 命中总数 | **375** 处，分布在 **42** 个文件 |
+| 扫描范围 | `src/**` 全部源文件 **397** 个（`.css` **51** 个，其中 `*.module.css` **43** 个；其余 `.ts / .tsx / .html` 共 **346** 个） |
+| 口径拆分 | 51 `.css` + 262 `.ts` + 83 `.tsx` + 1 `.html` = 397 |
+| 命中总数 | **380** 处，分布在 **42** 个文件 |
 | 运行时下限 | WebView **83**（Chromium 83）。**首支持 ≤ 83 的特性一律记「无风险」，与有没有兜底无关** |
 | 构建期因素 | `rspack.config.ts` 用 `builtin:lightningcss-loader`，`targets` 取自 `package.json` 的 `browserslist`（强制含 `chrome >= 83`）。**已被构建期翻译掉的写法不算运行时假设** |
 
@@ -35,8 +35,8 @@
 
 | 特性 | 首支持 Chromium | 命中 | 已有兜底 | 无风险 | 可接受降级 | 真实缺陷 | 假阳性 | 结论 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 嵌套 `&` | — （构建期） | 149 | 149 | 0 | 0 | 0 | 0 | lightningcss 按 `chrome >= 83` 展开，非运行时假设 |
-| flex `gap` | 84 | 111 | 111 | 0 | 0 | 0 | 0 | 兜底已全覆盖（#217 补齐最后 2 处；W1-C1 / W1-C2 的新样式由 `pnpm run gen:gap` 补齐）；`check:gap` 口径见 §2.6 |
+| 嵌套 `&` | — （构建期） | 153 | 153 | 0 | 0 | 0 | 0 | lightningcss 按 `chrome >= 83` 展开，非运行时假设 |
+| flex `gap` | 84 | 112 | 112 | 0 | 0 | 0 | 0 | 兜底已全覆盖（#217 补齐最后 2 处；W1-C1 / W1-C2 的新样式由 `pnpm run gen:gap` 补齐）；`check:gap` 口径见 §2.6 |
 | `min()` / `max()` | 79 | 30 | 0 | 30 | 0 | 0 | 0 | 79 ≤ 83，无风险（W1-C1 弹层宽高上限新增 2 处） |
 | `:has()` | 105 | **0** | 0 | 0 | 0 | 0 | 0 | 16 处已由 #213 清零：改成渲染期显式状态类 `ds-markdown-before-ul` / `ds-markdown-before-ol`，低内核上零特性依赖 |
 | `:focus-visible` | 86 | 18 | 18 | 0 | 0 | 0 | 0 | 18 处全部合规：每处都有同选择器的 `:focus` 兜底 + `:focus:not(:focus-visible)` 收回（#215；W1-C1 的 `.tab` / `.input` 按同一套三件套写；#486 的 `.md-float-copy` 新增 1 处，同一套三件套）；`pnpm run check:focus` 守住 |
@@ -59,7 +59,7 @@
 | `color-mix()` | 111 | 0 | — | — | — | 0 | 0 | 未使用（且 lightningcss 会降级） |
 | `@layer` | 99 | 0 | — | — | — | 0 | 0 | 未使用 |
 | `accent-color` | 93 | 0 | — | — | — | 0 | 0 | 未使用 |
-| **合计** | | **375** | **310** | **59** | **1** | **5** | **0** | |
+| **合计** | | **380** | **315** | **59** | **1** | **5** | **0** | |
 
 > `100dvh` 的每一处声明，**没有一处**落在 `@supports` 之外（`dvh` 裸用命中数为 0）。这是本仓 #13 之后形成的最好的一条既有纪律，也是本次盘点最重要的**正面结论**：`dvh` 这一类零缺陷。
 
@@ -131,7 +131,7 @@
 | `components/session/Welcome.module.css:82` | 同上 | 2 | 中 | #215 已修（`outline` 环） |
 | ~~`components/settings/OursServices.module.css:172`~~ | 同上（`:221` 另有 `&:focus` 不同选择器，不构成回退）；**该文件已随 #583 退役删除**，这行的行号是修前快照 | 2 | 中 | #215 已修 |
 | `components/settings/Settings.module.css:64,247,1121` | 同上 | 2 | 中 | #215 已修（`navItem` / `themeOption` / `douyinPill`） |
-| `components/sider/Sider.module.css:158` | 同上 | 2 | 中 | #215 已修（`inset` 环） |
+| `components/sider/Sider.module.css:469` | 同上 | 2 | 中 | #215 已修（`inset` 环） |
 
 ### 2.4 容器查询（2 处，真实缺陷 → #214，已修）
 
@@ -190,20 +190,20 @@
 > 3 处声明都已覆盖，2 处 `@supports` 就是收回块本身。**判定规则不改**：放宽到认 `overflow-y: scroll` 会顺手放过真正没兜底的写法，
 > 要不要放宽留给后续单。本文档的职责是把「规则怎么算」和「人怎么核」分开写清楚。
 
-### 2.6 flex `gap`（111 处：全部已有兜底；#217 补齐了最后 2 处）
+### 2.6 flex `gap`（112 处：全部已有兜底；#217 补齐了最后 2 处）
 
 | 文件:行 | 假设内容 | 类别 | 风险 | 处置 |
 | --- | --- | --- | --- | --- |
-| 43 个 `*.module.css` 共 110 处 | flex 容器上的 `gap` / `row-gap` | 2 | 低 | 已有兜底（`html[data-flex-gap-fallback]` + `margin` 块，由 `pnpm run gen:gap` 生成、`pnpm run check:gap` 逐条产出清单） |
+| 43 个 `*.module.css` 共 111 处 | flex 容器上的 `gap` / `row-gap` | 2 | 低 | 已有兜底（`html[data-flex-gap-fallback]` + `margin` 块，由 `pnpm run gen:gap` 生成、`pnpm run check:gap` 逐条产出清单） |
 | `components/markdown/markdown.css:607` | `.md-code-block-switch { display:flex; gap:4px }`，文件不是 CSS Module、原先不在 `check:gap` 扫描范围 | 2 | 低 | **#217 已补**：裸写 `html[data-flex-gap-fallback]` 兜底块（` :global()` 在非 module 文件里非法），扫描范围同时扩到全部 `.css` |
 | `components/messages/ReplyArea.module.css:224` | `.toolBody { display:flex; flex-wrap:wrap; row-gap:6px }`，原先被 `flex-wrap` 排除规则放过 | 2 | 低 | **#217 已补**：`margin-bottom: 6px`；排除规则改为「交叉轴 gap 只在**不换行**时才不需要兜底」 |
 | `components/messages/AssistantMessage.module.css:20,21` | `.waiting { display:flex; flex-wrap:wrap; column-gap:6px; row-gap:2px }`（#328 等待提示可能出现第二行） | 2 | 低 | **#328 已补**：`margin-right: 6px` + `margin-bottom: 2px`，由 `pnpm run gen:gap` 生成 |
 | ~~`components/settings/PaymentTrailDialog.module.css:71,113`~~ | `.tabs { display:flex; flex-wrap:wrap; gap:6px }`（#326 状态筛选页签）与 `.moreError { … gap:8px }`（#326 加载更多失败行） | 2 | 低 | **#561 已随文件删除**（三弹层合一）：两处兜底块随样式表一起删掉，不是漏了 |
 
-> 上表第 1 行是**总量**（43 个 `*.module.css` 里 110 处）；第 2–4 行是总量里的典型条目（`markdown.css` 那处是非 module，单独计入总数），
-> 不再逐行相加。第 5 行是删除记录，不计入 111。
+> 上表第 1 行是**总量**（43 个 `*.module.css` 里 111 处）；第 2–4 行是总量里的典型条目（`markdown.css` 那处是非 module，单独计入总数），
+> 不再逐行相加。第 5 行是删除记录，不计入 112。
 
-> 口径（#217 之后统一，本节数字按 2026-11-25 实跑）：`pnpm run check:gap` 报「扫描 **51** 个 CSS 文件（其中 **43** 个 CSS Module）：已兜底 **113** 条，跳过 **3** 条」。43 = `find src -name '*.module.css' | wc -l`；3 条跳过 = #159 的 `Settings.module.css:.backgroundRow` 1 条 + 非 flex 容器 2 条（`.m`、`.locationCell`）。（#681 复核：上一版记的 48/41/150 是 #499–#505 那一批进场时的口径，之后 `OursServices.module.css`（#583）与三份支付弹层 css（#561）删除，文件数掉到 46/39；本条与 `tests/unit/flex-gap-fallback.test.mjs` 的模块数断言同步。2026-11-25 复算：扫描面 46/39 → **51/43**、已兜底 105 → **113**、命中 104 → **111**。）
+> 口径（#217 之后统一，本节数字按 2026-11-25 实跑）：`pnpm run check:gap` 报「扫描 **51** 个 CSS 文件（其中 **43** 个 CSS Module）：已兜底 **113** 条，跳过 **3** 条」。43 = `find src -name '*.module.css' | wc -l`；3 条跳过 = #159 的 `Settings.module.css:.backgroundRow` 1 条 + 非 flex 容器 2 条（`.m`、`.locationCell`）。（#681 复核：上一版记的 48/41/150 是 #499–#505 那一批进场时的口径，之后 `OursServices.module.css`（#583）与三份支付弹层 css（#561）删除，文件数掉到 46/39；本条与 `tests/unit/flex-gap-fallback.test.mjs` 的模块数断言同步。2026-11-25 复算：扫描面 46/39 → **51/43**、已兜底 105 → **113**、命中 104 → **111**。2026-11-26：侧栏搜索框 `.searchRow` 新增 1 处 `gap`，已兜底 113 → **114**、命中 111 → **112**。）
 
 ### 2.7 `inset`（17 处，构建期降级 → 已有兜底）
 
@@ -222,7 +222,7 @@
 | `components/search/SearchPanel.module.css:60` | `inset: 0` 铺满 | 2 | 低 | 已有兜底（构建期翻译） |
 | `components/session/SessionView.module.css:3` | `inset: 0` 铺满 | 2 | 低 | 已有兜底（构建期翻译） |
 | `components/session/Welcome.module.css:3` | `inset: 0` 铺满 | 2 | 低 | 已有兜底（构建期翻译） |
-| `components/sider/Sider.module.css:485` | `inset: 0` 铺满（`.drawerMask`） | 2 | 低 | 已有兜底（构建期翻译） |
+| `components/sider/Sider.module.css:580` | `inset: 0` 铺满（`.drawerMask`） | 2 | 低 | 已有兜底（构建期翻译） |
 
 ### 2.8 无风险特性（首支持 ≤ Chromium 83）
 
@@ -287,9 +287,9 @@
 4. `:focus-visible` 的实际可见性风险有一档不确定性：若系统/浏览器默认 focus ring 未被项目 CSS 的 `outline` 规则覆盖，低内核上焦点仍可能可见。需要实测才能定档（已写进 #215 的未测边界）。
 5. 没有统计「同一特性被 lightningcss 部分降级」的情形（例如 `color-mix()` 在低目标下会被翻成静态色）。本次 `color-mix()` 命中为 0，暂无影响。
 
-## 附录 A：嵌套 `&` 命中位置（149 行 / 24 文件，全部构建期展开）
+## 附录 A：嵌套 `&` 命中位置（153 行 / 24 文件，全部构建期展开）
 
-> 行号由 `auditCssAssumptions()` 的实时命中导出（2026-11-25 复算，基准 `77720a32`）。上一版是 140 行 / 22 文件；本次按复算重排全部行号，新增的 `announcements/Announcements.module.css`、`base/Button.module.css` 等位移一并体现。
+> 行号由 `auditCssAssumptions()` 的实时命中导出（2026-11-25 复算，基准 `77720a32`）。上一版是 140 行 / 22 文件；本次按复算重排全部行号，新增的 `announcements/Announcements.module.css`、`base/Button.module.css` 等位移一并体现。（2026-11-26：`sider/Sider.module.css` 的搜索框 `.searchRow` 新增 4 处嵌套 `&`（`&:focus-within` / `&::placeholder` / `&:hover` / `&:active`），149 → **153**。）
 
 ```
 components/announcements/Announcements.module.css: 106, 113, 117
@@ -315,7 +315,7 @@ components/session/SessionBranch.module.css: 58, 129
 components/session/Welcome.module.css: 76, 81, 91, 95
 components/settings/Settings.module.css: 173, 227, 231, 239, 243, 391, 418, 568, 573, 575, 578, 584, 588, 751, 900, 916, 939, 980, 1089, 1093, 1312, 1316, 1320, 1340, 1399, 1403, 1432, 1508, 1677, 1681
 components/sider/SessionItem.module.css: 15, 19, 28, 31, 33
-components/sider/Sider.module.css: 63, 68, 159, 161, 189, 191, 241, 246, 267, 271, 311, 352, 356, 360, 369, 373
+components/sider/Sider.module.css: 63, 68, 119, 146, 171, 173, 254, 256, 284, 286, 336, 341, 362, 366, 406, 447, 451, 455, 464, 468
 ```
 
 ## 附录 B：复现方式

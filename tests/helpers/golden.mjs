@@ -40,6 +40,9 @@ import path from 'node:path'
 import { chromium } from 'playwright'
 import { requireDist, serveDist } from './runtime.mjs'
 import { ROOT, readBuildInfo } from './env.mjs'
+// 「与用例无关的启动链路」替身（领内置 Key / 账号资料 / 公告清单 / 版本清单）：与 L1 同一份清单。
+// 注意放的是**桩**、不是白名单 —— 桩之外照样「未登记出站 → abort → 红」（见该文件头）。
+import { STARTUP_CHAIN_STUBS } from '../fixtures/startup/startup-chain-stubs.mjs'
 // 「产物里有没有登录接缝标记」只认这一份实现（scripts/check-test-seam.mjs 用的也是它）。
 // 别在这里另写一份判定：两份判定迟早会分叉，而分叉的那天产物已经出了门（#510）。
 import { SEAM_FLAG, scanForSeam } from '../../scripts/lib/testAuthSeam.mjs'
@@ -485,6 +488,14 @@ const newestSourceMtime = (dir = path.join(ROOT, 'src')) => {
  *   storage      预置 localStorage，如 `{ 'chat-demo:api-key': 'sk-test' }`；
  *   backends     出站总闸的装配（`{ stubs, allowHosts }`，见 `withStubbedBackends`）。
  *                **不传 = 只装一个「一条都不许漏出去」的空闸**，这在 g01/g04/g05/g06/g15 里正是要的断言。
+ *
+ *                `stubStartupChain`（默认开）：装上 `tests/fixtures/startup/startup-chain-stubs.mjs` 里那几条
+ *                **与用例无关的启动链路**替身（领内置 Key / 账号资料 / 公告清单 / 版本清单）。
+ *                理由与 L1 的 `openApp()` 完全相同：不装它们，每条黄金用例都会红在「用户没点任何东西、
+ *                请求就出去了」的那几条链上，而不是它要守的主路径。**总闸一个字没放宽** —— 桩是
+ *                「本机应答这条 host+path」，未登记出站照样红（负向对照：把桩的 path 写错，请求立刻
+ *                变回未登记）。要断言这几条链路本身的用例传 `false` 自己装。
+ *                用例自己登记的 `stubs` **排在前面**，同名 host+path 时用例的桩优先（G10 要真清单）。
  */
 export const openGoldenPage = async (url, { initScripts = [], storage = {}, viewport, backends } = {}) => {
   const browser = await chromium.launch()
@@ -504,7 +515,13 @@ export const openGoldenPage = async (url, { initScripts = [], storage = {}, view
   context.setDefaultTimeout(15_000)
   const page = await context.newPage()
   // 总闸必须**先**装上：`page.goto` 一落地页面就开始发请求，晚一步装就等于漏记首屏那几枪
-  const guard = await withStubbedBackends(page, { appUrl: url, ...(backends ?? {}) })
+  const startupStubs = backends?.stubStartupChain === false ? [] : STARTUP_CHAIN_STUBS
+  const guard = await withStubbedBackends(page, {
+    appUrl: url,
+    ...(backends ?? {}),
+    // 用例自己的桩在前：同一条 host+path 由用例说了算（G10 用真清单），启动链路只补空缺
+    stubs: [...(backends?.stubs ?? []), ...startupStubs],
+  })
   await page.goto(url, { waitUntil: 'domcontentloaded' })
   await page.evaluate((entries) => {
     window.localStorage.clear()

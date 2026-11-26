@@ -494,9 +494,13 @@ const result = await runGolden(
           actual: chatHosts.length === 0 ? '（一次都没抓到）' : chatHosts.join('、'),
         }
       )
-      const realHits = [...calls.map((item) => item.url), ...guard.escaped.map((item) => item.url)].filter((url) =>
-        url.includes(`:${REAL_INSTANCE_PORT}`)
-      )
+      // 命中桩的请求有 `url`，被总闸拦下的只有 `{ method, host, path }`（见 ledger.escape）——
+      // 两边都拼成 host+path 再判端口。改前这里读 `item.url`，一旦真有漏网就先抛
+      // `TypeError: Cannot read properties of undefined`，把「漏到本机真实例」这条断言变成一条看不懂的崩。
+      const realHits = [
+        ...calls.map((item) => `${new URL(item.url).host}${new URL(item.url).pathname}`),
+        ...guard.escaped.map((item) => `${item.host}${item.path}`),
+      ].filter((target) => target.includes(`:${REAL_INSTANCE_PORT}`))
       ctx.expect(
         `没有任何请求打到 :${REAL_INSTANCE_PORT}（本机真实例）`,
         realHits.length === 0,

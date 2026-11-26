@@ -50,7 +50,7 @@ const require = createRequire(import.meta.url)
  * 截图落点：默认落到**不被 git 跟踪**的 `.flaky-runs/evidence/`（该目录已在 .gitignore 里）。
  *
  * 改前是 `docs/ui/`（入库的实拍目录）：于是**每跑一次 L1 就往工作区里丢 20 多张改动过的 png**，
- * `git status` 全是 `M docs/ui/*.png` —— 跑测试会弄脏仓库，提交时还容易把运行产物混进 PR。
+ * `git status` 全是 `M docs/ui/**` —— 跑测试会弄脏仓库，提交时还容易把运行产物混进 PR。
  * 需要入库的取证图请显式 `EVIDENCE_OUT=<目录>` 指到 `docs/ui` 再跑（有意为之才进库）。
  */
 const SHOTS = process.env.EVIDENCE_OUT

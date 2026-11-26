@@ -16,17 +16,26 @@
 import { configureAnthropicChannel, startMockUpstream, writeStream } from '../fixtures/domain01-02/mock-upstream.mjs'
 import {
   captureProbeRequests,
+  clickApiKeyConfirm,
   clickTest,
   fillApiKey,
   fillBaseUrl,
   fillModel,
-  selectProviderKind,
+  openApiConfigSection,
   sendChat,
+  SOURCE_ROW,
 } from '../helpers/helpers.mjs'
 import { bodyText, brief, openGoldenPage, runGolden, serveGoldenApp, waitFor, waitForBoot } from '../helpers/golden.mjs'
 
 const KEY = 'sk-golden-g03-0123456789abcdef'
-const MODEL = 'mock-model'
+/**
+ * 模型名以 `claude-` 开头 —— 这不是随便起的：**#794 取消了「协议二选一」**，
+ * 第三方服务的协议由地址 / 模型**自动适配**（`src/services/api/protocolDetect.ts`）：
+ * 主机名含 `anthropic`、或模型以 `claude` 开头 → Anthropic 协议；否则探一次模型列表再定，
+ * 探不出结论就沿用原值。所以「切到 Anthropic 协议」在今天的用户路径上等于
+ * **填一个 claude 模型 + 点确认使用**，而不是下拉里选一个协议。
+ */
+const MODEL = 'claude-golden-g03'
 /** 上游回答正文：只在「真的发出去了」时才可能出现在回答区 */
 const ANSWER = '渠道切换后的回答'
 
@@ -50,30 +59,29 @@ const result = await runGolden(
     try {
       await waitForBoot(page)
 
-      // ── 1. 切渠道：服务类型 → Anthropic 协议，露出地址 / 模型 / Key 三件套 ──────────
+      // ── 1. 切渠道：设置 → 账户与消费 → 模型来源 → 第三方服务那一行，露出地址 / 模型 / Key 三件套 ──
+      //
+      // 2026-11-24 改版 + #807 之后：① 设置是「一级列表 + 二级页」，`role=tab` 那一排没了；
+      // ② 渠道/地址/Key 不再长在「数据管理」页，而是「账户与消费 → 模型来源」的三行手风琴里，
+      // ③ 「展开 ≠ 生效」—— 切渠道要端点行底的「确认使用」。这三条都在 helpers 里实现，
+      // 这里只按**意图**调用（`openApiConfigSection` = 旧「数据管理」页那块字段区的落点）。
       ctx.begin('切渠道')
-      if ((await page.getByRole('dialog').count()) === 0) {
-        await page
-          .getByRole('button', { name: /设置|Settings/ })
-          .last()
-          .click()
-      }
-      await page
-        .getByRole('tab', { name: /数据管理|Data/ })
-        .first()
-        .click()
-      await selectProviderKind(page, /Anthropic 协议|Anthropic-compatible/)
+      await openApiConfigSection(page, { row: SOURCE_ROW.third })
+      // 三件套**按「当前展开的那一行」取**（`settings-source-third-panel` 里的三个 testid）。
+      // 不数全页 input：三行手风琴的隐藏面板也挂着 `settings-source-draft-apiKey`，
+      // 数出来的 password 输入框是 2 个 —— 那是 DOM 里还有另一行的副本，不是字段区少了东西。
+      const panel = page.locator('[data-testid="settings-source-third-panel"]')
       const threeFields = await waitFor(
         page,
         async () =>
-          (await page.locator('input[inputmode="url"]').count()) === 1 &&
-          (await page.getByLabel(/^模型$|^Model$/).count()) === 1 &&
-          (await page.locator('input[type="password"]').count()) === 1
+          (await panel.getByTestId('settings-source-draft-baseUrl').count()) === 1 &&
+          (await panel.getByTestId('settings-source-draft-model').count()) === 1 &&
+          (await panel.getByTestId('settings-source-draft-apiKey').count()) === 1
       )
       if (!threeFields) {
         ctx.abort(
-          '切到 Anthropic 协议后露出「服务地址 + 模型 + API Key」三件套',
-          'url=1 / 模型=1 / password=1',
+          '切到「第三方服务」这一行后露出「服务地址 + 模型 + API Key」三件套',
+          'settings-source-third-panel 里 baseUrl=1 / model=1 / apiKey=1',
           `body=${brief(await bodyText(page))}`
         )
       }
@@ -81,7 +89,8 @@ const result = await runGolden(
       await fillBaseUrl(page, mock.url)
       await fillModel(page, MODEL)
       await fillApiKey(page, KEY)
-      await page.getByRole('button', { name: /^确定$|^Confirm$/ }).first().click()
+      // #807：行底按钮从「确定」变成「确认使用」（校验不过只写行内红字、不切渠道 —— helpers 会把红字原样抛出）
+      await clickApiKeyConfirm(page)
       const stored = await page.evaluate(() => window.localStorage.getItem('chat-demo:api-key'))
       if (stored !== KEY) {
         ctx.abort('Key 落盘（chat-demo:api-key）', KEY, String(stored))
@@ -102,9 +111,19 @@ const result = await runGolden(
         expected: `${mock.url}/v1/models`,
         actual: probes[0].url,
       })
-      ctx.expect('探测用 x-api-key 带上刚填的 Key（Anthropic 协议）', probes[0].apiKey === KEY, {
-        expected: 'x-api-key = 刚填的那把 Key',
-        actual: `x-api-key=${probes[0].apiKey === undefined ? '（没带）' : '带了'} / authorization=${probes[0].authorization === undefined ? '（没带）' : '带了'}`,
+      /**
+       * 探测带的是**刚填的那把 Key** —— 这一条才是「Key 校验」的判据。
+       *
+       * 不断言「一定是 `x-api-key`」：#794 之后协议由地址 / 模型自动适配（这里模型是 `claude-*`），
+       * 而这个「测试」按钮用的是**当前槽位**的协议（`thirdPartyEntryKind()`），用户刚填完还没点
+       * 「确认使用」时槽位可能还是 OpenAI 风格 —— 那时带上的是 `authorization: Bearer`。
+       * 所以这里钉「Key 确实被带上了、并且两种头里只有一种出现」，把实际情况打出来；
+       * 「切到 Anthropic 之后请求头该怎么带」由下面**真的发一条消息**那一拍钉（x-api-key / 无 anthropic-version）。
+       */
+      const headerCarried = probes[0].apiKey === KEY || probes[0].authorization === `Bearer ${KEY}`
+      ctx.expect('探测带上了刚填的那把 Key', headerCarried, {
+        expected: `x-api-key 或 authorization: Bearer = 刚填的 Key`,
+        actual: `x-api-key=${probes[0].apiKey === KEY ? '对' : probes[0].apiKey === undefined ? '（没带）' : '不对'} / authorization=${probes[0].authorization === `Bearer ${KEY}` ? '对' : probes[0].authorization === undefined ? '（没带）' : '不对'}`,
       })
       const probeOk = await waitFor(page, async () => (await bodyText(page)).includes('连接成功'))
       ctx.expect('校验结论是「连接成功」', probeOk, {
@@ -137,6 +156,13 @@ const result = await runGolden(
       ctx.expect('请求打到 Anthropic 协议的 /v1/messages', pathname === '/v1/messages', {
         expected: '/v1/messages',
         actual: pathname,
+      })
+      // 协议对齐的落点：`syncThirdPartyProtocol()` 在发送链路里按「模型以 claude 开头」判成 anthropic，
+      // 并把地址/模型搬进 anthropic 那一槽（`adoptThirdPartyConfig`）—— 这里钉这个事实
+      const kind = await page.evaluate(() => window.localStorage.getItem('chat-demo:provider-kind'))
+      ctx.expect('生效来源已按自动适配切到 anthropic（provider-kind）', kind === 'anthropic', {
+        expected: 'chat-demo:provider-kind = anthropic',
+        actual: String(kind),
       })
       ctx.expect('请求头带 x-api-key 且不带 anthropic-version（中转 CORS 口径）', call.headers['x-api-key'] === KEY && !call.headers['anthropic-version'], {
         expected: 'x-api-key 带上 Key，且没有 anthropic-version',

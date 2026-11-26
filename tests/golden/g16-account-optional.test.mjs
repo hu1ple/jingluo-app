@@ -34,6 +34,8 @@ import { test } from 'node:test'
 import { startMockUpstream, writeStream } from '../fixtures/domain01-02/mock-upstream.mjs'
 import { bodyText, brief, openGoldenPage, runGolden, serveGoldenApp, waitFor, waitForBoot } from '../helpers/golden.mjs'
 import { consumeBaseUrl, payBaseUrl } from '../../scripts/lib/endpoints.mjs'
+// 设置新 IA 的唯一路径（一级列表 + 二级页）：与 L1 同一份实现，别在这里自己点 DOM
+import { ACCOUNT_ROW, openAccountRow, openSettingsPage, SETTINGS_ROW } from '../helpers/helpers.mjs'
 // #596：切到 ours 时 Key 只能是「服务端下发」的形态（Key + 下发标记）
 import { seedClaimedOursKey } from '../helpers/ours-claim.mjs'
 
@@ -228,12 +230,16 @@ const nativeBridgeStub = () => {
   }
 }
 
-const openSettingsDataTab = async (page) => {
-  if ((await page.getByRole('dialog').count()) === 0) {
-    await page.getByRole('button', { name: /设置|Settings/ }).last().click()
-  }
-  await page.getByRole('tab', { name: /数据管理|Data/ }).first().click()
-}
+/**
+ * 设置 → **账户与消费**（2026-11-24 改版后的唯一真实路径）。
+ *
+ * 改前的写法是「点设置 → 点 `role=tab` 的『数据管理』→ 点 `account-consume-open`」：
+ * #807 那次改版把一级列表 + 二级页做出来之后，「数据管理」页只剩导入/导出/反馈/删除，
+ * 账户与消费被提成**一级列表里的一行**（`account-consume-open`），`role=tab` 整排消失 ——
+ * 于是旧写法一进来就是 15s `locator.click` 超时（红在「找不到 tab」，不是产品坏了）。
+ * 现在走 helpers 的唯一路径（与 L1 同一份 IA 口径，见 `tests/helpers/helpers.mjs` 文件头）。
+ */
+const openSettingsDataTab = async (page) => openSettingsPage(page, SETTINGS_ROW.consume)
 
 test('G16 账户可选：不登录首屏可用 → 只填 Key 能收发 → 账号 tab 能注册 → 未登录额度给引导', async () => {
   // 发版形态产物（无登录接缝）：这条路径的前提就是「这台机器没有账号」
@@ -321,18 +327,13 @@ test('G16 账户可选：不登录首屏可用 → 只填 Key 能收发 → 账�
           actual: String(await page.evaluate(() => window.localStorage.getItem('chat-demo:auth-token'))),
         })
         await openSettingsDataTab(page)
-        const entry = page.getByTestId('account-consume-open')
-        if (!(await waitFor(page, async () => (await entry.count()) > 0))) {
-          ctx.abort('设置 → 数据管理里有「账户与消费」入口', '入口按钮存在', `body=${brief(await page.getByRole('dialog').innerText())}`)
-        }
-        await entry.click()
         if (!(await waitFor(page, async () => (await page.getByTestId('account-consume-wallet').count()) > 0))) {
           ctx.abort('「账户与消费」页打开', 'L1 三行（模型来源 / 我的钱包 / 账号）在位', `body=${brief(await bodyText(page))}`)
         }
         // #817：「我的额度」整页退场（余额卡里的入口一起删了），未登录引导态那一套 `quota-*` 节点
         // 一并消失。这一拍只断「它真的不在了」；头像/登录这一档的引导态由账号页
         // （下面第 4 拍 + `tests/unit/consume-panels-quota.test.mjs` 的模型层）继续覆盖。
-        await page.getByTestId('account-consume-wallet').click()
+        await openAccountRow(page, ACCOUNT_ROW.wallet)
         const walletHeadShown = await waitFor(page, async () => (await page.getByTestId('account-consume-wallet-head').count()) > 0)
         ctx.expect(
           '未登录的钱包页：余额卡给「—」/「…」，且「我的额度」入口与面板都已删除',
@@ -345,57 +346,71 @@ test('G16 账户可选：不登录首屏可用 → 只填 Key 能收发 → 账�
           }
         )
 
-        // ── 4. 账号 tab：不登录也能用的说明 + 局部登录 / 注册卡 ─────────────────
-        ctx.begin('账号 tab（未登录）')
-        await page.getByTestId('account-consume-tab-account').click()
-        const notice = page.getByTestId('account-optional-notice')
-        if (!(await waitFor(page, async () => (await notice.count()) > 0))) {
-          ctx.abort('账号 tab 打开后有「不登录也能用」的说明', 'account-optional-notice 出现', `body=${brief(await page.getByTestId('account-panel').innerText())}`)
+        // ── 4. 账号页（未登录）：**这一页本身就是登录卡**，不是登录墙、不是整屏 ────
+        //
+        // 口径变化（2026-11）：#788 把账号 L2 页改成「资料行 + 登录卡」手写版，
+        // 未登录时挂的是 `SettingsAuthCard`（`settings-auth-card`，登录 / 注册分段 + 「暂不登录」），
+        // 改版前的 `AccountPanel`（`account-optional-notice` / `account-fill-key` / `account-auth-card`）
+        // 在设置里已经没有挂载点了 —— 断言按**现在的产品形状**写，不按已经不存在的节点写。
+        ctx.begin('账号页（未登录）')
+        // 「账号」是**账户与消费 L1** 的一行（改版前是同一页里的一个 tab）：上一步停在钱包 L2，
+        // 先按 `account-consume-back` 退回 L1（openAccountRow 负责这一跳）。
+        await openAccountRow(page, ACCOUNT_ROW.account)
+        const authCard = page.getByTestId('settings-auth-card')
+        const cardShown = await waitFor(page, async () => (await authCard.count()) > 0)
+        if (!cardShown) {
+          ctx.abort(
+            '未登录进「账号」页就是登录 / 注册卡',
+            '[data-testid="settings-auth-card"] 出现',
+            `body=${brief(await bodyText(page))}`
+          )
         }
-        const noticeText = (await notice.innerText()).replace(/\s+/gu, ' ').trim()
-        ctx.expect('账号区第一行就是维护者的定调原话', noticeText.includes('不登录也可以：在设置里填 API Key 即可使用各渠道'), {
-          expected: '不登录也可以：在设置里填 API Key 即可使用各渠道',
-          actual: brief(noticeText),
+        ctx.expect('登录 / 注册卡在设置弹层里（局部卡片，没有整屏登录墙）', (await page.getByRole('dialog').count()) > 0, {
+          expected: '设置弹层仍在（role=dialog ≥1）',
+          actual: `role=dialog ×${await page.getByRole('dialog').count()}`,
         })
-        const panelTestIds = await page.evaluate(() =>
-          Array.from(document.querySelectorAll('[data-testid^="account-"]')).map((node) => node.getAttribute('data-testid')).join(',')
-        )
-        ctx.expect('主 CTA 是「去填 API Key」（账户是次要的）', (await page.getByTestId('account-fill-key').count()) === 1, {
-          expected: 'account-fill-key ×1',
-          actual: `${await page.getByTestId('account-fill-key').count()} 个（页面上的 account-* testid：${panelTestIds}）`,
-        })
-        // 登录 / 注册卡是**局部**的：就在这个 tab 里，不是换掉整屏
-        const card = page.getByTestId('account-auth-card')
-        const cardShown = await waitFor(page, async () => (await card.count()) > 0)
-        ctx.expect('登录 / 注册卡挂在账号 tab 内（没有整屏登录页）', cardShown, {
-          expected: 'account-auth-card 出现',
-          actual: brief(await page.getByTestId('account-panel').innerText()),
+        // #608 的口子：不登录也能用 —— 卡上直接给「暂不登录」（点了去填 API Key），不是逼人注册
+        ctx.expect('卡上有「暂不登录」（不登录也能用的入口还在）', (await page.getByTestId('account-consume-skip-login').count()) === 1, {
+          expected: 'account-consume-skip-login ×1',
+          actual: `${await page.getByTestId('account-consume-skip-login').count()} 个`,
         })
 
-        // ── 5. 注册：注册入口由服务端开关打开 → 填表 → 注册即登录 ────────────────
+        // ── 5. 注册：服务端开关打开 → 填表 → 提交走白名单端点 → 回到登录表单 ──────
+        //
+        // 2026-11-25 的产品口径：**注册成功不建立会话，终点是登录表单**（邮箱预填 + 一句
+        // 「注册成功，请登录」），「注册即登录」那一版已经退场（见 SettingsAuthCard 文件头第四条）。
+        // 所以这里钉的是「注册这条链路通不通、走的是哪个端点、回到哪一屏」，不是「登录态被悄悄建起来」。
         ctx.begin('注册')
-        const toRegister = page.getByRole('button', { name: /^注册$|^Sign up$|^Register$/ })
-        if (!(await waitFor(page, async () => (await toRegister.count()) > 0))) {
-          ctx.abort('登录卡上露出「注册」入口（registration_enabled=true）', '「注册」按钮存在', `body=${brief(await card.innerText())}`)
-        }
-        await toRegister.first().click()
-        const registerEmail = page.locator('form input[type="email"]')
+        await page.getByTestId('auth-segmented-register').click()
+        const registerEmail = page.getByTestId('settings-auth-email')
         if (!(await waitFor(page, async () => (await registerEmail.count()) > 0))) {
-          ctx.abort('切到注册表单', '注册表单有 email 输入框', `body=${brief(await card.innerText())}`)
+          ctx.abort('切到「注册」分段后露出邮箱输入框', 'settings-auth-email 出现', `body=${brief(await authCard.innerText())}`)
         }
-        // 同一张表单里：邮箱 / 密码 / 确认密码（顺序即 DOM 顺序，见 RegisterPage）
-        const passwords = page.locator('form input[type="password"]')
         await registerEmail.fill(EMAIL)
-        await passwords.nth(0).fill(PASSWORD)
-        await passwords.nth(1).fill(PASSWORD)
-        await page.locator('form button[type="submit"]').first().click()
+        ctx.expect(
+          '注册分段是一张完整表单：邮箱 + 验证码 + 密码 + 确认密码（同一张卡里，不换屏）',
+          (await page.getByTestId('settings-auth-code').count()) === 1 &&
+            (await page.getByTestId('settings-auth-password').count()) === 1 &&
+            (await page.getByTestId('settings-auth-confirm').count()) === 1,
+          {
+            expected: 'code / password / confirm 各 1 个',
+            actual: `code=${await page.getByTestId('settings-auth-code').count()} password=${await page.getByTestId('settings-auth-password').count()} confirm=${await page.getByTestId('settings-auth-confirm').count()}`,
+          }
+        )
+        await page.getByTestId('settings-auth-password').fill(PASSWORD)
+        await page.getByTestId('settings-auth-confirm').fill(PASSWORD)
+        await page.getByTestId('settings-auth-submit').click()
 
-        const status = page.getByTestId('account-optional-status')
-        const loggedIn = await waitFor(page, async () => (await status.count()) > 0)
-        const statusText = loggedIn ? (await status.innerText()).replace(/\s+/gu, ' ').trim() : ''
-        ctx.expect('注册成功后账号区就地切成「已登录」并显示邮箱', loggedIn && statusText.includes(EMAIL), {
-          expected: `已登录 + ${EMAIL}`,
-          actual: loggedIn ? brief(statusText) : `body=${brief(await page.getByTestId('account-panel').innerText())}`,
+        const notice = page.getByTestId('settings-auth-notice')
+        const backToLogin = await waitFor(page, async () => (await notice.count()) > 0)
+        const noticeText = backToLogin ? (await notice.innerText()).replace(/\s+/gu, ' ').trim() : ''
+        ctx.expect('注册成功后回到登录表单并给出「注册成功，请登录」', backToLogin && noticeText.includes('注册成功'), {
+          expected: 'settings-auth-notice 含「注册成功」',
+          actual: backToLogin ? brief(noticeText) : `body=${brief(await authCard.innerText())}`,
+        })
+        ctx.expect('注册全程没有偷偷建立账号会话（注册 ≠ 登录）', (await page.evaluate(() => window.localStorage.getItem('chat-demo:auth-token'))) === null, {
+          expected: 'auth-token 仍为 null',
+          actual: String(await page.evaluate(() => window.localStorage.getItem('chat-demo:auth-token'))),
         })
         ctx.expect('注册走的是白名单端点 /api/v1/auth/register', consumeCalls.includes('/api/v1/auth/register'), {
           expected: '/api/v1/auth/register 被调用',

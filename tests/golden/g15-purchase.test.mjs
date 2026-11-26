@@ -33,8 +33,9 @@ import { test } from 'node:test'
 import { bodyEvidence, bodyText, brief, goldenDist, openGoldenPage, runGolden, serveGoldenApp, waitFor } from '../helpers/golden.mjs'
 // #596：ours 的 Key 由服务端下发 —— 种子数据要带「下发标记」，否则发送前守卫会拦（这是产品行为）
 import { claimedOursStorage } from '../helpers/ours-claim.mjs'
+import { ACCOUNT_ROW, openAccountRow, openSettingsPage, SETTINGS_ROW } from '../helpers/helpers.mjs'
 
-/** 种子 Key：卡密列表（`GET /api/orders`）与额度（`GET /v1/usage`）都要用它 */
+/** 种子 Key：额度（`GET /v1/usage`）用它；卡密列表改成登录态（JWT，`/api/v1/payment/orders/my`） */
 const API_KEY = 'sk-golden-g15-000000000000000015'
 /** 卡密：后 4 位用于「列表只露尾」，全文只允许出现在剪贴板里 */
 const CARD_NO = 'CARD-GOLD-0000-0000-WXYZ'
@@ -84,17 +85,20 @@ const purchaseBridgeStub = ({ cardNo, planName, actualCost, quotaUsed, balance }
   })
 
   /** 一条已完成的订单（卡密挂在小铺发的订单上，见 BuyTab 文件头） */
+  /**
+   * 一条**已完成**的订单（`GET /api/v1/payment/orders/my` 的条目，snake_case 原样）：
+   * `status: 'COMPLETED'` + `recharge_code` 才让界面露卡号（`parseMyOrder` 的契约：
+   * 非 COMPLETED 的订单即使带 `recharge_code` 也按「还没有卡」处理）。
+   */
   const order = () => ({
     out_trade_no: 'G15-TRADE-1',
     plan_id: 'g15-month',
     plan_name: planName,
-    plan_points: 3900,
-    amount_yuan: 39,
-    status: 'fulfilled',
-    status_text: '已完成',
-    card_no: cardNo,
-    card_status: 'leased',
+    amount: 39,
+    status: 'COMPLETED',
+    recharge_code: cardNo,
     redeem_state: 'issued',
+    redeemable: true,
     created_at: 1_760_000_000,
     paid_at: 1_760_000_100,
   })
@@ -103,29 +107,27 @@ const purchaseBridgeStub = ({ cardNo, planName, actualCost, quotaUsed, balance }
     const url = new URL(String(options?.url ?? ''))
     const method = String(options?.method ?? 'GET').toUpperCase()
     state.calls.push({ method, host: url.host, path: url.pathname })
-    // ── 支付侧（apia）：套餐 / 收款页 / 订单 ──────────────────────────────
-    if (url.host === 'apia.ecsafe.cn') {
-      if (url.pathname === '/api/orders') {
-        // 付款前没有卡密（空列表 = 正常态），付款后同一条订单带上卡密
-        return json(200, {
-          customer_id: 1,
-          total: state.paid ? 1 : 0,
-          limit: 20,
-          offset: 0,
-          total_paid_yuan: state.paid ? 39 : 0,
-          orders: state.paid ? [order()] : [],
-        })
-      }
-      if (url.pathname === '/api/balance') {
-        return json(200, { api_key: '…0015', valid: true })
-      }
-      return json(404, { code: 'not_found', message: `no route ${url.pathname}` })
-    }
     // ── 新网关（#861）：收款页地址 `GET {consume.baseUrl}/api/v1/pay-link`（无需登录）──────
+    // **必须排在 apia 主机那条之前**：网关与 apia 是同一台机器（`pay.baseUrl` = `consume.baseUrl`），
+    // 先按主机分派的话这条会被 apia 的「其余一律 404」先吃掉，表现为「收款通道暂不可用」。
     if (url.pathname.endsWith('/api/v1/pay-link')) {
       // 取到收款页地址 = 这一单已经交给小铺；之后卡密会挂到订单上
       state.paid = true
       return json(200, { ok: true, url: 'https://pay.example.com/g15', note: '' })
+    }
+    // #834：「我的卡密」的数据源是登录态的 `GET /api/v1/payment/orders/my`（JWT，consume 网关），
+    // apia 的 `GET /api/orders`（Bearer sk- Key）随账号迁移一起下线 —— 付款前给空列表（正常态），
+    // 付款后同一条订单带上卡号。字段沿用服务端 snake_case（`recharge_code` 只在 COMPLETED 才认）。
+    if (url.pathname === '/api/v1/payment/orders/my') {
+      const items = state.paid ? [order()] : []
+      return json(200, { code: 0, data: { items, total: items.length, page: 1, page_size: 20, pages: items.length > 0 ? 1 : 0 } })
+    }
+    // ── 支付侧（apia）：余额 ──────────────────────────────────────────────
+    if (url.host === 'apia.ecsafe.cn') {
+      if (url.pathname === '/api/balance') {
+        return json(200, { api_key: '…0015', valid: true })
+      }
+      return json(404, { code: 'not_found', message: `no route ${url.pathname}` })
     }
     // ── 消费侧（sub2api）：额度 ────────────────────────────────────────────
     if (url.pathname === '/v1/usage') {
@@ -217,28 +219,34 @@ test('G15 支付 / 购买：套餐 → 下单（pay-link）→ 回跳 → 卡密
     const result = await runGolden(
       { id: 'G15', domain: '支付/购买', title: '套餐 → 下单（pay-link）→ 回跳 → 卡密 → 一键复制' },
       async (ctx) => {
-        // ── 1. 打开「账户与消费」：设置 → 数据管理 → 该入口 → 四个 tab 在位 ────────
+        // ── 1. 打开「我的钱包」：设置 → 账户与消费（L1 三行）→ 我的钱包（L2）─────────
+        //
+        // 2026-11-24 / #817 之后的层级：`设置 → 账户与消费 → 我的钱包`，钱包页首一行是
+        // **余额卡 + 付款入口**，付款走的就是既有 `BuyTab`（`landAfterPayReturn` 的落点仍是「我的卡密」）。
+        // 改版前的「数据管理 › 账户与消费 › 四个 tab」已经不存在了。
         ctx.begin('打开账户与消费')
-        if ((await page.getByRole('dialog').count()) === 0) {
-          await page.getByRole('button', { name: /设置|Settings/ }).last().click()
+        await openSettingsPage(page, SETTINGS_ROW.consume)
+        const l1Ready = await waitFor(page, async () => (await page.getByTestId('account-consume-wallet').count()) > 0)
+        if (!l1Ready) {
+          ctx.abort('「账户与消费」页打开', 'L1 三行（模型来源 / 我的钱包 / 账号）在位', bodyEvidence(await bodyText(page)))
         }
-        await page.getByRole('tab', { name: /数据管理|Data/ }).first().click()
-        const entry = page.getByTestId('account-consume-open')
-        if (!(await waitFor(page, async () => (await entry.count()) > 0))) {
-          ctx.abort('设置 → 数据管理有「账户与消费」入口', '入口按钮存在', bodyEvidence(await bodyText(page)))
-        }
-        await entry.click()
-        const tabsReady = await waitFor(page, async () => (await page.getByTestId('account-consume-tab-cards').count()) > 0)
-        if (!tabsReady) {
-          ctx.abort('「账户与消费」页打开', '四个 tab 都在', bodyEvidence(await bodyText(page)))
+        await openAccountRow(page, ACCOUNT_ROW.wallet)
+        const walletReady = await waitFor(
+          page,
+          async () =>
+            (await page.getByTestId('account-consume-wallet-head').count()) > 0 &&
+            (await page.getByTestId('account-consume-tab-cards').count()) > 0
+        )
+        if (!walletReady) {
+          ctx.abort('「我的钱包」页打开', '余额卡（wallet-head）+ 我的卡密行 都在', bodyEvidence(await bodyText(page)))
         }
 
-        // ── 2. 购买入口：#861 起套餐接口已下线，购买 tab 只剩「前往购买」──────────────
+        // ── 2. 购买入口：钱包页首的「前往购买」→ BuyTab（#861 起套餐接口已下线，只剩这一跳）──
         ctx.begin('购买入口')
-        await page.getByTestId('account-consume-tab-buy').click()
+        await page.getByTestId('account-consume-wallet-pay').first().click()
         const buyOpen = page.getByTestId('account-consume-buy-open').first()
         if (!(await waitFor(page, async () => (await buyOpen.count()) > 0))) {
-          ctx.abort('购买 tab 有购买入口', '「前往购买」按钮', bodyEvidence(await page.getByTestId('account-consume-page').innerText()))
+          ctx.abort('钱包页有购买入口', '「前往购买」按钮（account-consume-buy-open）', bodyEvidence(await bodyText(page)))
         }
 
         // ── 3. 下单：点「去支付」→ 取收款页地址（/api/v1/pay-link）→ 收款页被打开 ───────
@@ -267,11 +275,12 @@ test('G15 支付 / 购买：套餐 → 下单（pay-link）→ 回跳 → 卡密
           ctx.abort('关掉收款页后卡密出现在「我的卡密」', `1 行卡密（${CARD_TAIL}）`, bodyEvidence(await page.getByTestId('account-consume-page').innerText()))
         }
         const cardText = (await cardRow.innerText()).replace(/\s+/gu, ' ').trim()
-        const onCardsTab =
-          (await page.getByTestId('account-consume-tab-cards').getAttribute('aria-selected')) === 'true'
-        ctx.expect('回跳落在「我的卡密」，卡密只露后 4 位（完整卡密不进 DOM）', onCardsTab && cardText.includes(CARD_TAIL) && !cardText.includes(CARD_NO), {
-          expected: `我的卡密 tab 选中 + 含 ${CARD_TAIL}，不含完整卡密`,
-          actual: `${onCardsTab ? '选中的是我的卡密' : '没回到我的卡密'} / ${brief(cardText)}`,
+        // 「落在我的卡密」= 卡密列表在位（`account-consume-card-list`），不再是「某个 tab 被选中」：
+        // 改版后这一页是 L2 子页（页头由设置弹层给），没有 tab 的 aria-selected 可读。
+        const onCardsPage = (await page.getByTestId('account-consume-card-list').count()) > 0
+        ctx.expect('回跳落在「我的卡密」，卡密只露后 4 位（完整卡密不进 DOM）', onCardsPage && cardText.includes(CARD_TAIL) && !cardText.includes(CARD_NO), {
+          expected: `我的卡密列表在位 + 含 ${CARD_TAIL}，不含完整卡密`,
+          actual: `${onCardsPage ? '停在「我的卡密」' : '没回到「我的卡密」'} / ${brief(cardText)}`,
         })
 
         // ── 5. 一键复制：剪贴板拿到**完整**卡密 ────────────────────────────────────
@@ -321,8 +330,12 @@ test('G15 支付 / 购买：套餐 → 下单（pay-link）→ 回跳 → 卡密
           expected: '≥1 次',
           actual: `${countCalls(calls, isPayLink)} 次（${brief(paths, 200)}）`,
         })
-        ctx.expect('卡密来自 apia 的订单接口：GET /api/orders ≥1 次', countCalls(calls, onApia('/api/orders')) >= 1, {
+        ctx.expect('卡密来自登录态的 GET /api/v1/payment/orders/my ≥1 次（#834 的新数据源）', countCalls(calls, (entry) => entry.path === '/api/v1/payment/orders/my') >= 1, {
           expected: '≥1 次',
+          actual: `${countCalls(calls, (entry) => entry.path === '/api/v1/payment/orders/my')} 次（${brief(paths, 200)}）`,
+        })
+        ctx.expect('不再走已下线的 apia GET /api/orders（卡密旧数据源）', countCalls(calls, onApia('/api/orders')) === 0, {
+          expected: '0 次',
           actual: `${countCalls(calls, onApia('/api/orders'))} 次（${brief(paths, 200)}）`,
         })
         ctx.expect(

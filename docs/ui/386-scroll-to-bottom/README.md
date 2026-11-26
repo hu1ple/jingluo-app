@@ -61,3 +61,23 @@ node scripts/shot-mobile.mjs --page=scroll-to-bottom --viewport=390,360
 - 未测：真机触摸（本机无 adb / 模拟器，按规范不虚报）；WebView 83 真机上的 `scrollTo` options 降级
   （代码里是 `'scrollBehavior' in el.style` 特性检测 + `try/catch` 双兜底，静态可查、真机未验证）；
   200 条以上会话（fixture 是 26 轮 52 条，滚动距离 6913px，够翻好几屏但没到 200 条）。
+
+## 补充（#610）：390 宽 + **就地编辑态**下，浮标压在「发送」上（已修）
+
+#610 的现场：浮标挂输入区、`bottom: 100%`，落点正是消息区可见的最下一条带；就地编辑的编辑框
+（含右下的发送 / 取消）长在那里，390 宽时**浮标圆（含 44px 命中区，x 325..369 / y 668..702）
+与发送按钮（302..360 / 681..713）重叠**，`elementFromPoint` 命中浮标 → 发送点不到。
+360 宽编辑行更高、垂直不重叠，所以只有 390 + 编辑态复现。
+
+修法：编辑期间**整枚浮标不挂载**（`MessageList` 把已有的 `editingIds` 经
+`ScrollToBottomStateContext` 送成 `editing` 布尔，`ScrollToBottomButton` 据此 `return null`）；
+不挪按钮位置 / 尺寸，不碰 `scrollAnchor` 与 `MessageList` 的锚点校正。
+
+| 文件 | 截的是什么 | 判据 |
+| --- | --- | --- |
+| `docs/ui/fab-overlap-390-idle.png` | 390 × 844，长会话 + 上翻后**非编辑态**：浮标照常浮现 | 浮标在、且不压任何可点控件（空闲态本来就不该隐藏它） |
+| `docs/ui/fab-overlap-390-edit.png` | 同一屏，点开某条消息的**就地编辑**之后 | 浮标**不挂载**；编辑框右下的「发送」矩形整个在视口内，且 `elementFromPoint(中心点)` 命中它自己 |
+
+两张都是 **Playwright Chromium 视口截图（`deviceScaleFactor: 2`）**，在 `2c45d49a` 那一版产物上拍的，
+**不是真机**。回归由 `tests/integration/chat-newline-enter-610.test.mjs` 的「编辑操作完整可见」那一拍守住
+（它只钉「发送 / 取消可点、没被浮标盖住」，不再钉「输入区居中」那种实现细节）。

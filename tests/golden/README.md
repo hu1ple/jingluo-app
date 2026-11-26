@@ -357,3 +357,29 @@ B 线（#548）的黄金哨兵，与第四批的 G13 **并行**（同目录、�
 | B2 | `attachments/imageSource.ts:594` `toImagePart` 的「阈值内原图直发」失效（`withinLimits = false && …`，一律走 canvas 重编码） | 「图片形状是 … · 实际=media_type=**image/webp** / data=732 字符」+「**图片字节 = 夹具原图** · 实际=732 字符（不同）」+「发一条消息 · Error: 不是 PNG 签名」 |
 | B3 | `api/openaiAdapter.ts:144` data URL 前缀写错（`data:${source.media_type}` → `data:application/octet-stream`） | 「OpenAI 兼容 · **图片以 data:image/png;base64, 内联** · 实际=data:application/octet-stream;base64,…」（openai 与 ours 各两条，anthropic 仍绿 = 定位到「最后一公里的翻译」） |
 | B4 | `api/apiConfig.ts:285` `resolveBaseUrl()` 忽略用户填的地址、回落到内置默认（= 把测试流量改道到生产） | **补强前：全绿（抓不住）** → 补强后：「请求落在本渠道登记的桩地址 · 期望=host=127.0.0.1:18414 · 实际=host=**api.deepseek.com**（https://api.deepseek.com/v1/messages）」+「没有第四个 host · 实际=api.deepseek.com、140.210.13.146:60010」 |
+
+## 2026-11-26 口径对齐（设置新 IA / 启动链路桩 / #834 / 平台分派）
+
+四条产品变化把黄金用例推红了，都不在产品侧，而在用例与产物「各说各话」：
+
+1. **设置改成「一级列表 + 二级页」**（#807，2026-11-24）。`role=tab` 的「数据管理 / 关于」整排没了，
+   渠道 / Key 从「数据管理」页搬进「账户与消费 → 模型来源」的三行手风琴，「账户与消费」自己变成
+   一级列表里的**一行**（→ L2 三行：模型来源 / 我的钱包 / 账号）。
+   **写法约束**：用例一律走 `tests/helpers/helpers.mjs` 的 `openSettingsPage(page, SETTINGS_ROW.x)` /
+   `openAccountRow(page, ACCOUNT_ROW.x)` / `openApiConfigSection()`，**不许**再自己 `getByRole('tab')`
+   或按文案点行 —— 文案一改就红成 15s `locator.click` 超时，看起来像产品坏了。
+   「展开 ≠ 生效」也在这层：切来源要端点行底「确认使用」（`clickApiKeyConfirm`），协议由地址 / 模型
+   自动适配（`protocolDetect.ts`，模型以 `claude` 开头即 Anthropic）——没有「协议下拉」可选。
+2. **与用例无关的启动链路**统一在 `tests/fixtures/startup/startup-chain-stubs.mjs`（与 L1 同一份）：
+   领内置 Key（接缝 × #803）、账号资料、公告清单、版本清单。`openGoldenPage()` **默认装**，
+   要断言这几条链路本身的用例传 `backends.stubStartupChain: false`。它们是**桩、不是白名单**：
+   桩之外的出站照样记「未登记出站」→ 红（负向对照：把 `builtin-key-claim` 的 path 改成
+   `/api/v1/keys-TYPO` → G1 立刻红在「2 次未登记请求」，exit 1）。
+3. **「检查更新」只在 APK 里落地**（`AppVersionField`，2026-11-23）：Web 端只显示版本号、没有检查按钮。
+   所以 G10 必须把平台伪装成 android（`window.androidBridge` + `AppUpdate` 插件桩），清单由原生侧的
+   `manifest()` 回包、下载由 `download()` 收参数 —— 钉的是「下发给原生的地址 / sha256 / size / versionCode
+   是选中那一条」，不再是「页面上有个下载链接」。
+4. **「我的卡密」的数据源换成 `GET /api/v1/payment/orders/my`**（#834，JWT）；apia 的 `GET /api/orders`
+   （Bearer sk- Key）已下线。G15 的桩与断言按新数据源写，并**反向断言**旧接口请求数 = 0。
+   同一次改动里 G16 的「注册」也跟着 2026-11-25 的产品口径：**注册成功不建立会话，终点是登录表单**
+   （`settings-auth-notice` 出现「注册成功」+ `auth-token` 仍为 null），不再是「注册即登录」。

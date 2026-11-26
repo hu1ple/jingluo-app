@@ -13,6 +13,7 @@
 // 跑法（仓库根目录）：pnpm run build && node tests/golden/g05-import.test.mjs
 import { buildArchiveZip } from '../fixtures/domain05/archive-fixture.mjs'
 import { bodyText, brief, openGoldenPage, runGolden, serveGoldenApp, sessionCount, waitFor, waitForBoot } from '../helpers/golden.mjs'
+import { openSettingsPage, SETTINGS_ROW } from '../helpers/helpers.mjs'
 
 const ZIP_URL = 'https://obs.example.test/deepseek_data-golden.zip'
 const TITLE_PREFIX = '黄金导入会话'
@@ -65,17 +66,10 @@ const result = await runGolden(
       await waitForBoot(page)
 
       // ── 1. 打开「设置 → 数据管理」：原生壳里才有链接导入入口 ────────────────────
+      // 2026-11-24 改版后「数据管理」是一级列表里的一行（`settings-row-data` → `settings-page-data`），
+      // 不再有 `role=tab` 那一排；按 testid 走 helpers 的唯一路径。
       ctx.begin('打开导入入口')
-      if ((await page.getByRole('dialog').count()) === 0) {
-        await page
-          .getByRole('button', { name: /设置|Settings/ })
-          .last()
-          .click()
-      }
-      await page
-        .getByRole('tab', { name: /数据管理|Data/ })
-        .first()
-        .click()
+      await openSettingsPage(page, SETTINGS_ROW.data)
       const linkInput = page.getByLabel('从链接导入')
       const entryReady = await waitFor(page, async () => (await linkInput.count()) > 0)
       if (!entryReady) {
@@ -86,7 +80,9 @@ const result = await runGolden(
       // ── 2. 提交链接并确认：manifest → 下载 → 解析 → 入库 一次走完 ───────────────
       ctx.begin('提交链接并导入')
       await linkInput.fill(ZIP_URL)
-      await page.getByRole('button', { name: '导入', exact: true }).click()
+      // 按 testid 取：数据页上「从链接导入」与「导入分享会话」两行的按钮可访问名都叫「导入」，
+      // 按名字取会 strict mode violation（命中 2 个），那是选择器歧义、不是产品坏了。
+      await page.getByTestId('history-import-url-start').click()
       const confirm = page.getByRole('dialog', { name: /确认导入历史对话/ })
       const confirmReady = await waitFor(page, async () => (await confirm.count()) > 0)
       if (!confirmReady) {

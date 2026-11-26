@@ -19,6 +19,7 @@ import path from 'node:path'
 import { strFromU8, unzipSync } from 'fflate'
 import { seedSessions, sessionEntry } from '../fixtures/domain01-02/idb-fault.mjs'
 import { bodyText, brief, openGoldenPage, runGolden, serveGoldenApp, sessionCount, waitFor, waitForBoot } from '../helpers/golden.mjs'
+import { openSettingsPage, SETTINGS_ROW } from '../helpers/helpers.mjs'
 
 const KEY = 'sk-golden-g06'
 const NOW = Date.now()
@@ -71,17 +72,10 @@ const result = await runGolden(
       }
 
       // ── 1. 导出：设置 → 数据管理 → 「下载」真的产出 ZIP ────────────────────────
+      // 2026-11-24 改版后「数据管理」是一级列表里的一行（`settings-row-data` → `settings-page-data`），
+      // 不再有 `role=tab` 那一排；按 testid 走 helpers 的唯一路径。
       ctx.begin('导出')
-      if ((await page.getByRole('dialog').count()) === 0) {
-        await page
-          .getByRole('button', { name: /设置|Settings/ })
-          .last()
-          .click()
-      }
-      await page
-        .getByRole('tab', { name: /数据管理|Data/ })
-        .first()
-        .click()
+      await openSettingsPage(page, SETTINGS_ROW.data)
       const downloadButton = page.getByRole('button', { name: /^下载$|^Download$/ }).first()
       const buttonReady = await waitFor(page, async () => (await downloadButton.count()) > 0)
       if (!buttonReady) {

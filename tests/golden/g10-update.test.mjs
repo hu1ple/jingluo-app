@@ -10,6 +10,8 @@
 // 两台分发机都要 route 住：只拦一台时首选机一旦真的可达，用例会连真服务器（离线环境下表现为超时）。
 //
 // 跑法（仓库根目录）：pnpm run build && node tests/golden/g10-update.test.mjs
+import { readFile } from 'node:fs/promises'
+
 import {
   CURRENT,
   CHANNEL_BUILD_TYPE,
@@ -17,10 +19,18 @@ import {
   nextPatch,
 } from '../helpers/current-version.mjs'
 import { bodyText, brief, openGoldenPage, runGolden, serveGoldenApp, waitFor, waitForBoot } from '../helpers/golden.mjs'
+import { openSettingsPage, SETTINGS_ROW } from '../helpers/helpers.mjs'
 
-/** 与 src/services/updateManifest.ts 的 RELEASE_BASES 同源 */
-const PRIMARY = 'http://62.106.70.167:8888'
-const FALLBACK = 'https://dl.rose7.cn'
+/**
+ * 分发机地址：**唯一来源是 `config/endpoints.json`**（`src/services/updateManifest.ts` 的
+ * `RELEASE_BASES` 就是构建期从它注入的，这里不抄第二份）。
+ *
+ * 改前这里写死的是 `http://62.106.70.167:8888` —— 那是 `legacyHosts` 里的旧机，产物早就不往那发了，
+ * 于是桩永远不命中、请求一路出网。地址只有一个来源，桩才不会和产物各说各话。
+ */
+const ENDPOINTS = JSON.parse(await readFile(new URL('../../config/endpoints.json', import.meta.url), 'utf8'))
+const PRIMARY = ENDPOINTS.download.primaryBase
+const FALLBACK = ENDPOINTS.download.fallbackBase
 /**
  * 当前产物版本（build-info.json / __APP_VERSION__）与「更高版本」一律从 tests/helpers/current-version.mjs
  * 派生 —— 版本号只有一个来源（package.json），用例里不抄第二份。
@@ -58,31 +68,67 @@ const RELEASES = [
 ]
 
 /**
- * 发布清单 / APK 的桩：**按 host + path** 登记（#667 跟进）。
+ * 原生桥桩（Capacitor 替身）—— **「检查更新」只在 APK 里落地**（见 `AppVersionField` 的注释：
+ * 2026-11-23 起 Web 端只显示版本号，不渲染检查按钮，因为浏览器没有 APK 安装器）。
  *
- * 原来用的是 `context.route('http://62.106.70.167:8888/releases.json')` —— 那种写法看起来带了
- * host，但 Playwright 的 glob 语义里它只是「整串 URL 前缀」，一旦清单地址被改道到第三台机器，
- * 这条桩不再命中、请求会真的出网，而用例只会以「清单解析失败」的样子红（甚至绿）。
- * 现在走总闸：host 精确匹配 + path 精确匹配，命中才算数，未命中一律 abort 并记账。
+ * 所以这条主路径必须在 `android` 平台下走：`window.androidBridge` 存在即可让
+ * `Capacitor.getPlatform()` 返回 `android`。之后清单不再由浏览器 fetch，而是由**原生侧**回包
+ * （`nativeUpdate.manifest()` → `{ body, base }`），所以清单桩挂在桥上、不挂在 route 上 ——
+ * 这也正是 APK 的真实链路；把清单留在 `page.route` 里只证明「网页预览能查」，那条链已经不存在了。
+ *
+ * `download` 只记录参数并立刻回 `{cached:false}`：真机上它把 APK 落到私有目录再交给安装器，
+ * 浏览器里没有安装器可交，用例要钉的是「**下发给原生的是哪一条地址 / 哪一份字节校验**」。
  */
-const manifestStubs = () => [
-  {
-    name: 'releases-primary',
-    host: new URL(PRIMARY).host,
-    path: '/releases.json',
-    respond: () => ({
-      status: 200,
-      headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
-      body: JSON.stringify({ releases: RELEASES }),
-    }),
-  },
-  // 备选机：503 → 用例要验证「首选机可用时不回落到备选机」之外的清单解析路径
-  {
-    name: 'releases-fallback',
-    host: new URL(FALLBACK).host,
-    path: '/releases.json',
-    respond: () => ({ status: 503, body: '' }),
-  },
+const androidUpdateBridgeStub = ({ installed, releases, base }) => {
+  window.androidBridge = { postMessage: () => {} }
+  const state = { downloads: [], listeners: 0 }
+  window.__goldenUpdate = state
+  window.Capacitor = {
+    PluginHeaders: [
+      {
+        name: 'AppUpdate',
+        methods: [
+          { name: 'installed', rtype: 'promise' },
+          { name: 'manifest', rtype: 'promise' },
+          { name: 'download', rtype: 'promise' },
+          { name: 'cancel', rtype: 'promise' },
+          { name: 'install', rtype: 'promise' },
+          // 进度回调：原生是 callback 语义，核心层会把它包成 `{ remove }` 句柄
+          { name: 'addListener', rtype: 'callback' },
+        ],
+      },
+    ],
+    nativePromise: async (plugin, method, options) => {
+      if (plugin !== 'AppUpdate') {
+        return {}
+      }
+      if (method === 'installed') {
+        return installed
+      }
+      if (method === 'manifest') {
+        return { body: JSON.stringify({ releases }), base }
+      }
+      if (method === 'download') {
+        state.downloads.push({ ...options })
+        return { cached: false }
+      }
+      if (method === 'install') {
+        return { status: 'installer-opened' }
+      }
+      return {}
+    },
+    nativeCallback: async (plugin, method) => {
+      if (plugin === 'AppUpdate' && method === 'addListener') {
+        state.listeners += 1
+        return `g10-listener-${state.listeners}`
+      }
+      return undefined
+    },
+  }
+}
+
+/** APK 本体：给固定字节数，让「下载校验」能真的取到东西（地址由清单 base + file 拼出） */
+const artifactStubs = () => [
   // APK 本体：给固定字节数，让「下载校验」能真的取到东西
   {
     name: 'apk-primary',
@@ -116,24 +162,32 @@ const result = await runGolden(
     const app = await serveGoldenApp()
     const { page, close, guard } = await openGoldenPage(app.url, {
       storage: { 'chat-demo:api-key': 'sk-golden-g10' },
-      // 两台分发机都登记成桩：只拦一台时首选机一旦真的可达，用例会连真服务器（离线环境下表现为超时）
-      backends: { stubs: manifestStubs() },
+      // 平台伪装成 android（`window.androidBridge`）：设置里那一格才会渲染「检查更新」
+      initScripts: [
+        {
+          fn: androidUpdateBridgeStub,
+          arg: {
+            installed: { version: CURRENT.version, versionCode: CURRENT.versionCode, artifactVariant: 'standard' },
+            releases: RELEASES,
+            base: PRIMARY,
+          },
+        },
+      ],
+      // APK 本体：按 host + path 登记（#667 跟进）；清单走原生桥，不走 route
+      backends: { stubs: artifactStubs() },
     })
     try {
       await waitForBoot(page)
 
-      // ── 1. 打开「设置 → 检查更新」──────────────────────────────────────────────
+      // ── 1. 打开「设置 → 关于（应用更新）」──────────────────────────────────────
+      // 2026-11-24 设置改版后是「一级列表 + 二级页」：`role=tab` 的「数据管理 / 关于」整排没了，
+      // 「检查更新」按钮在二级页 `settings-page-update` 里。走 helpers 的唯一路径（不自己点 DOM）。
       ctx.begin('打开检查更新')
-      if ((await page.getByRole('dialog').count()) === 0) {
-        await page
-          .getByRole('button', { name: /设置|Settings/ })
-          .last()
-          .click()
-      }
+      await openSettingsPage(page, SETTINGS_ROW.update)
       const entry = page.getByRole('button', { name: '检查更新', exact: true })
       const entryReady = await waitFor(page, async () => (await entry.count()) > 0)
       if (!entryReady) {
-        ctx.abort('设置里有「检查更新」入口', '按钮「检查更新」存在', `body=${brief(await bodyText(page))}`)
+        ctx.abort('设置里「应用更新」页有「检查更新」入口', '按钮「检查更新」存在', `body=${brief(await bodyText(page))}`)
       }
       await entry.first().click()
 
@@ -156,15 +210,35 @@ const result = await runGolden(
         actual: `body=${brief(await bodyText(page))}`,
       })
 
-      // ── 4. 下载校验：下载入口指向该版本的文件，且真的能取到整包 ────────────────
+      // ── 4. 下载校验：用户点「确认下载」→ 下发给原生的地址与校验值都对 ────────────
+      //
+      // 钉的是 `AppUpdate.download({ url, sha256, size, versionCode })` 这四项 —— 真机上原生侧就靠
+      // 这份参数落包 + 校验，地址拼错 / 拿错版本 / 漏了 sha256 都不会当场报错，只会在安装那一步
+      // 变成一个看不懂的失败。所以主路径把它当作**可断言的事实**钉在这里。
       ctx.begin('下载校验')
       const expectedHref = `${PRIMARY}/${RELEASE_FILE}`
-      ctx.expect('下载入口指向选中版本的文件', seen.linkHref === expectedHref, {
+      const confirmDownload = page.getByRole('button', { name: '确认下载', exact: true })
+      const confirmReady = await waitFor(page, async () => (await confirmDownload.count()) > 0)
+      if (!confirmReady) {
+        ctx.abort('弹窗底部给出下载入口', '按钮「确认下载」存在', `body=${brief(await bodyText(page))}`)
+      }
+      await confirmDownload.first().click()
+      const dispatched = await waitFor(page, async () => (await page.evaluate(() => window.__goldenUpdate.downloads.length)) > 0)
+      const downloads = await page.evaluate(() => window.__goldenUpdate.downloads)
+      if (!dispatched) {
+        ctx.abort('点「确认下载」真的下发给原生', 'AppUpdate.download ≥1 次', `downloads=${downloads.length}`)
+      }
+      ctx.expect('下发给原生的是选中版本的文件地址', downloads[0].url === expectedHref, {
         expected: expectedHref,
-        actual: brief(seen.linkHref || '（没有下载链接）'),
+        actual: brief(String(downloads[0].url)),
       })
-      // 网页通道降级成链接：按用户点下去之后浏览器会做的事取一次，确认整包拿得到（不是 404 / 半截）。
-      // 必须在页面里 fetch（分发机跨域，靠 route 给的 CORS 头），APIRequestContext 不走 context.route。
+      const selected = RELEASES[2]
+      ctx.expect('下发的校验值/体积/版本号就是选中那一条的（拿错版本会在这里红）', downloads[0].sha256 === selected.sha256 && downloads[0].size === selected.size && downloads[0].versionCode === selected.versionCode, {
+        expected: `sha256=${selected.sha256.slice(0, 8)}… / size=${selected.size} / versionCode=${selected.versionCode}`,
+        actual: `sha256=${String(downloads[0].sha256).slice(0, 8)}… / size=${downloads[0].size} / versionCode=${downloads[0].versionCode}`,
+      })
+      // 那条地址真的能取到整包（不是 404 / 半截）。必须在页面里 fetch：分发机跨域，靠桩给的 CORS 头；
+      // APIRequestContext 不走 context.route。
       const downloaded = await page.evaluate(
         async (href) => {
           const response = await fetch(href, { signal: AbortSignal.timeout(15000) })
@@ -173,7 +247,7 @@ const result = await runGolden(
         },
         expectedHref
       )
-      ctx.expect('下载地址返回完整包体', downloaded.status === 200 && downloaded.bytes === APK_BYTES, {
+      ctx.expect('该地址返回完整包体', downloaded.status === 200 && downloaded.bytes === APK_BYTES, {
         expected: `HTTP 200 且 ${APK_BYTES} 字节`,
         actual: `HTTP ${downloaded.status} / ${downloaded.bytes} 字节`,
       })

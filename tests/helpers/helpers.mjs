@@ -30,8 +30,8 @@ import { defaultDist, verifyAppUrl } from './env.mjs'
 import { withStubbedBackends } from './golden.mjs'
 // #803 × 测试接缝：未配置首屏会真的去领内置 Key（GET apia.ecsafe.cn/api/v1/keys → 401）。
 // 它是「与用例无关的启动链路」，由本层的 `openApp()` 默认装成外部服务替身（见 openApp 的注释）。
-import { BUILTIN_KEY_CLAIM_STUB } from '../fixtures/consume-gateway-stubs/builtin-key-claim.mjs'
-import { CONSUME_ACCOUNT_STUBS } from '../fixtures/consume-gateway-stubs/account-consume-chain.mjs'
+// 「与用例无关的启动链路」替身清单（黄金层与 L1 共用同一份，别在这里另列一遍）
+import { GATEWAY_STARTUP_STUBS } from '../fixtures/startup/startup-chain-stubs.mjs'
 
 /**
  * 默认装进 `openApp()` / `installEgressGate()` 的桩：**与用例无关、但每次都会真出网**的两条链。
@@ -42,7 +42,7 @@ import { CONSUME_ACCOUNT_STUBS } from '../fixtures/consume-gateway-stubs/account
  * 两条都**不是**放宽：host 仍要在白名单里，桩命中之外的出站照样记「未登记出站」→ 红。
  * 断言这两条链本身的用例传 `stubBuiltinKeyClaim: false` / 自己传 `stubs`。
  */
-const DEFAULT_STUBS = [BUILTIN_KEY_CLAIM_STUB, ...CONSUME_ACCOUNT_STUBS]
+const DEFAULT_STUBS = GATEWAY_STARTUP_STUBS
 
 // 默认走 127.0.0.1：语音输入用例需要「安全上下文」（localhost/127.0.0.1）才拿到麦克风，
 // 局域网 IP（100.113.135.55）不是安全上下文，按钮会被置灰成「非 HTTPS 页面无法使用语音输入」。
@@ -338,6 +338,55 @@ export const openSettingsPage = async (page, testId) => {
     )
   }
   return walked.concat(`进到二级页 settings-page-${pageId}`)
+}
+
+/** 「账户与消费」一级列表（L1）的三行：模型来源 / 我的钱包 / 账号 */
+export const ACCOUNT_ROW = {
+  source: 'account-consume-source',
+  wallet: 'account-consume-wallet',
+  account: 'account-consume-tab-account',
+}
+
+/**
+ * 设置 → 账户与消费 → 点 L1 的某一行（`ACCOUNT_ROW` 里的值）。
+ *
+ * 为什么需要它：账户与消费是**两级页**（L1 三行 → L2 钱包 / 模型来源 / 账号 / 卡密 / 购买），
+ * 而 L1 与各 L2 用的是同一个容器 testid（`account-consume-page`）—— 光看容器分不出自己在第几层，
+ * 能分出来的只有「L1 的三行在不在」。所以这里：不在 L1 就沿 `account-consume-back` 一层层退回来，
+ * 再点目标行。L2 页里没有那一行时**当场报错并列出真实行**，不许点到超时。
+ *
+ * @param {string} testId {@link ACCOUNT_ROW} 里的值
+ */
+export const openAccountRow = async (page, testId) => {
+  const walked = []
+  if ((await page.getByTestId(testId).count()) === 0) {
+    // 还没进「账户与消费」：先按一级列表那一行进（openSettingsPage 会先回设置一级列表）
+    await openSettingsPage(page, SETTINGS_ROW.consume)
+    walked.push('进到「账户与消费」L1')
+  }
+  for (let hop = 0; hop < 4 && (await page.getByTestId(testId).count()) === 0; hop += 1) {
+    const back = page.getByTestId('account-consume-back')
+    if ((await back.count()) === 0) {
+      break
+    }
+    await back.first().click()
+    await page.waitForTimeout(120)
+    walked.push('点一次「返回」')
+  }
+  const row = page.getByTestId(testId)
+  if ((await row.count()) === 0) {
+    const rows = await page
+      .locator('[data-testid="account-consume-page"] [data-testid]')
+      .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-testid')))
+    throw stepError(
+      `点「账户与消费」里的「${testId}」这一行`,
+      `恰好 1 个 [data-testid="${testId}"] 的行（L1 三行之一）`,
+      `0 个；当前页现有的 testid = ${rows.join('、') || '（一个都没有）'}`,
+      walked
+    )
+  }
+  await row.first().click()
+  return walked.concat(`点了「${testId}」`)
 }
 
 /**

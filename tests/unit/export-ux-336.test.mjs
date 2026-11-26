@@ -64,6 +64,10 @@ await installBuildDefines()
 const { exportArchive, EXPORT_YIELD_EVERY } = await import('../../src/services/chat/history/exportArchive.ts')
 const { exportHistory, BackupError } = await import('../../src/services/chat/backup.ts')
 const { MAX_EXPORT_BYTES } = await import('../../src/services/chat/history/zipWriter.ts')
+// 上限数字不手抄：导出上限是导入上限的转出，文案里的 {size} / {actual} 都从真实常量推
+const { formatImportBytes, maxImportMegabytes } = await import(
+  '../../src/services/chat/history/importLimit.ts'
+)
 const zh = (await import('../../src/i18n/zh.ts')).zh
 const en = (await import('../../src/i18n/en.ts')).en
 
@@ -173,7 +177,7 @@ test('#336 §1 exportHistory 透传进度，总数取导出开始时的列表快
   assert.ok(plain.blob.size > 0)
 })
 
-test('#336 §3 超 200MB：exportHistory 抛 BackupError(historyExportTooLarge)，且图片原件一个字节都没读', async () => {
+test('#336 §3 超上限：exportHistory 抛 BackupError(historyExportTooLarge)，且图片原件一个字节都没读', async () => {
   store.sessionCache = {}
   // 图片只「声称」体积，绝不真分配 205MB；原件被读就说明上限判晚了。
   const claimed = {
@@ -197,19 +201,21 @@ test('#336 §3 超 200MB：exportHistory 抛 BackupError(historyExportTooLarge)�
   )
   assert.ok(error instanceof BackupError, `必须是 BackupError，实际 ${error?.name}`)
   assert.equal(error.key, 'historyExportTooLarge')
-  assert.equal(error.params.size, 200, '上限数字来自导入侧那一个')
-  assert.equal(error.params.actual, '205.0MB', '实测体积要说出来')
+  assert.equal(error.params.size, maxImportMegabytes(), '上限数字来自导入侧那一个')
+  assert.equal(error.params.actual, formatImportBytes(claimed.size), '实测体积要说出来')
   assert.equal(loads, 1, '只该读到这一条会话（不重读）')
   assert.equal((error.params.actual, true), true)
 
   // 文案必须告诉用户「怎么办」，不是只说文件过大（#336 验收 3）
+  const actualText = formatImportBytes(claimed.size).replace('.', '\\.')
+  const limitText = `${maxImportMegabytes()}MB`
   const zhText = render(zh, error)
-  assert.match(zhText, /205\.0MB/)
-  assert.match(zhText, /200MB/)
+  assert.match(zhText, new RegExp(actualText))
+  assert.ok(zhText.includes(limitText), `中文文案要说出上限 ${limitText}：${zhText}`)
   assert.match(zhText, /删除|删掉/, `中文文案要给可操作建议：${zhText}`)
   const enText = render(en, error)
-  assert.match(enText, /205\.0MB/)
-  assert.match(enText, /200MB/)
+  assert.match(enText, new RegExp(actualText))
+  assert.ok(enText.includes(limitText), `英文文案要说出上限 ${limitText}：${enText}`)
   assert.match(enText, /Delete|delete|remove/)
 })
 

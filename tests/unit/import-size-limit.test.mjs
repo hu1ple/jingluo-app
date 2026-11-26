@@ -37,7 +37,7 @@ const { importHistory } = await import('../../src/services/chat/backup.ts')
 const { importHistoryFromUrl, MAX_ARCHIVE_BYTES } =
   await import('../../src/services/chat/history/urlImport.ts')
 
-const DEFAULT_LIMIT = 200 * 1024 * 1024
+const DEFAULT_LIMIT = 500 * 1024 * 1024
 const MB = 1024 * 1024
 const URL_OK = 'https://obs.example.test/deepseek_data-2026-11-01.zip'
 
@@ -101,7 +101,7 @@ test('A：本地文件导入必须按默认上限拒绝「超限」文件，且�
     `超限文件必须被明确拒绝，实际 ${error === null ? '成功导入（没有上限检查）' : String(error)}`
   )
   assert.equal(error.key, 'historyImportUrlTooLarge', '必须给出「文件过大」这条可读错误')
-  assert.equal(error.params?.size, 200, '提示里的 MB 数应等于默认上限')
+  assert.equal(error.params?.size, 500, '提示里的 MB 数应等于默认上限')
   assert.deepEqual(stages(), [], '超限必须在解析/暂存之前拒绝（不能先解析再失败）')
   assert.equal(records('import_error').length, 1, '超限拒绝必须落一条失败日志')
 })
@@ -129,9 +129,9 @@ test('D：上限只有一个来源，不是散落的魔法数', async () => {
     '../../src/services/chat/history/importLimit.ts'
   )
 
-  assert.equal(DEFAULT_MAX_IMPORT_BYTES, DEFAULT_LIMIT, '默认值必须与现状一致（200MB）')
+  assert.equal(DEFAULT_MAX_IMPORT_BYTES, DEFAULT_LIMIT, '默认值必须与现状一致（500MiB）')
   assert.equal(MAX_ARCHIVE_BYTES, DEFAULT_MAX_IMPORT_BYTES, '从链接导入的上限必须就是这一个常量')
-  assert.equal(maxImportMegabytes(DEFAULT_MAX_IMPORT_BYTES), 200)
+  assert.equal(maxImportMegabytes(DEFAULT_MAX_IMPORT_BYTES), 500)
   assert.equal(resolveMaxImportBytes(undefined), DEFAULT_MAX_IMPORT_BYTES, '不传就是默认值')
   assert.equal(resolveMaxImportBytes(Number.NaN), DEFAULT_MAX_IMPORT_BYTES, '非法值退回默认值')
   assert.equal(resolveMaxImportBytes(1024), 1024, '合法值原样生效')
@@ -143,7 +143,7 @@ test('E：从链接导入仍然按默认上限拒绝（回归：默认值不许�
   const error = await runImportUrl()
 
   assert.equal(error?.key, 'historyImportUrlTooLarge', `声明超限必须拒绝，实际 ${error?.key ?? 'success'}`)
-  assert.equal(error.params?.size, 200)
+  assert.equal(error.params?.size, 500)
 })
 
 test('F：从链接导入也吃同一个可配置上限', async () => {

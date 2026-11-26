@@ -401,6 +401,14 @@ export const en = {
     'This link does not support resuming, so the download restarted from the beginning.',
   historyImportUrlResumed: 'Resumed from where the last attempt stopped ({done} downloaded).',
   historyImportCancelled: 'Import cancelled',
+  historyImportInProgressLabel: 'Importing...',
+  historyImportReading: 'Reading the archive…',
+  historyImportFinalizing: 'Finishing up…',
+  historyImportFinalizingCount: 'Finishing up… {processed}/{total} chats done',
+  historyImportProgressHint:
+    'Keep this page open while importing. Cancel stops it right away, clears the temporary data, and leaves your local chats untouched.',
+  historyImportInsufficientSpace:
+    'Not enough free space: this import needs about {need}, but only {free} is available ({short} short). Free up space or use a smaller export file and try again — nothing has been imported and your local chats are untouched.',
   importTraceTitle: 'Import details ({count})',
   importTraceCopy: 'Copy details',
   importTraceElapsed: 'Took {time}',

@@ -134,9 +134,9 @@ test('Web 侧：锚点下载点击一次、文件名与 ZIP 类型一致，且�
 })
 
 // [3] 原生兜底：Java 的 MAX_BINARY_BYTES 必须与 TS 的导入上限是同一个数，
-// 且不许再出现 220MB（导出上限大于导入上限 = (200MB, 220MB] 死区）。
+// 且不许再出现第二个数字（导出上限大于导入上限 = 上限之上那一段就是死区）。
 // 这条只钉「Java 的兜底数字没跟导入侧脱钩」，上限本身的判定口径在 #336 的用例里。
-test('Java 兜底上限 = 导入上限（200MB），不许出现第二个数字', async () => {
+test('Java 兜底上限 = 导入上限，不许出现第二个数字', async () => {
   const { DEFAULT_MAX_IMPORT_BYTES } = await import('../../src/services/chat/history/importLimit.ts')
   const java = readFileSync(
     new URL('../../android/app/src/main/java/com/example/deepseekchat/ExportTextPlugin.java', import.meta.url),

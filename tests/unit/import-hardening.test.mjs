@@ -33,80 +33,30 @@ globalThis.__hardeningDB = { stagingSessions, clearStaging }
 // + `.js→.ts` 解析，全在 installImportEnv 里；假存储仍由本文件给（各文件的暂存语义不同）。
 installImportEnv({ db: fakeDB })
 
+const { ARCHIVE_TIME, message, sessionBytes, manifestBytes, indexBytes, zipFileOf } = await import(
+  '../helpers/archive-builder.mjs'
+)
+// 这两条仍要用：个别用例直接构造「同名条目 / 4GB 声明尺寸」这类走不通 `zipFileOf` 的包
 const { strToU8 } = await import('fflate')
 const { buildZip } = await import('../adversarial/lib/zip.mjs')
+
 const { importArchive } = await import('../../src/services/chat/history/importArchive.ts')
 const { listArchivePaths } = await import('../../src/services/chat/history/zipReader.ts')
 const { zh } = await import('../../src/i18n/zh.ts')
 const { en } = await import('../../src/i18n/en.ts')
 const db = globalThis.__hardeningDB
 
-const TIME = '2026-11-01T00:00:00.000Z'
+const TIME = ARCHIVE_TIME
 const MB = 1024 * 1024
 
-const message = (id, parentId, role, content) => ({
-  id,
-  parent_id: parentId,
-  role,
-  status: 'FINISHED',
-  thinking_enabled: false,
-  search_enabled: false,
-  accumulated_token_usage: 0,
-  inserted_at: TIME,
-  fragments: [{ type: role === 'USER' ? 'REQUEST' : 'RESPONSE', content }],
-})
-
-const sessionBytes = (id, content) =>
-  strToU8(
-    JSON.stringify({
-      id,
-      title: id,
-      pinned: false,
-      current_message_id: 2,
-      inserted_at: TIME,
-      updated_at: TIME,
-      messages: [
-        message(1, null, 'USER', `${id} 的问题`),
-        message(2, 1, 'ASSISTANT', content ?? `${id} 的回答`),
-      ],
-    })
-  )
-
-const manifestBytes = () => strToU8(JSON.stringify({ export_format_version: 3 }))
-
-const indexBytes = (ids) =>
-  strToU8(
-    JSON.stringify(
-      ids.map((id) => ({
-        id,
-        title: id,
-        pinned: false,
-        message_count: 2,
-        inserted_at: TIME,
-        updated_at: TIME,
-      }))
-    )
-  )
-
+// 归档夹具的构造（消息 / 会话 / manifest / index / 拼 ZIP）与同族的 `import-quota-progress`
+// 共用 `helpers/archive-builder.mjs`：两边原先各抄一遍 40 行，`check:test-duplication` 的 R1 会红。
 /**
  * entries 是 [名字, 字节] 的有序数组：ZIP 条目顺序就是导入端看到的顺序，同名条目也不会被合并
  * （fflate 的 zipSync 会规范化名字并去重，构造不出「重复条目」，所以借用对抗层的 buildZip）。
  * compress=true 时逐条目 deflate 压缩（用来构造高压缩比 / 声明尺寸撒谎的包）。
  */
-const archiveOf = (entries, compress = false) =>
-  new File(
-    [
-      buildZip(
-        entries.map(([name, data]) => ({
-          name,
-          data,
-          compress,
-        }))
-      ),
-    ],
-    'deepseek_data.zip',
-    { type: 'application/zip' }
-  )
+const archiveOf = (entries, compress = false) => zipFileOf(entries, { compress })
 
 /** 正常导出的骨架：manifest 第一，会话若干，index 一个。 */
 const normalArchive = (ids, extra = []) =>

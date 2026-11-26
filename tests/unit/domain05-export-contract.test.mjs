@@ -116,7 +116,9 @@ const { exportHistory } = await import('../../src/services/chat/backup.ts')
 const { exportArchive } = await import('../../src/services/chat/history/exportArchive.ts')
 const { ArchiveLimitError, ExportTooLargeError, MAX_EXPORT_BYTES, isWithinExportLimit, writeArchive } =
   await import('../../src/services/chat/history/zipWriter.ts')
-const { DEFAULT_MAX_IMPORT_BYTES } = await import('../../src/services/chat/history/importLimit.ts')
+const { DEFAULT_MAX_IMPORT_BYTES, maxImportMegabytes } = await import(
+  '../../src/services/chat/history/importLimit.ts'
+)
 const { saveText } = await import('../../src/services/exportText.ts')
 const db = globalThis.__exportDB
 const store = globalThis.__exportStore
@@ -370,7 +372,7 @@ test('N7 导出器契约表 + TXT 桥子表（F-05-23/26/27/29）', async () => 
       },
     },
     {
-      name: 'A6 业务上限 = 导入上限（200MB）：超限在写第一个字节之前拒（ExportTooLargeError），零字节写出、零次保存面板',
+      name: 'A6 业务上限 = 导入上限（500MiB）：超限在写第一个字节之前拒（ExportTooLargeError），零字节写出、零次保存面板',
       async run() {
         // 只「声称」体积，绝不真分配：blob 没有任何字节可读，stream 一被碰就炸。
         let streamCalls = 0
@@ -385,10 +387,14 @@ test('N7 导出器契约表 + TXT 桥子表（F-05-23/26/27/29）', async () => 
           () => null,
           (failure) => failure
         )
-        expectOk(error instanceof ExportTooLargeError, '超 200MB 必须抛 ExportTooLargeError')
+        expectOk(error instanceof ExportTooLargeError, '超上限必须抛 ExportTooLargeError')
         expectEqual(error.expectedBytes > MAX_EXPORT_BYTES, true, '错误要带上算准的实测体积')
         expectEqual(error.limitBytes, MAX_EXPORT_BYTES, '错误要带上真正生效的上限')
-        expectMatch(String(error.message), /200MB export limit/, '错误信息要说清上限')
+        expectMatch(
+          String(error.message),
+          new RegExp(`${maxImportMegabytes()}MB export limit`),
+          '错误信息要说清上限（数字来自常量，不手抄）'
+        )
         expectEqual(streamCalls, 0, '超限时一个字节都不能写（stream 一次都不许读）')
         // 上限不是第二个数字：与导入侧那一个恒等，且比较口径同为 `<=`（等于上限能导回）。
         expectEqual(MAX_EXPORT_BYTES, DEFAULT_MAX_IMPORT_BYTES, '导出上限必须等于导入上限')

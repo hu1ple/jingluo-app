@@ -34,12 +34,14 @@ installTsResolve({ stubs: STUBS })
 const { importHistoryFromUrl, MAX_ARCHIVE_BYTES } = await import(
   '../../src/services/chat/history/urlImport.ts'
 )
+// 实测体积的文案由同一个格式化函数给出（别手抄 '200.0MB'：上限一改这条就假红）
+const { formatImportBytes } = await import('../../src/services/chat/history/importLimit.ts')
 const { isArchiveReadFailure } = await import('../../src/services/chat/history/importFailure.ts')
 const { zh } = await import('../../src/i18n/zh.ts')
 const { en } = await import('../../src/i18n/en.ts')
 
 const MB = 1024 * 1024
-const DEFAULT_LIMIT = 200 * 1024 * 1024
+const DEFAULT_LIMIT = 500 * 1024 * 1024
 const URL_OK = 'https://obs.example.test/deepseek_data-2026-11-01.zip'
 const ZIP_HEAD = [0x50, 0x4b, 3, 4]
 const HAN = /[\u4e00-\u9fff]/
@@ -139,7 +141,7 @@ test('① 响应头声明超限（206 Content-Range）→ 首块即终态，不�
   assert.equal(error.params?.size, MAX_ARCHIVE_BYTES / MB, '提示里必须有体积上限')
   assert.equal(
     error.params?.actual,
-    '200.0MB',
+    formatImportBytes(DEFAULT_LIMIT + 1),
     '提示里还必须有实测体积（用户得知道自己那个包到底多大）'
   )
   assert.equal(native.calls.length, 1, '超限必须首块就拒绝，不许继续发包')
@@ -166,7 +168,7 @@ test('①b 服务端忽略 Range 回 200 整包：先看 Content-Length，绝不
     'historyImportUrlTooLarge',
     `必须按响应头先判体积，实际 ${error?.key ?? `${error?.name}: ${error?.message}`}`
   )
-  assert.equal(error.params?.actual, '200.0MB')
+  assert.equal(error.params?.actual, formatImportBytes(DEFAULT_LIMIT + 1))
   assert.equal(native.calls.length, 1, '不许为「确认体积」再发请求，也不许继续下')
   assert.deepEqual(globalThis.__imported, [], '不许进到解析阶段')
 })

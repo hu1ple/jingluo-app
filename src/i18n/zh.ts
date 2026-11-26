@@ -389,6 +389,14 @@ export const zh = {
   historyImportUrlRestarted: '该链接不支持断点续传，已从头重新下载',
   historyImportUrlResumed: '已从上次中断的地方继续下载（已下载 {done}）',
   historyImportCancelled: '导入已取消',
+  historyImportInProgressLabel: '导入中...',
+  historyImportReading: '正在读取归档…',
+  historyImportFinalizing: '正在收尾…',
+  historyImportFinalizingCount: '正在收尾… 已完成 {processed}/{total} 个会话',
+  historyImportProgressHint:
+    '导入期间请保持页面打开；点「取消」会立刻停止，已写入的临时数据会被清理，本地会话不会变成半截。',
+  historyImportInsufficientSpace:
+    '设备剩余空间不足：这次导入大约需要 {need}，当前可用 {free}，还差 {short}。请先清理存储空间，或换一个更小的导出包再试（尚未开始导入，本地会话未受影响）。',
   importTraceTitle: '导入详情（{count} 条）',
   importTraceCopy: '复制详情',
   importTraceElapsed: '耗时 {time}',

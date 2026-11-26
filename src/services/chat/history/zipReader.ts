@@ -14,10 +14,12 @@ const MAX_INFLATE_RATIO = 200
 // 比值闸只对解压后 ≥ 16MiB 的条目生效：小条目里上千倍的比值是正常现象
 // （10MB 全是同一字符的合法会话约 500:1，拦它属于误杀）。炸弹的体积也是几十 MB 起步。
 const RATIO_MIN_OUTPUT_BYTES = 16 * 1024 * 1024
-// 解压后总量闸：归档字节数的导入上限是 200MiB（importLimit.DEFAULT_MAX_IMPORT_BYTES），
-// 正常备份解压后 ≲ 3 倍，这里留到 4 倍（800MiB）。按中央目录声明的解压尺寸累计，
+// 解压后总量闸：归档字节数的导入上限是 500MiB（importLimit.DEFAULT_MAX_IMPORT_BYTES），
+// 正常备份解压后 ≲ 3 倍，这里留到 4 倍（2GiB）。按中央目录声明的解压尺寸累计，
 // 因此在读第一个字节之前就能拒绝「声明尺寸撒谎 / 条目极多」的包。
-const MAX_INFLATE_TOTAL_BYTES = 800 * 1024 * 1024
+// 2026-11-26：随导入上限 200MiB → 500MiB 同比放大（800MiB → 2GiB），比值仍是 4 倍；
+// MAX_INFLATE_RATIO = 200 与上限无关（它挡的是单个条目的压缩比），**没有动**。
+const MAX_INFLATE_TOTAL_BYTES = 2048 * 1024 * 1024
 // 条目名长度上限：整条路径 1024 字节（解压出来要落成文件路径，Android/ext4 单段 255 字节）。
 // 导出里的路径段都很短，上限只拦明显异常的构造（实测有 60000 字节的条目名）。
 const MAX_PATH_BYTES = 1024
@@ -287,6 +289,38 @@ export const listArchivePaths = async (file: File): Promise<string[]> => {
   } catch {
     return []
   }
+}
+
+/**
+ * 中央目录里的「体量」（**不读任何条目数据**）：导入前的剩余空间预检就靠它。
+ *
+ * `inflatedBytes` 是中央目录里每个条目**声明**的解压尺寸之和 —— 它才是真正要落盘的量，
+ * 归档文件本身的字节数只是下载体积（会话 JSON 压缩比实测 3:1~10:1）。
+ * 声明尺寸撒谎 / 条目极多的包在读到这里时就已经被 `MAX_INFLATE_TOTAL_BYTES` 拦掉了。
+ */
+export type ArchiveLayout = {
+  /** 非目录条目数（含 manifest / index / 图片） */
+  entries: number
+  /** 全部非目录条目声明解压尺寸之和（字节） */
+  inflatedBytes: number
+}
+
+/**
+ * 只解析中央目录，返回条目数与声明解压总量。
+ * 目录损坏时抛 `ArchiveError`（与 `readArchive` 同一套判定），调用方按既有错误路径处理。
+ */
+export const readArchiveLayout = async (file: File): Promise<ArchiveLayout> => {
+  const { entries } = await readDirectory(file)
+  let count = 0
+  let inflatedBytes = 0
+  for (const entry of entries) {
+    if (entry.path.endsWith('/')) {
+      continue
+    }
+    count += 1
+    inflatedBytes += entry.size
+  }
+  return { entries: count, inflatedBytes }
 }
 
 export type ArchiveEntry = {

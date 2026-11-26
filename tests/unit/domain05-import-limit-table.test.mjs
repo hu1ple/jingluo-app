@@ -158,10 +158,10 @@ test('N4 上限与总长判定表：8 行（F-05-20/21/22）', async () => {
       },
     },
     {
-      name: '默认上限只有一个来源：200MB，且非法入参不许变成「无上限」',
+      name: '默认上限只有一个来源：500MiB，且非法入参不许变成「无上限」',
       async run() {
-        expectEqual(DEFAULT_MAX_IMPORT_BYTES, 200 * MB, '默认上限')
-        expectEqual(maxImportMegabytes(), 200, '文案里的 MB 数')
+        expectEqual(DEFAULT_MAX_IMPORT_BYTES, 500 * MB, '默认上限')
+        expectEqual(maxImportMegabytes(), 500, '文案里的 MB 数')
         expectEqual(LIMITS.importMaxBytes, DEFAULT_MAX_IMPORT_BYTES, 'LIMITS 只做转出，不另写数字')
         for (const illegal of [undefined, 0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
           expectEqual(resolveMaxImportBytes(illegal), DEFAULT_MAX_IMPORT_BYTES, `非法入参 ${illegal} 必须退回默认`)

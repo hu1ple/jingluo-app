@@ -25,6 +25,7 @@ import {
   importHistory,
   type ExportProgress,
 } from '../../services/chat/backup.js'
+import type { ImportArchiveProgress } from '../../services/chat/history/importArchive.js'
 import type { ImportMode } from '../../services/chat/history/mergeSessions.js'
 import type { ImportSkip } from '../../services/chat/history/toLocal.js'
 import {
@@ -746,11 +747,13 @@ const ImportConfirm = ({
             onClick={() => void historyImport.confirm()}
           >
             {t(
-              progress !== null
-                ? 'historyImportUrlDownloading'
-                : overwrite
+              progress === null
+                ? overwrite
                   ? 'historyImportConfirmOverwrite'
                   : 'historyImportConfirm'
+                : progress.phase === 'downloading'
+                  ? 'historyImportUrlDownloading'
+                  : 'historyImportInProgressLabel'
             )}
           </Button>
         </>
@@ -828,7 +831,13 @@ const ImportConfirm = ({
                 />
               </div>
             )}
-            <div className={styles.description}>{t('historyImportUrlDownloadingHint')}</div>
+            <div className={styles.description}>
+              {t(
+                progress.phase === 'downloading'
+                  ? 'historyImportUrlDownloadingHint'
+                  : 'historyImportProgressHint'
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -1134,11 +1143,57 @@ const formatBytes = (bytes: number): string => {
   return `${(bytes / 1024 / 1024).toFixed(1)}MB`
 }
 
-/** 分阶段文案：下载（字节/百分比）→ 解析 → 导入（n/总数），取代原来恒定的「下载中...」。 */
+/**
+ * 进度视图：直链导入的三个阶段（downloading / decoding / importing）＋**本地文件导入**独有的两个
+ * 阶段（reading 读中央目录与空间预检 / finalizing 收尾回填）。两条链路共用同一个进度条与文案。
+ */
+type ImportProgressView =
+  | UrlImportProgress
+  | { phase: 'reading' }
+  /** 收尾也带计数：最后一帧不该是「正在收尾…」这种没有数字的空白（用户刚看完 900/900） */
+  | { phase: 'finalizing'; processed?: number; total?: number }
+
+/**
+ * `importArchive` 的阶段进度 → 进度视图。
+ *
+ * 为什么要一层转换：`ImportArchiveProgress` 的 `percent` 来自「已消费的中央目录条目 / 条目总数」
+ * （真实推进），而 `UrlImportProgress` 的 importing 段只有会话数。转换只搬运字段，不造数字。
+ */
+const toImportView = (progress: ImportArchiveProgress): ImportProgressView => {
+  if (progress.stage === 'reading') {
+    return { phase: 'reading' }
+  }
+  if (progress.stage === 'finalizing') {
+    return {
+      phase: 'finalizing',
+      ...(progress.sessions === undefined ? {} : { processed: progress.sessions }),
+      ...(progress.totalSessions === undefined ? {} : { total: progress.totalSessions }),
+    }
+  }
+  return {
+    phase: 'importing',
+    processed: progress.sessions,
+    totalSessions: progress.totalSessions,
+    ...(progress.percent === undefined ? {} : { percent: progress.percent }),
+  }
+}
+
+/** 分阶段文案：下载（字节/百分比）→ 解析 → 读取 → 导入（n/总数）→ 收尾。 */
 const progressLabel = (
   t: ReturnType<typeof useTranslate>,
-  progress: UrlImportProgress
+  progress: ImportProgressView
 ): string => {
+  if (progress.phase === 'reading') {
+    return t('historyImportReading')
+  }
+  if (progress.phase === 'finalizing') {
+    return progress.processed === undefined
+      ? t('historyImportFinalizing')
+      : t('historyImportFinalizingCount', {
+          processed: progress.processed,
+          total: progress.total ?? progress.processed,
+        })
+  }
   if (progress.phase === 'downloading') {
     const done = formatBytes(progress.downloadedBytes)
     if (progress.totalBytes === undefined || progress.totalBytes === 0) {
@@ -1162,10 +1217,24 @@ const progressLabel = (
       })
 }
 
-/** 进度条百分比：只在能算出比例时显示（下载有总大小 / 导入有会话总数）。 */
-const progressPercent = (progress: UrlImportProgress | null): number | null => {
+/**
+ * 进度条百分比：只在能算出比例时显示。
+ *
+ * - 下载段：已下字节 / 总字节；
+ * - 导入段：优先用上游给的 `percent`（文件导入＝已消费条目 / 条目总数，真实推进），
+ *   没给才退回 `processed / totalSessions`（直链导入只知道会话数）；
+ * - 读取段与收尾段：文件导入在 reading 时报 0（条目还没开始消费），收尾时上游已经算到 100。
+ * 任何一段算不出来就返回 null —— 宁可不画进度条，也不画一个假的。
+ */
+const progressPercent = (progress: ImportProgressView | null): number | null => {
   if (!progress) {
     return null
+  }
+  if (progress.phase === 'reading') {
+    return 0
+  }
+  if (progress.phase === 'finalizing') {
+    return 100
   }
   if (progress.phase === 'downloading') {
     if (!progress.totalBytes) {
@@ -1173,8 +1242,13 @@ const progressPercent = (progress: UrlImportProgress | null): number | null => {
     }
     return Math.min(100, Math.round((progress.downloadedBytes / progress.totalBytes) * 100))
   }
-  if (progress.phase === 'importing' && progress.totalSessions) {
-    return Math.min(100, Math.round((progress.processed / progress.totalSessions) * 100))
+  if (progress.phase === 'importing') {
+    if (progress.percent !== undefined) {
+      return Math.min(100, Math.max(0, Math.round(progress.percent)))
+    }
+    if (progress.totalSessions) {
+      return Math.min(100, Math.round((progress.processed / progress.totalSessions) * 100))
+    }
   }
   return null
 }
@@ -1255,6 +1329,15 @@ const urlErrorStatus = (error: unknown): Status =>
       }
 
 /**
+ * 文件导入的失败原因：`BackupError` 自带 key 与参数（空间不足 / 超出上限 / 归档损坏…），
+ * 原样交给状态位渲染；只有非 `BackupError` 的意外才退回那句通用文案。
+ */
+const fileErrorStatus = (error: unknown): Status =>
+  error instanceof BackupError
+    ? { key: error.key, params: error.params, error: true }
+    : { key: 'historyImportFailed', error: true }
+
+/**
  * 导入状态：选中来源后先选导入方式（默认合并），确认后才真正导入。
  * 链接导入多一段「分阶段进度」：下载（字节/百分比）→ 解析 → 导入 n/总数；
  * 进度节流 100ms，取消后界面上立刻回到可重试状态（下载结果被丢弃，不写任何数据）。
@@ -1265,7 +1348,7 @@ const useHistoryImport = () => {
   const [mode, setMode] = useState<ImportMode>('merge')
   const [acknowledged, setAcknowledged] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [progress, setProgress] = useState<UrlImportProgress | null>(null)
+  const [progress, setProgress] = useState<ImportProgressView | null>(null)
   const [trace, setTrace] = useState<ImportTraceEntry[]>([])
   const [status, setStatus] = useState<ImportStatus | null>(null)
   // #49：这一次导入里被丢掉的条目（损坏的消息 / 整会话）。成功提示要带上条数，明细列在下面。
@@ -1277,11 +1360,11 @@ const useHistoryImport = () => {
   // 取消后仍可能有已发出的下载在跑：用自增的 run 标记作废旧结果，不影响新的一轮导入。
   const run = useRef(0)
   const abort = useRef<AbortController | null>(null)
-  const latest = useRef<UrlImportProgress | null>(null)
+  const latest = useRef<ImportProgressView | null>(null)
   const lastEmit = useRef(0)
 
   /** 节流后的进度写入：阶段变化立即生效，同一阶段最多 100ms 一次。 */
-  const emitProgress = (next: UrlImportProgress) => {
+  const emitProgress = (next: ImportProgressView) => {
     const previous = latest.current
     const phaseChanged = previous === null || previous.phase !== next.phase
     const now = Date.now()
@@ -1315,16 +1398,40 @@ const useHistoryImport = () => {
     }
   }
 
+  /**
+   * 文件导入：带**阶段进度 + 取消**（本单 ②）。与直链导入共用同一个进度状态与进度条。
+   *
+   * 取消用 `AbortController`：`importArchive` 在条目边界中断，已写入的暂存由它自己清掉
+   * （`db.clearStaging()`），正式数据一个字节都没动过。取消不提示成功、也不提示失败。
+   */
   const importFile = async (file: File, mode: ImportMode) => {
+    const controller = new AbortController()
+    abort.current = controller
+    emitProgress({ phase: 'reading' })
     try {
-      const result = await importHistory(file, { mode })
+      const result = await importHistory(file, {
+        mode,
+        signal: controller.signal,
+        // 上游 declared 的类型是 `{sessions,totalSessions?,images?}`（backup.ts 不该为了 UI 改口径），
+        // 运行时同一份对象还带 `stage / entries / totalEntries / percent` —— 这里按真实形状取回。
+        onProgress: (raw) => emitProgress(toImportView(raw as ImportArchiveProgress)),
+      })
       // 条数与明细都取自 store：importArchive 把跳过条目交回 store.importSkipped，这里只负责显示。
       const dropped = useChatStore.getState().importSkipped
       setSkipped(dropped)
       setSummary(result)
       setStatus({ target: 'file', message: importedMessage(result, dropped.length) })
-    } catch {
-      setStatus({ target: 'file', message: { key: 'historyImportFailed', error: true } })
+      setSource(null)
+    } catch (error) {
+      if (controller.signal.aborted || (error instanceof BackupError && error.key === 'historyImportCancelled')) {
+        // 取消：界面上什么错误都不留（与直链导入同一条口径）。
+        setSource(null)
+        resetProgress()
+        return
+      }
+      setSource(null)
+      // 失败也要说人话：空间不足 / 超出上限 / 归档损坏各有各的文案，参数原样带出（含 {need}/{free}/{short}）。
+      setStatus({ target: 'file', message: fileErrorStatus(error) })
     }
   }
 
@@ -1372,7 +1479,8 @@ const useHistoryImport = () => {
     setSummary(null)
     try {
       if (source.kind === 'file') {
-        setSource(null)
+        // 不在这里 setSource(null)：文件导入期间**弹窗要留着**，它现在显示阶段进度与「取消」。
+        // 结束（成功 / 失败 / 取消）时由 importFile 自己关闭。
         await importFile(source.file, mode)
       } else {
         await importLink(source.url, mode)

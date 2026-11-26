@@ -5,7 +5,7 @@
 // 缺陷形态（实测）：服务端按 206 分块、**不下发 Content-Range**，代码把这次响应里的
 // Content-Length（= 这一块的长度，例如 4096）当成了整包总长，于是
 //   1) 4KB 就被当成「已经下完」；
-//   2) 200MB 上限拿这个假总长去比 —— 几百 MB 的包被放过，正常包也可能被误判。
+//   2) 大小上限拿这个假总长去比 —— 几百 MB 的包被放过，正常包也可能被误判。
 // 期望：total 只从可信来源取（Content-Range 的 total，或首次整包 200 的 Content-Length）；
 // 206 缺 Content-Range 时 total 保持未知，超限改按「已累计字节」判断。
 //
@@ -33,9 +33,13 @@ installTsResolve({
 })
 
 const { importHistoryFromUrl } = await import('../../src/services/chat/history/urlImport.ts')
+// 上限只有一个来源（#34）：这里不再手抄一个数，直接读真实常量，
+// 否则上限一改（200MiB → 500MiB），「累计超限」那条用例要么假绿要么白跑几百个块。
+const { DEFAULT_MAX_IMPORT_BYTES: MAX_ARCHIVE_BYTES } = await import(
+  '../../src/services/chat/history/importLimit.ts'
+)
 
 const URL_OK = 'https://obs.example.test/deepseek_data-2026-11-01.zip'
-const MAX_ARCHIVE_BYTES = 200 * 1024 * 1024
 
 /** 合法 ZIP 头（urlImport 会校验 PK\x03\x04），其余字节填充，保证长度真实。 */
 const rangeOf = (options) => {
@@ -155,9 +159,9 @@ test('C：206 带 Content-Range bytes a-b/* → total 视为未知（不回落�
   assert.equal(globalThis.__imported[0].size, source.length)
 })
 
-test('D：total 未知时按累计字节判超限（累计 > 200MB 仍然报超限）', async () => {
+test('D：total 未知时按累计字节判超限（累计 > 上限仍然报超限）', async () => {
   resetEnv()
-  // 不真造 200MB 文件：复用一块 4MB 缓冲区模拟「永远下不完的大包」，
+  // 不真造几百 MB 文件：复用一块 4MB 缓冲区模拟「永远下不完的大包」，
   // 每块长度真实计入累计，只有长度参与判定。
   const block = new Uint8Array(4 * 1024 * 1024)
   block.set([0x50, 0x4b, 3, 4], 0)

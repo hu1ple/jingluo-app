@@ -14,13 +14,17 @@ import { buildArchiveZip, textPayload } from '../fixtures/domain05/archive-fixtu
 import { assertNoEgress, installEgressGate, openSettingsRoot } from '../helpers/helpers.mjs'
 import { BUILTIN_KEY_CLAIM_STUB } from '../fixtures/consume-gateway-stubs/builtin-key-claim.mjs'
 
+// 文案里的上限 MB 数从常量推（别再手抄 200 / 500：上限一改这里就会假红或假绿）
+const { maxImportMegabytes } = await import('../../src/services/chat/history/importLimit.ts')
+
 
 const APP_URL = process.env.APP_URL || 'http://127.0.0.1:5181'
 // fileURLToPath：Windows 下 pathname 是 /D:/...，当路径用会变成 D:\D:\...
 const SHOT_DIR = fileURLToPath(new URL('../../docs/ui/', import.meta.url))
 const ZIP_URL = 'https://obs.example.test/deepseek_data-2026-11-01.zip'
 const SESSION_TITLE = '链接导入测试会话'
-const OVER_LIMIT_BYTES = 300 * 1024 * 1024
+// 上限是 500MiB（2026-11-26 从 200MiB 提上来）：必须明显超过它，否则这条用例会「因为没超限」而假绿
+const OVER_LIMIT_BYTES = 600 * 1024 * 1024
 
 const base64 = (bytes) => Buffer.from(bytes).toString('base64')
 
@@ -280,9 +284,9 @@ const run = async () => {
     await browser.close()
   }
 
-  // ── 用例 4：Content-Length 超过 200MB → 拒绝 ─────────────────────────────
+  // ── 用例 4：Content-Length 超过上限 → 拒绝 ───────────────────────────────
   {
-    console.log('\n[case 4] Content-Length > 200MB：直接拒绝')
+    console.log(`\n[case 4] Content-Length > ${maxImportMegabytes()}MB：直接拒绝`)
     const { browser, page, consoleErrors } = await openApp({
       payload: {
         status: 200,
@@ -292,12 +296,10 @@ const run = async () => {
       },
     })
     await startUrlImport(page)
-    const tooLarge = page.getByText(/文件过大（200MB）/)
+    const tooLargeText = new RegExp(`文件过大（${maxImportMegabytes()}MB）`)
+    const tooLarge = page.getByText(tooLargeText)
     await tooLarge.waitFor({ timeout: 20000 })
-    check(
-      '提示「文件过大（200MB），暂不支持」',
-      /文件过大（200MB）/.test((await tooLarge.first().textContent()) ?? '')
-    )
+    check(`提示「文件过大（${maxImportMegabytes()}MB）」`, tooLargeText.test((await tooLarge.first().textContent()) ?? ''))
     check('会话数仍为 0', (await sessionCount(page)) === 0)
     check('console error = 0', consoleErrors.length === 0, consoleErrors.join(' | '))
     await browser.close()

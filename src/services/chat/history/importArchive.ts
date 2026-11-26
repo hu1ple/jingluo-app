@@ -2,16 +2,34 @@ import * as db from '../db.js'
 import { BackupError, fail } from './errors.js'
 import type { SessionIndexEntry } from './format.js'
 import { INDEX_PATH, MANIFEST_PATH, USER_PATH, parseSessionPath, sessionFilesDir } from './paths.js'
+import { checkImportSpace, insufficientSpaceParams } from './quotaPrecheck.js'
 import { checkManifest, readSessionFile, readSessionIndex } from './schema.js'
 import { toLocalSessionResult, type ImportSkip } from './toLocal.js'
 import {
   ArchiveError,
   isZipFile,
   readArchive,
+  readArchiveLayout,
   readEntry,
   skipEntry,
   type ArchiveEntry,
 } from './zipReader.js'
+
+/**
+ * 取消后的清理：清空导入暂存（`sessionsStaging` + `filesStaging`）。
+ *
+ * 走的是**既有** `db.clearStaging()` —— 与 `store.importHistoryInto` 在失败分支上调的是同一个出口
+ * （那里还会在下次导入前再清一次，两次都清是幂等的）。两件事刻意不做：
+ * - 不动正式数据：正式库一个字节都没有被这次导入碰过，这正是「暂存 + 一次性提交」的意义；
+ * - 不把清理失败变成导入失败：清不掉时调用方还会再清，用户的取消不应该变成一条「导入失败」。
+ */
+const clearStagingAfterCancel = async (): Promise<void> => {
+  try {
+    await db.clearStaging()
+  } catch {
+    // 见上：清理是尽力而为，取消本身必须照常结束。
+  }
+}
 
 /** 从原件字节补充图片 MIME；无法识别时为空字符串，图片身份仍由归档的 is_image 决定。 */
 const imageType = (bytes: Uint8Array): string => {
@@ -95,10 +113,40 @@ export const checkArchiveFormat = async (file: File): Promise<void> => {
   fail('backupEmptyArchive')
 }
 
-/** 导入进度：已处理会话数 / 会话总数（总数拿不到时不传，界面退化为只显示已处理数）。 */
-export type ImportArchiveProgress = { sessions: number; totalSessions?: number; images?: number }
+/**
+ * 导入阶段（本单 ②）：读取/预检 → 逐会话入库 → 收尾。
+ *
+ * 为什么「读取」与「解压」不各占一段：实现上是**同一遍**——`readArchive` 逐条目解压，
+ * `importArchive` 拿到一条就立刻把会话写进暂存（单遍流式，见下面的函数头注释），
+ * 中间没有「全读完再入库」的停顿。把它们拆成两段只能靠定时器编，那就是假进度。
+ * 所以这里的 `reading` 指的是真独立的那一小段：读中央目录 + 剩余空间预检。
+ */
+export type ImportStage = 'reading' | 'importing' | 'finalizing'
 
-/** 导入可选项：signal 用于取消（条目边界中断，暂存由调用方清理），onProgress 用于 n/总数 进度。 */
+/**
+ * 导入进度：已处理会话数 / 会话总数（总数拿不到时不传，界面退化为只显示已处理数）。
+ *
+ * 两个数字都是**真实推进**，没有任何定时器：
+ * - `sessions` 只在 `db.addStagingSession()` 真的返回之后 +1（被整会话跳过的也会推进 `entries`）；
+ * - `entries / totalEntries` 是「已经消费完的中央目录条目数」，`percent` 直接由它换算。
+ *   条目总数来自中央目录；读不到就**不给百分比**（`percent` 缺省），而不是猜一个。
+ */
+export type ImportArchiveProgress = {
+  sessions: number
+  totalSessions?: number
+  images?: number
+  stage: ImportStage
+  /** 已消费的中央目录条目数（含 manifest / index / 图片 / 被跳过的条目） */
+  entries?: number
+  totalEntries?: number
+  /** 0~100，由 `entries / totalEntries` 换算；拿不到条目总数时缺省 */
+  percent?: number
+}
+
+/**
+ * 导入可选项：signal 用于取消（条目边界中断，已写入的暂存由本函数清掉、正式数据一个字节不动），
+ * onProgress 用于「阶段 + n/总数 + 百分比」进度。
+ */
 export type ImportArchiveOptions = {
   signal?: AbortSignal
   totalSessions?: number
@@ -136,6 +184,33 @@ export const importArchive = async (
   /** 已交给调用方的条目序号（1 起）与条目名，仅在报错时用于说明「哪一段校验失败」。 */
   let entryIndex = 0
   let entryPath: string | undefined
+  /** 当前阶段与「已消费的条目数 / 中央目录里的条目总数」——百分比只由这两个数换算（②）。 */
+  let stage: ImportStage = 'reading'
+  let processedEntries = 0
+  let totalEntries: number | undefined
+
+  /**
+   * 进度上报：阶段 + 会话数 + 条目数 + 百分比。百分比只由**真实消费掉的条目数**换算，
+   * 拿不到条目总数就整个缺省 —— 界面上宁可没有进度条，也不许用定时器把数字凑上去。
+   */
+  const emitProgress = (images?: number): void => {
+    if (options.onProgress === undefined) {
+      return
+    }
+    const percent =
+      totalEntries !== undefined && totalEntries > 0
+        ? Math.min(100, Math.round((processedEntries / totalEntries) * 100))
+        : undefined
+    options.onProgress({
+      sessions: imported.size,
+      totalSessions: options.totalSessions,
+      ...(images === undefined ? {} : { images }),
+      stage,
+      entries: processedEntries,
+      ...(totalEntries === undefined ? {} : { totalEntries }),
+      ...(percent === undefined ? {} : { percent }),
+    })
+  }
 
   const saveImage = async (entry: ArchiveEntry, id: string) => {
     if (stored.has(id)) {
@@ -146,12 +221,29 @@ export const importArchive = async (
     const type = imageType(new Uint8Array(await data.slice(0, 16).arrayBuffer()))
     await db.saveStagingFiles([{ id, blob: new Blob([data], { type }) }])
     stored.set(id, type)
-    options.onProgress?.({ sessions: imported.size, totalSessions: options.totalSessions, images: stored.size })
+    emitProgress(stored.size)
   }
 
   try {
+    // ① 读中央目录（不读条目数据）+ 剩余空间预检：**在写第一条会话之前**。
+    // 解压后总量才是真正要落盘的量（归档字节数只是下载体积），见 quotaPrecheck.ts。
+    const layout = await readArchiveLayout(file)
+    totalEntries = layout.entries
+    emitProgress()
+    const space = await checkImportSpace(layout.inflatedBytes)
+    if (!space.ok) {
+      fail('historyImportInsufficientSpace', insufficientSpaceParams(space))
+    }
+    stage = 'importing'
+    emitProgress()
+
     for await (const entry of readArchive(file)) {
-      // 取消只在条目边界生效：已写入暂存的条目会被调用方清空，正式数据一个字节都不动。
+      // 上一条条目已经处理完（解压 + 暂存都落地了）才推进进度：这就是「真实推进」的来源。
+      if (processedEntries > 0) {
+        emitProgress()
+      }
+      processedEntries += 1
+      // 取消只在条目边界生效：已写入暂存的条目会被本函数的 catch 清掉，正式数据一个字节都不动。
       if (options.signal?.aborted) {
         fail('historyImportCancelled')
       }
@@ -180,7 +272,7 @@ export const importArchive = async (
         currentSessionId = sessionId
         skipped.push(...result.skipped)
         if (!result.ok) {
-          options.onProgress?.({ sessions: imported.size, totalSessions: options.totalSessions })
+          emitProgress()
           continue
         }
         const local = result.session
@@ -192,7 +284,7 @@ export const importArchive = async (
           images.set(imagePath, id)
         }
         await db.addStagingSession(local.session)
-        options.onProgress?.({ sessions: imported.size, totalSessions: options.totalSessions })
+        emitProgress()
       } else if (path === INDEX_PATH && !index) {
         index = readSessionIndex(await readJson(entry))
       } else if (
@@ -216,8 +308,24 @@ export const importArchive = async (
       }
     }
   } catch (error) {
-    throw error instanceof ArchiveError ? archiveFailure(entryIndex, entryPath, error) : error
+    const failure = error instanceof ArchiveError ? archiveFailure(entryIndex, entryPath, error) : error
+    // ② 取消收尾：**用户主动取消**时把已写入的暂存清掉，不留半截数据。
+    // 走的是既有 `db.clearStaging()`（与 store 的失败清理同一个出口，也就是 staging/孤儿清理那条路径）。
+    // 只在取消时做：部分成功（带 skipped 的错误）由调用方按「能导入的先导入」提交，这里不许抢着清。
+    if (failure instanceof BackupError && failure.key === 'historyImportCancelled') {
+      await clearStagingAfterCancel()
+    }
+    throw failure
   }
+  // 结尾再查一次取消：最后一条条目处理完之后、提交之前点取消，同样一个字节都不许提交。
+  if (options.signal?.aborted) {
+    await clearStagingAfterCancel()
+    fail('historyImportCancelled')
+  }
+  // 收尾阶段：条目已经全部消费完（percent 因此自然到 100，不靠补齐数字），
+  // 剩下的真实工作是回填图片 MIME 与完整性校验。
+  stage = 'finalizing'
+  emitProgress()
   if (!manifest) {
     fail('backupEmptyArchive')
   }

@@ -36,9 +36,43 @@ chat_sessions/{session_id}_files/{file_id}_{file_name}  全部图片原件
 
 ## 导入与替换
 
-1. 用户确认覆盖后，先读取首个条目检查格式与版本；不符合时直接失败，不中止正在生成的回答。
-2. 检查通过后停止生成，导入期间禁止修改会话。逐条解析会话并写入 IndexedDB 暂存区，按 `FILE.is_image` 保留图片身份，再读取图片原件并回填 MIME。图片按文件 ID 去重；字节识别仅补充具体 MIME，无法识别时仍按图片处理。
-3. 校验索引与会话一一对应、消息树和 ZIP 完整性后，在同一个事务中用暂存内容替换全部本地会话与附件。校验或提交失败时保留原有记录；中断遗留的暂存在下次导入前清理。
+1. 用户确认导入方式后，先读取首个条目检查格式与版本；不符合时直接失败，不中止正在生成的回答。
+2. **写第一条会话之前**先做两件事（`importArchive` 的 `reading` 阶段，见 [quotaPrecheck.ts](./quotaPrecheck.ts)）：
+   - 读中央目录拿到**解压后总量**（不是归档字节数：会话 JSON 压缩比实测 3:1~10:1）；
+   - 用 `navigator.storage.estimate()` 的 `quota - usage` 与「解压后总量 × 安全系数」比，
+     不够就**现在**拒绝并报出「需要多少 / 当前可用多少 / 还差多少」，一个会话都不入库。
+     探测不到（老 WebView / 隐私模式 / `estimate` 抛错）一律**放行**，只在诊断里记一条 ——
+     不能因为估不出来就把人拦住。真正的兜底仍是 `db.ts` 的 `QuotaExceededError` 那一档。
+3. 检查通过后停止生成，导入期间禁止修改会话。逐条解析会话并写入 IndexedDB 暂存区，按 `FILE.is_image` 保留图片身份，再读取图片原件并回填 MIME。图片按文件 ID 去重；字节识别仅补充具体 MIME，无法识别时仍按图片处理。
+4. 校验索引与会话一一对应、消息树和 ZIP 完整性后，在同一个事务中用暂存内容替换全部本地会话与附件。校验或提交失败时保留原有记录；中断遗留的暂存在下次导入前清理。
+
+### 进度与取消（同一遍流）
+
+导入是**单遍流式**的：`readArchive` 逐条目解压，`importArchive` 拿到一条就立刻暂存，中间没有
+「全读完再入库」的停顿。所以进度分三段，且百分比只由**真实计数**换算，没有一个定时器：
+
+| 阶段 | 文案 | 数字来源 |
+| --- | --- | --- |
+| `reading` | 正在读取归档… | 刚读完中央目录（条目总数已知） |
+| `importing` | 正在导入… n/总数 个会话 | `n` = 已写进暂存的会话数；百分比 = 已消费条目 / 条目总数 |
+| `finalizing` | 正在收尾… 已完成 n/总数 个会话 | 回填 MIME + 完整性校验 |
+
+取消用 `AbortSignal`，在**条目边界**生效：`importArchive` 抛 `historyImportCancelled` 之前先调
+`db.clearStaging()` 清掉已写入的暂存（与 `store.importHistoryInto` 的失败清理同一个出口，幂等），
+正式数据一个字节都没被碰过 —— 这就是「暂存 + 一次性提交」的意义。
+
+### 上限（一个数字，三处跟随）
+
+| 常量 | 现值 | 说明 |
+| --- | --- | --- |
+| `importLimit.DEFAULT_MAX_IMPORT_BYTES` | 500MiB | 本地文件导入 / 直链导入 / 导出上限的唯一来源 |
+| `zipWriter.MAX_EXPORT_BYTES` | = 上一个 | 转出，不另写数字（导得出就必须导得回） |
+| `zipReader.MAX_INFLATE_TOTAL_BYTES` | 2GiB | 解压总量闸，= 导入上限的 4 倍 |
+| `zipReader.MAX_INFLATE_RATIO` | 200 | zip bomb 比值闸，**与上限无关，不随之调整** |
+| `LIMITS.importMaxTotalMs` | 60 分钟 | 直链导入的防御性总预算（500MiB ÷ 3600s ≈ 146KB/s，与 200MiB 时代的 114KB/s 同一档） |
+
+Android 侧的兜底出口 `ExportTextPlugin.MAX_BINARY_BYTES` 也是同一个数（500MB），
+由 `tests/unit/export-blob-bridge.test.mjs` 钉住：大于导入上限就会产出「导得出、导不回」的包。
 
 消息树以 `id` / `parent_id` 还原，父消息 ID 必须小于子消息 ID、角色交替、根为提问。`current_message_id` 决定当前分支；其他节点默认选中 ID 最大的子消息。缺失原件的附件保留文件名和大小，不进入后续请求；有原件的导入图片在首次用于请求时上传。
 
@@ -72,6 +106,7 @@ chat_sessions/{session_id}_files/{file_id}_{file_name}  全部图片原件
 | [format.ts](./format.ts)、[schema.ts](./schema.ts)                             | 归档类型与字段校验             |
 | [toLocal.ts](./toLocal.ts)、[toArchive.ts](./toArchive.ts)                     | 归档与本地消息转换             |
 | [importArchive.ts](./importArchive.ts)、[exportArchive.ts](./exportArchive.ts) | 条目读取、暂存与归档组装       |
+| [quotaPrecheck.ts](./quotaPrecheck.ts)                                         | 导入前的剩余空间预检（能力探测可缺省） |
 | [zipReader.ts](./zipReader.ts)、[zipWriter.ts](./zipWriter.ts)                 | ZIP 读写及路径、大小、CRC 校验 |
 | [../backup.ts](../backup.ts)                                                   | 导入导出入口与串行队列         |
 

@@ -4,7 +4,7 @@
 //
 // 修复前症状（#34 / #24）：链接导入把 200MB 的包误报成「文件过大」；上限散落在多处、
 //   调用方传 0 或负数时被当成「无上限」直接放行，随后内存三份拷贝把 WebView 拖死。
-// 修复后预期：默认上限 200MB 且向下取整算 MB；调用方传非法值（NaN / ≤0 / 非数字）一律退回默认，
+// 修复后预期：默认上限 500MiB（2026-11-26 从 200MiB 提上来）且向下取整算 MB；调用方传非法值（NaN / ≤0 / 非数字）一律退回默认，
 //   **不接受「无上限」这个语义**。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -13,10 +13,10 @@ const { DEFAULT_MAX_IMPORT_BYTES, maxImportMegabytes, resolveMaxImportBytes } = 
   '../../src/services/chat/history/importLimit.ts'
 )
 
-test('#34 默认上限是 200MB，提示文案按 MB 向下取整', () => {
-  assert.equal(DEFAULT_MAX_IMPORT_BYTES, 200 * 1024 * 1024)
-  assert.equal(maxImportMegabytes(), 200)
-  assert.equal(maxImportMegabytes(200 * 1024 * 1024 - 1), 199, '宁可提示小一点，也不要报未达的余量')
+test('#34 默认上限是 500MiB，提示文案按 MB 向下取整', () => {
+  assert.equal(DEFAULT_MAX_IMPORT_BYTES, 500 * 1024 * 1024)
+  assert.equal(maxImportMegabytes(), 500)
+  assert.equal(maxImportMegabytes(500 * 1024 * 1024 - 1), 499, '宁可提示小一点，也不要报未达的余量')
   assert.equal(maxImportMegabytes(1024 * 1024), 1)
 })
 

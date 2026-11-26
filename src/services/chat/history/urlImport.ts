@@ -35,8 +35,8 @@ import {
  */
 
 /**
- * 单个导出包的大小上限：**就是 importLimit 里那一个数字**（默认 200MB）。
- * 这里只做转出，别的地方不要再抄一遍 200MB——本地文件导入用的是同一个上限（issue #34）。
+ * 单个导出包的大小上限：**就是 importLimit 里那一个数字**（默认 500MiB，2026-11-26 从 200MiB 提上来）。
+ * 这里只做转出，别的地方不要再抄一遍这个数字——本地文件导入与导出上限用的是同一个（issue #34）。
  */
 export const MAX_ARCHIVE_BYTES = DEFAULT_MAX_IMPORT_BYTES
 
@@ -76,25 +76,28 @@ const DOWNLOAD_STALL_MS = LIMITS.importStallMs
 
 /**
  * 防御性总上限：只防「一直在爬但永远下不完」的病态链路，不参与日常判定。
- * 30 分钟对 200MB 上限的包意味着 ≥110KB/s 就能下完；164.5MB 实测约 5 分钟，余量充足。
+ * 60 分钟对 500MiB 上限的包意味着 ≥146KB/s 就能下完（见下面的推导）；164.5MB 实测约 5 分钟，余量充足。
  */
 const DOWNLOAD_MAX_TOTAL_MS = LIMITS.importMaxTotalMs
 
 /**
  * 上面两个常量之间的**可校验关系**（#152）：按现行上限与总时限，链路至少要稳定跑这么快才可能下完。
  *
- * 现值 = DEFAULT_MAX_IMPORT_BYTES（200MB）÷ DOWNLOAD_MAX_TOTAL_MS（1800s）≈ 114KB/s ≈ 0.9Mbps，
- * 常见移动网络都够，所以两者目前是自洽的。要点是它**推导**而来、不是手写的数：
- * 谁把上限调大（或把总时限调短）而另一个不跟着动，这个"所需最低带宽"就会立刻变化，
- * 并随每一次预算耗尽写进诊断（`min.bytes.per.sec`）——「常量不自洽」于是变成一次失败里看得见的事实，
- * 而不是要等人拿计算器算一遍才发现。
+ * 现值 = DEFAULT_MAX_IMPORT_BYTES（500MiB = 524288000 字节）÷ DOWNLOAD_MAX_TOTAL_MS（3600s）
+ * ≈ 145.6KB/s（142KB/s 按 1024 换算）≈ 1.2Mbps，常见移动网络都够，所以两者目前是自洽的。
+ * 要点是它**推导**而来、不是手写的数：谁把上限调大（或把总时限调短）而另一个不跟着动，
+ * 这个"所需最低带宽"就会立刻变化，并随每一次预算耗尽写进诊断（`min.bytes.per.sec`）——
+ * 「常量不自洽」于是变成一次失败里看得见的事实，而不是要等人拿计算器算一遍才发现。
  *
- * 数值口径已定（#152 第 3 条，口径 A）：**维持 200MB + 30min**。理由是 200MB 归档要求 ≥0.9Mbps
- * 在常见 4G 之上仍有余量，属合理门槛；降上限（口径 C）是对用户可见的功能回退，放宽总时限（口径 B）
- * 让导入能挂近一小时反而更糟，自适应（口径 D）实现最重。所以这里不引入任何产品行为变更，
- * 只把「链接太慢」从无法解释的失败变成可解释的失败。
+ * 数值口径（#152 第 3 条 → 2026-11-26 按新上限重算）：**500MiB + 60min**。
+ * 推导方式沿用 #152 的口径 A，只把上限换掉再把时限取整到「够用且仍是整数分钟」：
+ * 500MiB ÷ 1800s 会变成 291KB/s（比 200MiB 时代翻倍多），而 500MiB ÷ 3600s = 146KB/s，
+ * 与原来的 114KB/s 同一档 —— 也就是说「门槛不提高，只是包变大，预算按比例放长」。
+ * 保守的替代口径是「按实测速率给预算」（164.5MB/5min ≈ 0.55MB/s → 500MiB ≈ 16 分钟），
+ * 但那会把慢网用户重新推回 #38 的误杀陷阱，所以取宽的一档：
+ * 停滞判定（40s 无新字节）才是真正的失败判据，总上限只兜「一直在爬但永远下不完」。
  *
- * 写成函数 + 调用一次，而不是把 114 这个数写进诊断：关系是**推导**的，调常量时不用回来改代码。
+ * 写成函数 + 调用一次，而不是把 146 这个数写进诊断：关系是**推导**的，调常量时不用回来改代码。
  */
 export const minRequiredBytesPerSec = (maxBytes: number, maxTotalMs: number): number => maxBytes / (maxTotalMs / 1000)
 
@@ -140,11 +143,17 @@ class DownloadDeadlineExceeded extends Error {
   }
 }
 
-/** 分阶段进度：下载（字节）→ 解析（ZIP/清单）→ 导入（会话条数）。 */
+/**
+ * 分阶段进度：下载（字节）→ 解析（ZIP/清单）→ 导入（会话条数）。
+ *
+ * `importing` 多了个可选的 `percent`：直链导入自己算不出来（它只知道会话数），
+ * 但本地文件导入那条链路（`importArchive`）按「已消费的中央目录条目 / 条目总数」算得出真百分比，
+ * 界面两条链路共用同一个进度条，所以这里留一个通道；不传就沿用 `processed / totalSessions`。
+ */
 export type UrlImportProgress =
   | { phase: 'downloading'; downloadedBytes: number; totalBytes?: number }
   | { phase: 'decoding' }
-  | { phase: 'importing'; processed: number; totalSessions?: number }
+  | { phase: 'importing'; processed: number; totalSessions?: number; percent?: number }
 
 /**
  * 用户可见的「导入详情」条目：和 diagnostics 的 record() 在同一处产生（单一事实源），
@@ -194,7 +203,7 @@ export type UrlImportOptions = {
    * 默认 DOWNLOAD_STALL_MS（40s），UI 不传，只在诊断/测试里调小。
    */
   downloadStallMs?: number
-  /** 防御性总上限（毫秒）；默认 DOWNLOAD_MAX_TOTAL_MS（30 分钟），同样只给诊断/测试用。 */
+  /** 防御性总上限（毫秒）；默认 DOWNLOAD_MAX_TOTAL_MS（60 分钟），同样只给诊断/测试用。 */
   downloadMaxTotalMs?: number
   /** 心跳周期（毫秒）；默认 HEARTBEAT_INTERVAL_MS，同样只给诊断/测试用。 */
   heartbeatIntervalMs?: number
@@ -248,7 +257,7 @@ const contentRangeTotal = (headers: Record<string, string> | undefined): number 
 
 /**
  * 超限拒绝（#195）：上限与**实测体积**都要说出来。
- * 只给「文件过大（200MB）」时用户不知道是哪个包、也看不出差多少；两个数一起给，
+ * 只给「文件过大（上限）」时用户不知道是哪个包、也看不出差多少；两个数一起给，
  * 才不会把「应用算错」和「我这个包确实太大」混在一起。
  */
 const tooLarge = (limitBytes: number, measuredBytes: number, correlationId: string): never => {
@@ -572,7 +581,7 @@ const dropResumePoint = (): void => {
  * 停滞判定：现在就该判死吗？返回原因或 null。
  *
  * 只看两件事：
- * - 防御性总上限（DOWNLOAD_MAX_TOTAL_MS，默认 30 分钟）→ DownloadDeadlineExceeded
+ * - 防御性总上限（DOWNLOAD_MAX_TOTAL_MS，默认 60 分钟）→ DownloadDeadlineExceeded
  * - 连续 stallMs 没有新字节（state.lastProgressAt 不前移）→ DownloadStalled
  *
  * 这里**没有**「总时长超过 N 秒就判死」这一条：#38 的合法大包就是被那条误杀的。
@@ -957,7 +966,7 @@ const fetchChunk = async (
  * 终态判定（#38 重写，核心是「按无进度判死」而不是「按总时长判死」）：
  * - 停滞（DownloadStalled）：连续 DOWNLOAD_STALL_MS 没有新字节才判死；
  *   慢但在推进的链路每拿到一块就会重新计时，因此不会被误杀（164.5MB 慢包不再被判死）。
- * - 总上限（DownloadDeadlineExceeded）：防御性 30 分钟，只防「永远慢慢爬、永远下不完」。
+ * - 总上限（DownloadDeadlineExceeded）：防御性 60 分钟，只防「永远慢慢爬、永远下不完」。
  * - 续传：失败时把已到手的块留在 resumePoint，同链接重试从 `state.downloaded` 续；
  *   服务端忽略 Range（回 200 整包）时丢弃本地字节、从头重下并在详情里写明「已重新开始」。
  * - 全程每 HEARTBEAT_INTERVAL_MS 一条心跳（带最近一段新增字节与 idle 时长），
@@ -1076,13 +1085,13 @@ const downloadArchive = async (
       response.data = null
       // 先认响应头，再看包体（#195）：整包体积一写进头里就能判超限，
       // 没必要等这一块解成字节——服务端忽略 Range 直接回 200 整包时，
-      // 旧顺序会先把 200MB 包体解一遍、再判「文件过大」，用户等的就是这个白下载。
+      // 旧顺序会先把整包体解一遍、再判「文件过大」，用户等的就是这个白下载。
       if (state.total === undefined) {
         // 总长度只认可信来源：
         // - 206 的 `Content-Range: bytes a-b/total`（total 为 `*` 时代码按未知处理）；
         // - 首次整包 200（服务端忽略 Range）的 `Content-Length`。
         // 206 缺 Content-Range 时响应里的 Content-Length 只是**这一块**的长度，
-        // 拿它当总长会让 4KB 被判成「已下完」，并让 200MB 上限拿 4KB 去比（#24）。
+        // 拿它当总长会让 4KB 被判成「已下完」，并让大小上限拿 4KB 去比（#24）。
         const declared =
           contentRangeTotal(response.headers) ??
           (status === 200 ? contentLength(response.headers) : undefined)
@@ -1341,10 +1350,15 @@ export const importHistoryFromUrl = async (
       signal: options.signal,
       mode: options.mode,
       onProgress: (progress) => {
+        // `backup.ts` 声明的进度形状只有 sessions/totalSessions/images；运行时同一份对象
+        // 还带 importArchive 产出的 `percent`（已消费条目 / 条目总数）。按真实形状取回，
+        // 不为了一格进度去改 backup.ts 的对外口径。
+        const detailed = progress as typeof progress & { percent?: number }
         options.onProgress?.({
           phase: 'importing',
           processed: progress.sessions,
           totalSessions: progress.totalSessions,
+          ...(detailed.percent === undefined ? {} : { percent: detailed.percent }),
         })
         const now = monotonicNow()
         // 会话总数是校验阶段算出来的：拿到就补一条「校验归档结束，共 N 个会话」

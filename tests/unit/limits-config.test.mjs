@@ -98,11 +98,11 @@ const ORIGINAL_VALUES = {
     maxEntriesPerSession: 200,
     maxBytesPerSession: 2 * 1024 * 1024,
   },
-  importMaxBytes: 200 * 1024 * 1024,
+  importMaxBytes: 500 * 1024 * 1024,
   importConnectMs: 10_000,
   importChunkReadMs: 12_000,
   importStallMs: 40_000,
-  importMaxTotalMs: 30 * 60_000,
+  importMaxTotalMs: 60 * 60_000,
   importHeartbeatMs: 5_000,
   clockJumpMs: 2 * 60_000,
   autoTitle: { timeoutMs: 8000, maxOutputTokens: 32, maxInputBytes: 2048, concurrency: 2, maxQueue: 6 },
@@ -200,7 +200,7 @@ test('调用方原导出名不变，且值就是 LIMITS 里的那一项（调用
   assert.equal(attachments.MAX_COUNT, LIMITS.attachments.maxCount)
 })
 
-test('导入上限仍只有一个来源：importLimit.ts 的 200MB，LIMITS 只是转出', () => {
+test('导入上限仍只有一个来源：importLimit.ts，LIMITS 只是转出', () => {
   assert.equal(importLimit.DEFAULT_MAX_IMPORT_BYTES, LIMITS.importMaxBytes)
   // 不接受「无上限」的解析规则没被这次搬家碰到
   assert.equal(importLimit.resolveMaxImportBytes(0), importLimit.DEFAULT_MAX_IMPORT_BYTES)
@@ -231,8 +231,8 @@ test('启动兜底：index.html 内联脚本的 BOOT_DEADLINE_MS 与 LIMITS.boot
 
 test('关系断言：导入上限 ÷ 总预算 ≥ 最低可接受带宽（#152 的不等式不再是注释）', () => {
   assert.equal(MIN_ACCEPTABLE_BYTES_PER_SEC, 100_000)
-  assert.equal(isImportBudgetConsistent(), true, '现行 200MB / 1800s 必须满足 ≥100KB/s 门槛')
-  // 现值的推导：200MB ÷ 1800s ≈ 114KB/s
+  assert.equal(isImportBudgetConsistent(), true, '现行 500MiB / 3600s 必须满足 ≥100KB/s 门槛')
+  // 现值的推导：500MiB ÷ 3600s ≈ 146KB/s（门槛与 200MiB 时代的 114KB/s 同一档）
   const required = LIMITS.importMaxBytes / (LIMITS.importMaxTotalMs / 1000)
   assert.ok(required >= MIN_ACCEPTABLE_BYTES_PER_SEC, `现值只够 ${Math.round(required)}B/s`)
   // 反证：只把上限降到 20MB、总时限不动 → 门槛不成立（这正是本断言要能变红的样子）

@@ -163,6 +163,13 @@ const UNIT_SOLO = new Set([
   // 同批其它文件对 fetch 的改写/还原会让它在批内打到真上游（CI 实测打到 api.deepseek.com 吃 401）。
   'attachment-endpoint-303.test.mjs',
 
+  // 导入域（`history/importArchive.ts`）的「假 db 替身」是**按 parent 匹配 `../db.js`** 装的，
+  // 而 `registerHooks` 只增不减、先注册的那份胜出：同批里只要前面还有一个 import-* 文件装过自己的
+  // 假存储，本文件的 `globalThis.__quotaProgressDB` 就永远是 undefined（实测批内 9/11 红、单跑 11/11 绿）。
+  // 这一族的六个文件今天只是因为 16 个一批的切片位置没撞上；本文件插进来正好撞上。
+  // 与其赌切片，不如按 runner 自己的口径单列（`installImportEnv` 那套装配没有可用的去重钩子）。
+  'import-quota-progress.test.mjs',
+
   // ── #513：实测「批内红 → 单跑绿」，且在进程内**不可修**的那一批 ────────────────────────────
   //
   // 先说清为什么不可修（这是本单花最久的一段，结论有实测支撑）：

@@ -736,8 +736,9 @@ export const MessageList = ({
 
   // 按钮挂在输入区里（输入框上方），所以状态与动作从列表这一层传给 footer 子树
   const toBottomState = useMemo(
-    () => ({ ...toBottom, jump: jumpToBottom }),
-    [toBottom, jumpToBottom]
+    // #610：编辑态一并送下去 —— 按钮在 390 宽会压在编辑框的「发送」上，编辑期间干脆不挂它。
+    () => ({ ...toBottom, editing: editingIds.size > 0, jump: jumpToBottom }),
+    [toBottom, editingIds, jumpToBottom]
   )
 
   return (

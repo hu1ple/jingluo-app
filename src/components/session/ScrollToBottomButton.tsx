@@ -17,8 +17,10 @@ import styles from './ScrollToBottomButton.module.css'
  */
 export const ScrollToBottomButton = () => {
   const t = useTranslate()
-  const { visible, hasNew, jump } = useScrollToBottomState()
-  if (!visible) {
+  const { visible, hasNew, editing, jump } = useScrollToBottomState()
+  // #610：编辑期间不挂载 —— 它落在消息区最下一条带上，390 宽正好压住编辑框的「发送」。
+  // 编辑是短暂模态行为，用户此时不需要「回到底部」；退出编辑后按常态自己回来。
+  if (!visible || editing) {
     return null
   }
   // 流式期间用户翻上去看旧内容：按钮带一个小圆点，读屏名称也说清「有新内容」

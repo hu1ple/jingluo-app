@@ -17,11 +17,24 @@ export type ScrollToBottomState = {
   visible: boolean
   /** 离开底部期间内容又长高了（流式追加）：按钮上补一个小圆点 */
   hasNew: boolean
+  /**
+   * 有消息正在就地编辑（#610）：编辑是短暂的模态行为，此时整枚按钮不挂载。
+   *
+   * 按钮挂在输入区、`bottom: 100%`，落在消息区可见部分的最下一条带；编辑框恰好长在那一带，
+   * 390 宽下按钮的圆形（含 44px 命中区）就压在编辑框右下角的「发送」上 —— 发送点不到。
+   * 由列表经 context 送下来（列表才知道谁在编辑），按钮侧不做任何定位计算。
+   */
+  editing: boolean
   /** 点按钮：恢复「跟随最新」，平滑滚到底部（reduced-motion / 老内核直接跳） */
   jump: () => void
 }
 
-const NOOP_STATE: ScrollToBottomState = { visible: false, hasNew: false, jump: () => {} }
+const NOOP_STATE: ScrollToBottomState = {
+  visible: false,
+  hasNew: false,
+  editing: false,
+  jump: () => {},
+}
 
 export const ScrollToBottomStateContext = createContext<ScrollToBottomState>(NOOP_STATE)
 

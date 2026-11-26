@@ -854,7 +854,8 @@ export const AccountConsumePage = ({
       <div className={`${styles.page} ${styles.embedded}`} data-testid="account-consume-page">
         {subBack('wallet')}
         <SettingsCard>
-        <BuyTab onPurchased={backToCards} />
+        {/* 未登录点「购买」→ BuyTab 弹登录提示，`onNeedLogin` 就是全应用共用的那一个登录出口（#608） */}
+        <BuyTab onPurchased={backToCards} onNeedLogin={needLogin} />
         </SettingsCard>
       </div>
     )

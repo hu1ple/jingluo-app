@@ -767,6 +767,10 @@ export const en = {
   oursPayPlaceholder: 'Opening the shop checkout page…',
   oursPayPopupBlocked: 'The browser blocked the popup; allow popups for this site and try again',
   oursPayTabOpened: 'The checkout page is open in a new tab; switch back to this page once you have paid',
+  // Login gate for "Purchase" when signed out (product spec 2026-11-26): no pay-link, no checkout page, just this dialog
+  oursPayLoginTitle: 'Sign in to purchase',
+  oursPayLoginBody: 'Purchasing or topping up requires a signed-in account. Once signed in, come back and tap “Go to purchase” to open the shop checkout page.',
+  oursPayLoginAction: 'Sign in',
   oursRedeemAction: 'Redeem',
   oursRedeemSuccess: 'Redeemed. +{points}',
   oursRedeemPending: 'Redemption is being processed, refresh quota shortly',

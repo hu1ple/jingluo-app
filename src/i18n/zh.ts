@@ -761,6 +761,10 @@ export const zh = {
   oursPayPlaceholder: '正在打开联动小铺收款页…',
   oursPayPopupBlocked: '浏览器拦截了弹窗，请允许本站弹窗后重试',
   oursPayTabOpened: '已在新标签页打开收款页；付款完成后切回本页即可',
+  // 未登录点「购买 / 充值」的登录闸门（产品口径 2026-11-26）：不取地址、不开收款页，只弹这一张
+  oursPayLoginTitle: '需要登录后才能购买',
+  oursPayLoginBody: '购买 / 充值要先登录账号。登录后回到这里点「前往购买」，即可在新页面打开联动小铺收款页。',
+  oursPayLoginAction: '去登录',
   oursRedeemAction: '兑换',
   oursRedeemSuccess: '兑换成功，+{points}',
   oursRedeemPending: '兑换处理中，请稍后刷新额度查看',

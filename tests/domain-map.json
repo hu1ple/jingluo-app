@@ -304,8 +304,10 @@
         "src/components/consume/BuyTab.tsx": [
           "tests/unit/ours-inapp-buy.test.mjs",
           "tests/unit/pay-link.test.mjs",
+          "tests/unit/checkout-login-gate.test.mjs",
           "tests/golden/g15-*.test.mjs"
         ],
+        "src/components/consume/checkoutGate.ts": ["tests/unit/checkout-login-gate.test.mjs"],
         "src/services/consume/**": [
           "tests/unit/consume-*.test.mjs",
           "tests/golden/g12-*.test.mjs"

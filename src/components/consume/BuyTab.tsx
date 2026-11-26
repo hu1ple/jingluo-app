@@ -39,8 +39,12 @@ import {
   openPayLinkInApp,
   openPayPlaceholder,
 } from '../../services/ours/transport.js'
+import { getAuthSnapshot } from '../../services/auth/store.js'
 import { Button } from '../base/Button.js'
+import { Modal } from '../base/Modal.js'
+import { openSettings } from '../settings/settingsDialogState.js'
 import styles from './AccountConsume.module.css'
+import { beginCheckout } from './checkoutGate.js'
 import { markWebPayOpened } from './webPayReturn.js'
 
 type PayView =
@@ -59,11 +63,24 @@ export type BuyTabProps = {
    * `visibilitychange` + 低频轮询兜底（两边调的都是同一个 `backToCards`）。
    */
   onPurchased?: () => void
+  /**
+   * 未登录点「购买」时的**登录出口**（#608 那一套：把「账号」页换出来，登录 / 注册卡就在那儿）。
+   * 由 `AccountConsumePage` 把既有的 `needLogin` 递下来 —— 未登录态的登录出口全应用只有这一条，
+   * 这里不另造一条「打开设置」的路。不传时退回 `openSettings('account')`（同一个落点）。
+   */
+  onNeedLogin?: () => void
 }
 
-export const BuyTab = ({ onPurchased }: BuyTabProps) => {
+export const BuyTab = ({ onPurchased, onNeedLogin }: BuyTabProps) => {
   const t = useTranslate()
   const [pay, setPay] = useState<PayView>({ status: 'idle' })
+  /**
+   * 未登录点「购买」时的登录提示弹窗（产品口径 2026-11-26）。
+   *
+   * 它只做一件事：**说清「要先登录」并给出去登录的入口**。真正的拦截在 `openCheckout` 的第一行
+   * （`beginCheckout` 的闸门）：弹窗出现的同时，`pay-link` 一次都没发、收款页一个都没开。
+   */
+  const [loginPrompt, setLoginPrompt] = useState(false)
   // 收款页是外部浏览器视图：同一时刻只允许一条「取地址 + 打开」在飞，避免连点开出两个收款页
   const payBusyRef = useRef(false)
   const aliveRef = useRef(true)
@@ -78,20 +95,35 @@ export const BuyTab = ({ onPurchased }: BuyTabProps) => {
   /**
    * 取地址 → 打开收款页（原生：App 内 popover；Web：新标签页两段式）。
    * 地址每次现取，不在客户端缓存（小铺随时换链接）。
+   *
+   * 最前面多了一道**登录闸门**（产品口径 2026-11-26：「没登录不能去跳转支付链接」）：
+   * 未登录 → 只弹登录提示，**既不取地址也不开占位页**（顺序与判定都在 `checkoutGate.ts`）。
+   * 闸门必须排在占位页之前 —— 否则未登录用户还是会看到一个新开的空标签页。
    */
   const openCheckout = useCallback(async () => {
     if (payBusyRef.current) {
       return
     }
-    payBusyRef.current = true
-    setPay({ status: 'busy' })
     const native = isNativePlatform()
     /**
-     * ① **同步**占位（必须是第一件要做的事）：Web 端在这里把标签页开出来，
-     * 之后才允许出现第一个 `await`。原生端返回 `null`，走下面原来那条路。
+     * ① 闸门 + **同步**占位（两件事都必须在第一个 `await` 之前）：登录态放行之后才置忙碌态、
+     * 才把标签页开出来（Web），之后才允许出现取地址那一步。原生端占位页是 `null`，走原来那条路。
      */
-    const tab = native ? null : openPayPlaceholder(t('oursPayPlaceholder'))
-    const link = await fetchPayLink(httpTransport)
+    const start = await beginCheckout({
+      readAuth: getAuthSnapshot,
+      promptLogin: () => setLoginPrompt(true),
+      onProceed: () => {
+        payBusyRef.current = true
+        setPay({ status: 'busy' })
+      },
+      openPlaceholder: () => (native ? null : openPayPlaceholder(t('oursPayPlaceholder'))),
+      fetchLink: () => fetchPayLink(httpTransport),
+    })
+    if (start.action === 'login-required') {
+      // 未登录：到这里为止什么都没发、什么都没开，只等用户「去登录 / 取消」
+      return
+    }
+    const { tab, link } = start
     if (!aliveRef.current) {
       // 组件已经卸载（用户关了设置）：占位页没有意义，关掉；也不 mark（没有页面可以「回来」）
       closePayPlaceholder(tab)
@@ -144,6 +176,22 @@ export const BuyTab = ({ onPurchased }: BuyTabProps) => {
     setPay({ status: 'idle' })
   }, [onPurchased, t])
 
+  /**
+   * 弹窗主按钮「去登录」：关掉弹窗 → 走到账号页的登录 / 注册卡。
+   *
+   * 出口只有一条：外层递下来的 `onNeedLogin`（`AccountConsumePage` 的 `needLogin`，
+   * 也就是 #608 起全应用共用的那个登录出口）。没接的时候退回 `openSettings('account')` ——
+   * 落点是同一个「账号」页，只是少了「弹层内换页」那一步。
+   */
+  const goLogin = useCallback(() => {
+    setLoginPrompt(false)
+    if (onNeedLogin !== undefined) {
+      onNeedLogin()
+      return
+    }
+    openSettings('account')
+  }, [onNeedLogin])
+
   const payBusy = pay.status === 'busy'
 
   return (
@@ -178,6 +226,33 @@ export const BuyTab = ({ onPurchased }: BuyTabProps) => {
             </Button>
           </div>
         </div>
+      ) : null}
+
+      {/* 未登录点「购买」→ 只这一张弹窗（没有请求、没有收款页）。两个出口都对用户说清下一步 */}
+      {loginPrompt ? (
+        <Modal
+          title={t('oursPayLoginTitle')}
+          // 叠在设置弹层之上（同一套「弹层里再开一层」的写法，见 PersonaDrawer）
+          zIndex={1002}
+          closable
+          onClose={() => setLoginPrompt(false)}
+          footer={
+            <>
+              <Button
+                variant="outlined"
+                data-testid="account-consume-buy-login-cancel"
+                onClick={() => setLoginPrompt(false)}
+              >
+                {t('cancel')}
+              </Button>
+              <Button variant="primary" data-testid="account-consume-buy-login" onClick={goLogin}>
+                {t('oursPayLoginAction')}
+              </Button>
+            </>
+          }
+        >
+          <p data-testid="account-consume-buy-login-prompt">{t('oursPayLoginBody')}</p>
+        </Modal>
       ) : null}
     </div>
   )

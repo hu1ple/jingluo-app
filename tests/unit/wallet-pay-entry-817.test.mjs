@@ -137,7 +137,9 @@ test('① 钱包页顶部有付款入口，与余额卡同一行；点它进「�
   const page = codeOf(PAGE)
   assert.match(page, /onPay=\{\(\) => onNavigate\(WALLET_PAY_ENTRY_PAGE\)\}/u, '页面的付款入口只吐一个换页动作')
   assert.equal(payFlow.WALLET_PAY_ENTRY_PAGE, 'buy', '付款入口的目标页是「购买」子页')
-  assert.match(page, /if \(page === 'buy'\)[\s\S]*?<BuyTab onPurchased=\{backToCards\} \/>/u, '「购买」子页挂的是既有 BuyTab')
+  // 2026-11-26：`BuyTab` 多了个可选的 `onNeedLogin`（未登录点「购买」时的登录出口），
+  // 所以这里只钉「onPurchased 接的还是 backToCards」，不再要求它必须是自闭合的最后一个属性
+  assert.match(page, /if \(page === 'buy'\)[\s\S]*?<BuyTab onPurchased=\{backToCards\}[^>]*\/>/u, '「购买」子页挂的是既有 BuyTab')
 
   // 不新增第二套付款逻辑：页面自己一个付款接口都不打、一个收款页都不开
   for (const forbidden of ['fetchPayLink(', 'openPayLinkInApp(', 'window.open(', '/api/pay-link']) {
@@ -266,7 +268,7 @@ test('⑤ 收款页关掉 → 停在「我的卡密」：onClosed → onPurchase
 
   const page = codeOf(PAGE)
   assert.match(page, /landAfterPayReturn\(onNavigate\)/u, 'backToCards 用同一个落点（不另写一份）')
-  assert.match(page, /<BuyTab onPurchased=\{backToCards\} \/>/u, 'BuyTab 的关页回调接的是 backToCards')
+  assert.match(page, /<BuyTab onPurchased=\{backToCards\}[^>]*\/>/u, 'BuyTab 的关页回调接的是 backToCards')
 
   const buyTab = codeOf('src/components/consume/BuyTab.tsx')
   assert.match(buyTab, /openPayLinkInApp\(link\.url, \(\) => \{/u, 'BuyTab 把关页回调交给 openPayLinkInApp')

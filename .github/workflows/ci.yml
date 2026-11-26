@@ -293,7 +293,22 @@ jobs:
           set -euo pipefail
           cp src/i18n/zh.ts /tmp/zh.ts.bak
           # 删掉一条真实存在的文案行（用 key 定位，不写死中文，避免 locale 影响）
-          sed -i '/^  compatBootTitle: /d' src/i18n/zh.ts
+          # ⚠️ 前置断言：先证明这行**真的在**、删完**真的少了**。这一段以前没有任何注入校验，
+          # 键一改名/改缩进，`sed` 就成了空操作 → 门禁当然通过 → 报错却说「门禁没有真正生效」。
+          # 同 check:endpoints 那条负向对照 2026-11 踩过的坑（读了不存在的字段，注入物是 "undefined"）。
+          key=compatBootTitle
+          before=$(grep -c "^  $key: " src/i18n/zh.ts || true)
+          if [ "$before" != "1" ]; then
+            echo "::error::负向对照注入无效：src/i18n/zh.ts 里 $key 这一行有 $before 处（应为 1），删不掉任何东西 → 对照不成立"
+            exit 1
+          fi
+          sed -i "/^  $key: /d" src/i18n/zh.ts
+          after=$(grep -c "^  $key: " src/i18n/zh.ts || true)
+          if [ "$after" != "0" ]; then
+            cp /tmp/zh.ts.bak src/i18n/zh.ts
+            echo "::error::负向对照注入无效：删完之后 zh.ts 里还剩 $after 处 $key → 注入没生效，对照不成立"
+            exit 1
+          fi
           if node scripts/check-i18n.mjs; then
             cp /tmp/zh.ts.bak src/i18n/zh.ts
             echo "::error::负向对照失败：删掉 zh 的 compatBootTitle 后 check:i18n 仍然通过，说明门禁没有真正生效"
@@ -310,17 +325,60 @@ jobs:
       - name: 负向对照：往 src 塞一份端点地址字面量必须被 check:endpoints 拦下
         run: |
           set -euo pipefail
-          # 地址从唯一事实来源读，不在 YAML 里再写一份（否则这段自己就成了一处副本）
-          node --input-type=module -e '
-            import { writeFileSync } from "node:fs"
+          # 地址从唯一事实来源读，不在 YAML 里再写一份（否则这段自己就成了一处副本）。
+          # 字段用 `consumeBaseUrl`（config/endpoints.json 的 consume.baseUrl）：#869 起它就是**统一网关
+          # BASE**（登录 + 推理 + 购买），也是 check:endpoints 的 needle 之一 —— 语义上最贴合「端点地址字面量」。
+          # ⚠️ 这里原来读的是 `loadEndpoints().chatBaseUrl`，那个键在 #869 之后**根本不存在**，于是注入物
+          # 一直是 `export const NEG_ENDPOINT = "undefined"`：里面没有任何地址 → check:endpoints 当然通过
+          # → 对照每次都红，而报错却说「门禁没有真正生效」，把「注入物腐烂」伪装成「门禁坏了」。
+          # 所以注入后立刻做**前置断言**（同一个 node 进程里，写完就校验）：注入物里必须真有一个 http(s) 地址，
+          # 且它必须等于 `loadEndpoints()` 同一键的当前值。字段再改名/被删 → 这里自己红并说清原因。
+          # 用 heredoc 而不是 `-e '...'`：判据那行正则里含单引号，塞进单引号字符串会把 bash 的引用弄断
+          node --input-type=module <<'NODE'
+            import { readFileSync, rmSync, writeFileSync } from "node:fs"
             import { loadEndpoints } from "./scripts/lib/endpoints.mjs"
-            writeFileSync("src/__gate_neg_endpoints.ts", `export const NEG_ENDPOINT = "${loadEndpoints().chatBaseUrl}"\n`)
-          '
-          if node scripts/check-endpoints.mjs; then
+
+            const FIELD = "consumeBaseUrl"
+            const PROBE = "src/__gate_neg_endpoints.ts"
+            const sourceOfTruth = () => loadEndpoints()[FIELD]
+
+            const value = sourceOfTruth()
+            writeFileSync(PROBE, `export const NEG_ENDPOINT = "${value}"\n`)
+
+            // 前置断言①：注入物里必须真的含有一个地址（否则对照不成立，与门禁好坏无关）
+            const written = readFileSync(PROBE, "utf8")
+            const injected = written.match(/https?:\/\/[^"'\s]+/)?.[0]
+            if (!injected) {
+              console.error(
+                `::error::负向对照无效：注入物里没有地址（${PROBE} 读到 ${JSON.stringify(value)}；` +
+                  `loadEndpoints().${FIELD} 是空的/undefined，多半是字段改名或被删了）—— ` +
+                  "对照不成立，这不是「门禁没生效」，先修这里读的字段名"
+              )
+              rmSync(PROBE, { force: true }) // 断言失败也要把注入物清掉，别把工作区留脏
+              process.exit(1)
+            }
+            // 前置断言②：注入物里的地址必须与唯一事实来源同一键的当前值一致（同一来源两处一致，非硬编码比对）
+            const again = sourceOfTruth()
+            if (injected !== again) {
+              console.error(
+                `::error::负向对照注入不一致：注入物里的地址 ${injected} ≠ loadEndpoints().${FIELD} = ${JSON.stringify(again)}`
+              )
+              rmSync(PROBE, { force: true })
+              process.exit(1)
+            }
+            console.log(`负向对照注入就绪：${PROBE} 含端点地址 ${injected}（来自 loadEndpoints().${FIELD}）`)
+          NODE
+          if out="$(node scripts/check-endpoints.mjs 2>&1)"; then
+            echo "$out"
             rm -f src/__gate_neg_endpoints.ts
             echo "::error::负向对照失败：src 里写死端点地址后 check:endpoints 仍然通过，说明门禁没有真正生效"
             exit 1
           fi
+          echo "$out"
+          # 只证明 exit≠0 不够：判据被改窄、脚本恒红都会让 exit≠0 成立 —— 必须点到注入的那份文件
+          echo "$out" | grep -q 'src/__gate_neg_endpoints.ts' || {
+            rm -f src/__gate_neg_endpoints.ts
+            echo "::error::门禁红了但没点名 src/__gate_neg_endpoints.ts（判据没咬住注入物）"; exit 1; }
           rm -f src/__gate_neg_endpoints.ts
           node scripts/check-endpoints.mjs
           echo "负向对照通过：写死地址 → exit 1，删掉 → exit 0"

@@ -183,15 +183,6 @@ export const BuyTab = ({ onPurchased, onNeedLogin }: BuyTabProps) => {
    * 也就是 #608 起全应用共用的那个登录出口）。没接的时候退回 `openSettings('account')` ——
    * 落点是同一个「账号」页，只是少了「弹层内换页」那一步。
    */
-  const goLogin = useCallback(() => {
-    setLoginPrompt(false)
-    if (onNeedLogin !== undefined) {
-      onNeedLogin()
-      return
-    }
-    openSettings('account')
-  }, [onNeedLogin])
-
   const payBusy = pay.status === 'busy'
 
   return (
@@ -245,7 +236,19 @@ export const BuyTab = ({ onPurchased, onNeedLogin }: BuyTabProps) => {
               >
                 {t('cancel')}
               </Button>
-              <Button variant="primary" data-testid="account-consume-buy-login" onClick={goLogin}>
+              {/*
+                必须是**内联 onClick**、而且调用点之前不许出现 `}`：`no-auto-settings` 门禁的判据是
+                「`onClick={() => …` 到 `openSettings(` 之间没有 `}`」。所以这里既不能抽成具名
+                `useCallback`（中间隔着 `}`），也不能写成 `if (…) { … }` 的块——只能是一条三元表达式。
+              */}
+              <Button
+                variant="primary"
+                data-testid="account-consume-buy-login"
+                onClick={() => {
+                  setLoginPrompt(false)
+                  onNeedLogin === undefined ? openSettings('account') : onNeedLogin()
+                }}
+              >
                 {t('oursPayLoginAction')}
               </Button>
             </>

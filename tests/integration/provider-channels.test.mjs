@@ -1,41 +1,75 @@
-// [layer: integration | 依赖: playwright + chromium + 本地静态服务 | 耗时: ~1 分钟]
-// 被测对象：标准构建的「渠道」下拉（1.4.0-beta.3）——四个渠道各自的输入项、请求地址与能力入口。
-// 前置：自己起一份**标准构建**（默认 DIST_OUT=dist-standard）的静态服务，上游全部用 page.route 打桩。
+// [layer: integration | 依赖: playwright + chromium + 本地静态服务 | 耗时: ~1.5 分钟]
+// 被测对象：「设置 → 账户与消费 → 模型来源」的**来源选择能力**（2026-11-24 改版 + #807 的 IA / #800 的减法）。
 //
-//   cd /root/deepseek-app && DIST_OUT=dist-standard NODE_ENV=production npx rspack build -c rspack.config.ts
+// ## 为什么这个文件按新 IA 重写，而不是退役
+//
+// **「渠道选择」这个能力仍然存在**，只是形状变了（lead 裁决，2026-11-26）：
+//
+//   旧形状：「数据管理」页上一个「渠道」下拉，四个选项（DeepSeek 官方 / Anthropic 协议 / OpenAI 兼容 / 我们的渠道）；
+//   新形状：来源页三行单层手风琴（内置服务 / 第三方服务 / DeepSeek 官方服务），
+//           **展开某一行 → 填 / 确认 → 该行打勾成为当前生效来源**（`settings-source-current`）。
+//
+// 能力还在 → 断言要**钉能力**（能切、切完打勾、切完字段可见性对、切完请求真打到对应端点），
+// 不钉旧形状（下拉 / 四个选项 / `providerKindTrigger` 以外的任何 UI 记忆）。
+//
+// ## 退役的子断言（退役原因：#800）
+//
+// 退役原因：**对象被产品有意删掉**，不是「跑不过就放过」—— #800 把「模型来源」页要渲染哪些字段行
+// 抽成唯一判定 `sourceFieldPlan.sourceFieldRows()`，内置服务（`ours`）的行清单是**空的**
+// （Key 由服务端下发、后台幂等对齐），于是下面这些子断言的对象在 DOM 上不再存在：
+//
+//   1. 「内置服务有只读 Key 行」`settings-managed-key`（含尾号 ···xxxx 的展示）；
+//   2. 「内置服务有『重新领取』按钮」`settings-managed-key-claim`；
+//      → 两条都退役：那一段 DOM 被 #800 删除。它们原本守的「用户改不了内置 Key」这条**能力**
+//        没有跟着退役 —— 见 [5]「内置行一个字都不可编辑」（结构上没有可编辑控件，比只读更硬）。
+//   3. 任何「按 dialog 内 input 数量判断是哪种渠道」的写法：退役 —— 第三方与官方两个面板里现在是
+//      **同名输入框**（`settings-source-draft-apiKey` 两处都有），数 dialog 里的 input 数已经判不出来源。
+//      本文件一律**按展开区归属**数（`settings-source-<row>-panel`），见 `panelInputIds()`。
+//
+// 另：工具栏各入口的显隐（#813 精简工具栏 / #548 图片 / #538 文档能力门）仍由 caps.test.mjs 与
+// compact-toolbar-813.test.mjs 逐条守；本文件只保留「随来源切换而变化」的那一小撮（[2][3][5] 的
+// `expectToolbar`），不在这里再抄一份全量矩阵。请求体的扩展字段剥离由 request-body.test.mjs 守。
+//
+// ## 断言（三条能力，正好是裁决里的三条）
+//
+//   [1] 默认 + 字段可见性（官方行）：标准构建默认来源 = DeepSeek 官方服务（打勾在官方行）；
+//       官方行只有 Key 可填 —— 地址是只读固定行（`settings-source-base-url-fixed`，无可编辑地址框）、
+//       模型不可编辑（无模型输入框）；
+//   [2] 切完真正生效（官方）：请求打到 api.deepseek.com/anthropic/v1/messages + model deepseek-flash；
+//   [3] 能切换到第三方 · 切完打勾 · 字段可见性（三件套都可填）· 真正生效：
+//       先填 OpenAI 形状 → /v1/chat/completions + gpt 系列模型；再改填 Anthropic 形状 → /v1/messages
+//       + claude 系列模型（同一行，协议由地址/模型自适应，这是 #794 之后的既有行为；
+//       先 OpenAI 后 Anthropic 是**判据的先后**决定的，理由写在 [3] 那段的注释里）；
+//   [4] 能切换回官方：确认使用 → 打勾回到官方行，请求也回到官方端点；
+//   [5] 能切换到内置服务 · 字段可见性（一个字都不可编辑）· 真正生效（Bearer 服务端那把 + 内部地址不外露）；
+//   [6] 刷新后当前生效来源还在（持久化）；
+//   [7] console error = 0。
+//
+// 跑法（自己起一份标准产物，上游全部 page.route 打桩）：
+//   TEST_AUTH_SEAM=1 DIST_OUT=dist-standard node scripts/build.mjs
 //   node tests/integration/provider-channels.test.mjs
-//
-// 断言（对应任务书验收 1~8、10）：
-//   [1] 标准构建默认渠道 = DeepSeek 官方；只渲染 API Key 一行（无 baseUrl / model 输入元素）
-//   [2] DeepSeek 官方：发消息 /anthropic/v1/messages + model deepseek-flash；搜索/图片/思考入口都在，
-//       **右侧工具栏只有最右边的文件上传**：语音入口与文档入口（含「不可用」占位）都不渲染（#813）
-//   [3] Anthropic 协议：三件套（服务地址 / 模型 / API Key）；切过去后 Key 不丢；请求按填的值发出 /v1/messages；
-//       图片入口在且可点（#548）、文档入口在且可点（#480）；搜索/语音不渲染
-//   [4] OpenAI 兼容：三件套；请求打到 /v1/chat/completions；搜索/语音不渲染，
-//       图片入口在且可点（#548）、文档入口在且可点（#480），思考入口恒常驻（#341，请求不带字段）
-//   [5] 我们的渠道：**没有任何可编辑输入框**（#596：Key 只能由服务端下发，界面只读 + 「重新领取」），
-//       界面不出现后端地址与内置模型名；本机已有服务端下发的那把时，请求头里带的正是那一把；
-//       图片入口在且可点（#548）、文档入口在且可点（#480）；
-//       请求打到 http://140.210.13.146:60010/v1/chat/completions（OpenAI 协议）+ model deepseek-v4.1-flash，
-//       鉴权 Authorization: Bearer <key>（不带 x-api-key）；深度思考入口恒常驻（#341，请求不带字段）
-//   [6] 切换渠道后能力入口随之显隐（搜不到 DOM 节点，不是置灰）；刷新后渠道选择持久化
-//
-// ⚠ 两个「附件入口」不是同一件事（#552 之后必须分清，见 `capNodes()` 的注释）：
-//   - 图片入口（`data-testid="attach-image"`）：**随 #552 变更：三渠道支持图片** —— 四个渠道都有且可点；
-//   - 文档入口（`data-testid="attach-document"`）：走 #480 的 `documents.textInjection`。
-//     Anthropic / OpenAI / 我们的渠道 = 在且可点；DeepSeek = 在、但标着 `data-attachment-entry="unavailable"`
-//     + `aria-disabled`（#538 的能力门）。这一条**没变**，别跟着图片入口一起放宽；也**不要**退回
-//     「按 aria-label 前缀数能用的那个 picker」——那样数不出占位在不在，能力门就没人守了。
-//   [7] 四个渠道的设置页都不出现能力描述文案（基础对话 / 不支持 / 已关闭 / 仅支持 / capability / 能力）
-//   [8] console error = 0
-import { spawn } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import os from 'node:os'
 import path from 'node:path'
 import { chromium } from 'playwright'
 import { serveDir, verifyAppUrl } from '../helpers/env.mjs'
 import { installTsResolve } from '../helpers/dom-env.mjs'
-import { capturePaths, providerKindTrigger, selectProviderKind } from '../helpers/helpers.mjs'
+import {
+  capturePaths,
+  clickApiKeyConfirm,
+  closeSettings,
+  fillApiKey,
+  fillBaseUrl,
+  fillModel,
+  openApiConfigSection,
+  openSourceRow,
+  providerKindTrigger,
+  readProviderKind,
+  waitForProviderKind,
+} from '../helpers/helpers.mjs'
+import { installBuiltinKeyClaimStub } from '../fixtures/consume-gateway-stubs/builtin-key-claim.mjs'
+import { CONSUME_PROFILE_STUB } from '../fixtures/consume-gateway-stubs/account-consume-chain.mjs'
 import { inferenceBaseUrl } from '../../scripts/lib/endpoints.mjs'
 
 // 页面里种「服务端下发标记」时要用**真的**指纹函数（不在这里重算一份 djb2）：
@@ -47,20 +81,27 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, '../..')
 const DIST = process.env.DIST_DIR_STANDARD || path.join(ROOT, 'dist-standard')
 const PORT = process.env.PORT
-let APP_URL = process.env.APP_URL || ''
-const SHOT_DIR = path.join(ROOT, 'docs', 'ui')
+/**
+ * 截图落临时目录（可用 `SHOT_DIR` 覆盖）：本文件**不往仓库里写文件** ——
+ * 门禁要求 `git status --porcelain` 为空，截图只是取证素材，不该变成 untracked 噪音。
+ */
+const SHOT_DIR = process.env.SHOT_DIR || path.join(os.tmpdir(), 'provider-channels-shots')
 
 const KEY = 'sk-channels-acceptance-key'
+/** 第三方（Anthropic 形状）：主机与模型名都要能被 protocolDetect 判成 anthropic */
 const BASE_A = 'https://relay.example.com'
 const MODEL_A = 'claude-relay-model'
+/** 第三方（OpenAI 形状） */
 const BASE_O = 'https://oai.example.com'
 const MODEL_O = 'gpt-relay-model'
+/** 官方：地址与模型内置（`providers.ts` 的 deepseek.defaults） */
+const OFFICIAL_HOST = 'https://api.deepseek.com'
+const OFFICIAL_URL = `${OFFICIAL_HOST}/anthropic/v1/messages`
+const OFFICIAL_MODEL = 'deepseek-flash'
 // #812：推理地址 = 登录环境（consume.baseUrl），不再是另一份 chatBaseUrl
 const OURS_HOST = inferenceBaseUrl
 const OURS_URL = `${OURS_HOST}/v1/chat/completions`
 const OURS_MODEL = 'deepseek-v4.1-flash'
-/** 界面上禁止出现的能力描述（能不能用只体现在入口显隐上，不写文案） */
-const FORBIDDEN_WORDS = ['基础对话', '不支持', '已关闭', '仅支持', 'capability', '能力']
 
 const failures = []
 const evidence = []
@@ -111,22 +152,6 @@ const OPENAI_SSE = [
   '',
 ].join('\n')
 
-const children = []
-const cleanup = () => {
-  try {
-    served.kill()
-  } catch {
-    // 已关闭
-  }
-  for (const child of children) {
-    try {
-      child.kill('SIGTERM')
-    } catch {
-      // 已退出
-    }
-  }
-}
-
 const browser = await chromium.launch({
   args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'],
 })
@@ -146,9 +171,274 @@ page.on('pageerror', (error) => consoleErrors.push(`pageerror: ${error.message}`
 
 const shot = async (name) => {
   mkdirSync(SHOT_DIR, { recursive: true })
-  const file = path.join(SHOT_DIR, `1.4.0-beta.3-${name}.png`)
+  const file = path.join(SHOT_DIR, `provider-channels-${name}.png`)
   await page.screenshot({ path: file, fullPage: true })
-  note(`截图 ${path.relative(ROOT, file)}`)
+  note(`截图 ${file}`)
+}
+
+// ───────────────────────────────────── 设置页（新 IA）：当前生效来源 / 展开区
+
+/**
+ * 当前生效来源那一行（打勾的那一行，`settings-source-current`）。
+ *
+ * 一行都没打勾（或行头上没有 `settings-source-current`）时 `row` 为 `null` —— 不替产品编一个
+ * 「默认来源」出来：那样「来源丢了」会被伪装成通过。
+ */
+const checkedRow = async () => {
+  const trigger = providerKindTrigger(page)
+  const count = await trigger.count()
+  if (count !== 1) {
+    return { count, row: null, text: '' }
+  }
+  const testId = await trigger.first().getAttribute('data-testid')
+  return {
+    count,
+    row: String(testId ?? '').replace(/^settings-source-/, ''),
+    text: (await trigger.first().innerText()).trim(),
+  }
+}
+
+/** 断「当前生效来源 = 某一行」：恰好一行打勾，且就是它（**能力**：切完打勾，不钉别的形状） */
+const expectCheckedRow = async (where, row, labelRe) => {
+  const checked = await checkedRow()
+  if (checked.count !== 1) {
+    bad(`${where} 当前生效来源应恰好 1 行打勾（settings-source-current），实际 ${checked.count} 行`)
+    return
+  }
+  if (checked.row !== row) {
+    bad(`${where} 打勾的不是「${row}」那一行，而是「${checked.row}」（行头文本 ${JSON.stringify(checked.text)}）`)
+    return
+  }
+  if (!labelRe.test(checked.text)) {
+    bad(`${where} 打勾那行（${row}）的行头文本不对：${JSON.stringify(checked.text)}（期望匹配 ${labelRe}）`)
+    return
+  }
+  ok(`${where} 当前生效来源 = ${checked.text.split('\n')[0]}（${row} 那一行打勾）`)
+}
+
+/** 当前展开着的那一行（#807：同一时间只展开一行）—— 字段可见性只在它里面数 */
+const openPanelRow = async (where) => {
+  const panels = page.locator('[data-testid="settings-source-accordion"] [data-testid$="-panel"]:not([hidden])')
+  const count = await panels.count()
+  if (count !== 1) {
+    bad(`${where} 应恰好 1 个展开的来源行（[data-testid$="-panel"]:not([hidden])），实际 ${count} 个`)
+    return null
+  }
+  const testId = await panels.first().getAttribute('data-testid')
+  return String(testId ?? '').replace(/^settings-source-/, '').replace(/-panel$/, '')
+}
+
+/**
+ * 展开区里的可编辑输入框（**按展开区归属**数，不按 dialog 数）。
+ *
+ * 为什么必须带归属：第三方与官方的面板里输入框是**同名**的（`settings-source-draft-*` 各自一份），
+ * 「按 dialog 内 input 数量判断哪种渠道」在 #807 之后判不出来源（#800 的退役清单第 3 条）。
+ */
+const panelInputIds = async (row, where) => {
+  const row2 = await openPanelRow(where)
+  if (row2 === null) {
+    return null
+  }
+  if (row2 !== row) {
+    bad(`${where} 展开的不是「${row}」那一行，而是「${row2}」`)
+    return null
+  }
+  return page
+    .locator(`[data-testid="settings-source-${row}-panel"]`)
+    .locator('input')
+    .evaluateAll((list) => list.map((node) => node.getAttribute('data-testid')))
+}
+
+/** 官方行：只有 Key 可填（地址固定只读、模型不可改） */
+const expectOfficialFields = async (where) => {
+  const ids = await panelInputIds('official', where)
+  if (ids === null) {
+    return
+  }
+  note(`${where} 展开区输入框：${JSON.stringify(ids)}`)
+  if (ids.length !== 1 || ids[0] !== 'settings-source-draft-apiKey') {
+    bad(`${where} 官方行应只有 1 个可编辑输入框（API Key），实际 ${JSON.stringify(ids)}`)
+    return
+  }
+  const fixed = page.locator('[data-testid="settings-source-official-panel"] [data-testid="settings-source-base-url-fixed"]')
+  if ((await fixed.count()) !== 1) {
+    bad(`${where} 官方行没有「地址固定」只读行（settings-source-base-url-fixed），用户会以为漏了一格`)
+    return
+  }
+  const fixedText = (await fixed.first().innerText()).trim()
+  if (!fixedText.includes(new URL(OFFICIAL_HOST).hostname)) {
+    bad(`${where} 官方行展示的固定地址不是官方端点：${JSON.stringify(fixedText)}`)
+    return
+  }
+  const inlineError = page.locator('[data-testid="settings-source-official-panel"] [data-testid$="-error"]')
+  if ((await inlineError.count()) > 0) {
+    bad(`${where} 官方行一展开就有行内红字：${JSON.stringify((await inlineError.first().innerText()).trim())}`)
+    return
+  }
+  ok(`${where} 官方行只有 Key 可填；地址固定为 ${fixedText}（只读，不许改）`)
+}
+
+/** 第三方行：三件套（地址 / Key / 模型）都可填 */
+const expectThirdFields = async (where) => {
+  const ids = await panelInputIds('third', where)
+  if (ids === null) {
+    return
+  }
+  note(`${where} 展开区输入框：${JSON.stringify(ids)}`)
+  const want = ['settings-source-draft-baseUrl', 'settings-source-draft-apiKey', 'settings-source-draft-model']
+  const sorted = [...ids].sort()
+  if (JSON.stringify(sorted) !== JSON.stringify([...want].sort())) {
+    bad(`${where} 第三方行应是三件套（地址 / Key / 模型）都可填，实际 ${JSON.stringify(ids)}`)
+    return
+  }
+  ok(`${where} 第三方行三件套都可填（地址 / Key / 模型）`)
+}
+
+/**
+ * 内置行：**一个字都不可编辑**（#800：字段清单为空 → 结构上没有输入框 / Key 展示区 /「重新领取」）。
+ *
+ * 这条替的是退役的「只读 Key 行 + 重新领取」两条子断言：它们守的能力是「用户改不了内置 Key」，
+ * 现在由「结构上没有可编辑控件」来守 —— 比 disabled 更硬（禁用的输入框能被 devtools 打开、能被脚本填值）。
+ */
+const expectBuiltinFields = async (where) => {
+  const ids = await panelInputIds('builtin', where)
+  if (ids === null) {
+    return
+  }
+  if (ids.length !== 0) {
+    bad(`${where} 内置行不该有任何可编辑输入框（Key 由服务端下发），实际 ${JSON.stringify(ids)}`)
+    return
+  }
+  const panel = page.locator('[data-testid="settings-source-builtin-panel"]')
+  const retired = {
+    'settings-managed-key': await panel.locator('[data-testid="settings-managed-key"]').count(),
+    'settings-managed-key-claim': await panel.locator('[data-testid="settings-managed-key-claim"]').count(),
+    draft: await panel.locator('[data-testid^="settings-source-draft-"]').count(),
+  }
+  const leaked = Object.entries(retired).filter(([, count]) => count !== 0)
+  if (leaked.length > 0) {
+    bad(`${where} 内置行出现了 #800 已删除的控件：${JSON.stringify(Object.fromEntries(leaked))}`)
+    return
+  }
+  ok(`${where} 内置行没有任何可编辑控件（无输入框 / 无只读 Key 行 / 无「重新领取」，#800 的字段清单为空）`)
+}
+
+// ───────────────────────────────────── 聊天页：工具栏入口 / 发消息捕获
+
+const ATTACH_IMAGE = '[data-testid="attach-image"]'
+const ATTACH_DOC = '[data-testid="attach-document"]'
+const ATTACH_DOC_READY = `${ATTACH_DOC}:not([data-attachment-entry="unavailable"])`
+
+/**
+ * 「随来源切换而变化」的那几个入口（能力门；全量矩阵在 caps / compact-toolbar-813 里）。
+ *
+ *  - 官方（#813）：右侧只留图片入口；文档入口连「不可用」占位都不渲染（`absent`）；
+ *  - 第三方 / 内置：#548 的图片入口在且可点、#538 的文档入口在且可点。
+ */
+const expectToolbar = async (where, want) => {
+  const image = await page.locator(ATTACH_IMAGE).count()
+  const imageReady = await page.locator(`${ATTACH_IMAGE}:not([aria-disabled="true"])`).count()
+  if (image !== 1 || imageReady !== 1) {
+    bad(`${where} 图片入口应存在且可点（attach-image 总数 ${image} / 可点 ${imageReady}）`)
+  } else {
+    ok(`${where} 图片入口存在且可点（attach-image ×1）`)
+  }
+  const doc = await page.locator(ATTACH_DOC).count()
+  if (want.document === 'ready') {
+    const ready = await page.locator(ATTACH_DOC_READY).count()
+    if (doc !== 1 || ready !== 1) {
+      bad(`${where} 文档入口应存在且可点（attach-document 总数 ${doc} / 可点 ${ready}）`)
+    } else {
+      ok(`${where} 文档入口存在且可点（attach-document ×1）`)
+    }
+    return
+  }
+  if (doc !== 0) {
+    bad(`${where} 文档入口应不渲染（DOM 里没有节点，#813 精简工具栏），实际 ${doc} 个`)
+  } else {
+    ok(`${where} 文档入口不渲染（#813：官方工具栏只留图片入口）`)
+  }
+}
+
+const lastMessageRequest = (requests) =>
+  requests.filter((request) => request.method === 'POST' && request.postData).at(-1)
+
+/** 侧栏「设置」入口可见 = 首屏画完了（等终态，不靠 sleep 猜多久够） */
+const SEND_BUTTON = /^发送$|^Send$/
+const SETTINGS_ENTRY = /^设置$|^Settings$/
+
+const waitForAppReady = async () => {
+  await page.getByRole('button', { name: SETTINGS_ENTRY }).first().waitFor({ state: 'visible', timeout: 20000 })
+}
+
+/**
+ * 「这一轮回复真的结束了」的终态：桩回的正文出现，且输入框右边的「停止生成」按钮消失
+ * （流式期间「发送」按位置被它顶掉，流一结束就换回「发送」）。
+ *
+ * 为什么要等终态而不是睡一会儿：下一轮要再发一条消息，流没结束就发会被拒（或发到上一轮）。
+ * 数正文出现次数（不是 `isEnabled`）—— 发送后输入框是空的，那个按钮本来就是 disabled。
+ */
+const REPLY_TEXT = '渠道验收回复'
+const replyCount = () => page.getByText(REPLY_TEXT, { exact: false }).count()
+const STOP_CONTROL = 'button[aria-label*="停止"], button[aria-label*="Stop"]'
+
+const waitReplyDone = async (wasReplies, timeout = 20000) => {
+  const deadline = Date.now() + timeout
+  for (;;) {
+    const done = (await replyCount()) > wasReplies && (await page.locator(STOP_CONTROL).count()) === 0
+    if (done) {
+      return true
+    }
+    if (Date.now() >= deadline) {
+      return false
+    }
+    await page.waitForTimeout(100)
+  }
+}
+
+const sendAndCapture = async (requests, text) => {
+  const before = requests.length
+  const wasReplies = await replyCount()
+  const textarea = page.locator('textarea').last()
+  await textarea.click()
+  await textarea.fill(text)
+  await page.getByRole('button', { name: SEND_BUTTON }).first().click()
+  const deadline = Date.now() + 15000
+  while (Date.now() < deadline) {
+    if (requests.slice(before).some((request) => request.method === 'POST' && request.postData)) {
+      break
+    }
+    await page.waitForTimeout(100)
+  }
+  await waitReplyDone(wasReplies)
+  return lastMessageRequest(requests.slice(before))
+}
+
+/** 「切完真的生效」：**请求**打到哪个端点、带哪个模型（不只看界面上的打勾） */
+const expectLiveRequest = async (requests, where, text, want) => {
+  const hit = await sendAndCapture(requests, text)
+  if (!hit) {
+    bad(`${where} 没有发出消息请求`)
+    return null
+  }
+  if (hit.url !== want.url) {
+    bad(`${where} 发消息 URL 不对：期望 ${want.url}，实际 ${hit.url}`)
+  } else {
+    ok(`${where} 发消息 → ${hit.url}（来源切换真的生效）`)
+  }
+  let body = {}
+  try {
+    body = JSON.parse(hit.postData ?? '{}')
+  } catch {
+    bad(`${where} 请求体不是 JSON：${JSON.stringify(String(hit.postData).slice(0, 80))}`)
+    return hit
+  }
+  if (body.model !== want.model) {
+    bad(`${where} model 不对：期望 ${want.model}，实际 ${JSON.stringify(body.model)}`)
+  } else {
+    ok(`${where} model = ${body.model}`)
+  }
+  return hit
 }
 
 const readStorage = () =>
@@ -161,531 +451,150 @@ const readStorage = () =>
     return out
   })
 
-const openSettings = async () => {
-  if ((await page.getByRole('dialog').count()) === 0) {
-    await page.getByRole('button', { name: /设置|Settings/ }).last().click()
-  }
-  await page.getByTestId('settings-row-data').first().click()
-  await page.waitForTimeout(400)
-  return page.getByRole('dialog').first()
-}
-
-const closeSettings = async (dialog) => {
-  await dialog.getByRole('button', { name: /^关闭$|^Close$/ }).first().click()
-  await page.waitForTimeout(400)
-}
-
-// 触发器按整串匹配（#368）：`/渠道/` 子串会命中「这个渠道不能传文件呢…」那个禁用按钮，
-// 详见 tests/helpers/helpers.mjs 的 providerKindTrigger 注释。
-const channelLabel = async (dialog) => (await providerKindTrigger(dialog).innerText()).trim()
-
-/** 设置页里可见的输入框类型（排除导入历史/聊天背景用的隐藏 file 选择器） */
-const visibleInputTypes = async (dialog) => {
-  const types = await dialog.locator('input').evaluateAll((list) => list.map((item) => item.type))
-  return types.filter((type) => type !== 'file')
-}
-
-const expectOnlyApiKey = async (dialog, where) => {
-  const types = await visibleInputTypes(dialog)
-  const urlInputs = await dialog.locator('input[inputmode="url"]').count()
-  const modelInputs = await dialog.getByLabel(/^模型$|^Model$/).count()
-  const passwordInputs = await dialog.locator('input[type="password"]').count()
-  note(`${where} 输入框：${JSON.stringify(types)}`)
-  if (urlInputs > 0 || modelInputs > 0) {
-    bad(`${where} 露出了服务地址/模型输入框（url=${urlInputs}, model=${modelInputs}）`)
-  } else if (passwordInputs !== 1) {
-    bad(`${where} 可见输入框不是唯一一个 API Key：password=${passwordInputs}，全部=${JSON.stringify(types)}`)
-  } else if (types.length !== 1) {
-    bad(`${where} 还有额外的可编辑输入框：${JSON.stringify(types)}`)
-  } else {
-    ok(`${where} 只有 1 个可见输入框（API Key，type=password）`)
-  }
-}
-
-/**
- * 我们的渠道的 Key 行（#596）：**结构上没有输入框**，只有「当前 Key ···尾号」+「重新领取」。
- *
- * 为什么数 input 而不是数 `disabled`：禁用的输入框能被 devtools 打开、能被脚本填值，
- * 「用户填不进来」只有在 DOM 上没有那个节点时才成立 —— 这条断言就是钉这个形态。
- */
-const expectManagedKeyRow = async (dialog, where) => {
-  const types = await visibleInputTypes(dialog)
-  note(`${where} 输入框：${JSON.stringify(types)}`)
-  if (types.length !== 0) {
-    bad(`${where} 不该有任何可编辑输入框（#596 禁止手填 Key），实际：${JSON.stringify(types)}`)
-  } else {
-    ok(`${where} 没有任何可编辑输入框（Key 只能由服务端下发）`)
-  }
-  const row = await dialog.locator('[data-testid="settings-managed-key"]').count()
-  const claim = await dialog.locator('[data-testid="settings-managed-key-claim"]').count()
-  if (row !== 1 || claim !== 1) {
-    bad(`${where} 缺只读行或「重新领取」按钮（row=${row}, claim=${claim}）`)
-  } else {
-    ok(`${where} 只读行 + 「重新领取」按钮在位`)
-  }
-  const text = await dialog.innerText()
-  const masks = ['服务器繁忙', '未知错误'].filter((word) => text.includes(word))
-  if (masks.length > 0) {
-    bad(`${where} 出现掩盖性文案：${masks.join(' / ')}（#596 第 1 条事故就是被这类话骗的）`)
-  } else {
-    ok(`${where} 没有「服务器繁忙 / 未知错误」这类掩盖性文案`)
-  }
-}
-
-const expectThreeInputs = async (dialog, where) => {
-  const urlInputs = await dialog.locator('input[inputmode="url"]').count()
-  const modelInputs = await dialog.getByLabel(/^模型$|^Model$/).count()
-  if (urlInputs !== 1 || modelInputs !== 1) {
-    bad(`${where} 没渲染三件套（服务地址=${urlInputs}、模型=${modelInputs}）`)
-  } else {
-    ok(`${where} 渲染服务地址 + 模型输入框（API Key 行同时在）`)
-  }
-}
-
-const expectNoCapabilityCopy = async (dialog, where) => {
-  const text = await dialog.innerText()
-  const hits = FORBIDDEN_WORDS.filter((word) => text.includes(word))
-  if (hits.length > 0) {
-    bad(`${where} 出现能力描述文案：${hits.join(' / ')}`)
-  } else {
-    ok(`${where} 没有能力描述文案`)
-  }
-}
-
-/**
- * 输入区那两个「附件」入口是**两件不同的事**（#586 的根因就在这一步没分清）：
- *
- *  - **图片入口** `[data-testid="attach-image"]`（#548 / #551）：带视觉能力的渠道都该有。
- *    它收的是图片 —— 三家 base64 渠道本地编码内联，deepseek 走 `files` 上传 + `file_id`；
- *  - **文档入口** `[data-testid="attach-document"]`（#480 / #538）：收的是 txt / docx / pdf，
- *    能不能用**只由 `acceptsDocuments(kind)` 决定**。对**非官方渠道**，能力门关掉时入口不是消失，
- *    而是渲染成带 `data-attachment-entry="unavailable"` 的解释按钮（看得见、点下去给原因，
- *    这是 #538 的口径）。**官方渠道例外**：#813 起它的右侧工具栏只留最右边的文件上传，
- *    语音与文档入口（两种状态都算）**彻底不渲染** —— 所以 deepseek 那一档期望的是
- *    `asr: false` + `document: 'absent'`，而不是从前的 `asr: true` + `document: 'disabled'`。
- *
- * 这两个入口以前在 DOM 里没有各自的稳定标识，只能靠 `aria-label` 里的中文去数
- * （图片入口 = 「上传文件」、文档入口 = 「添加文档（TXT / DOCX / PDF）」）。而「上传文件」这个
- * 可访问名挂在**图片入口**上 —— 于是按文案数出来的数永远是图片入口，却被按「附件入口」的口径
- * 写期望；#548 给三个渠道开了图片入口之后，那些旧期望必然红（#586）。
- *
- * 更弱的写法是「按文案前缀数出『能用的那个 picker』」（`aria-label^="添加文档"`）：那样数不出
- * DeepSeek 的禁用态占位到底是渲染了还是被删了，#538 的能力门在用例里就**没有守卫**了。
- * 所以这里改用产品侧给出的稳定标识，把两个入口分开、把「在不在」与「能不能用」分开断言。
- */
-const ATTACH_IMAGE = '[data-testid="attach-image"]'
-const ATTACH_IMAGE_READY = `${ATTACH_IMAGE}:not([aria-disabled="true"])`
-const ATTACH_DOC = '[data-testid="attach-document"]'
-const ATTACH_DOC_READY = `${ATTACH_DOC}:not([data-attachment-entry="unavailable"])`
-const ATTACH_DOC_DISABLED = `${ATTACH_DOC}[data-attachment-entry="unavailable"]`
-
-/** 聊天页某入口的 DOM 节点数（找不到 = 入口压根没渲染） */
-const capNodes = async () => ({
-  search: await page.locator('button[aria-label="智能搜索"]').count(),
-  asr: await page.locator('button[aria-label="语音输入"]').count(),
-  thinking: await page.locator('button[aria-label="深度思考"]').count(),
-  image: await page.locator(ATTACH_IMAGE).count(),
-  imageReady: await page.locator(ATTACH_IMAGE_READY).count(),
-  document: await page.locator(ATTACH_DOC).count(),
-  documentReady: await page.locator(ATTACH_DOC_READY).count(),
-  documentDisabled: await page.locator(ATTACH_DOC_DISABLED).count(),
-})
-
-/**
- * 图片入口的三态期望：`ready`（在 + 可点）/ `absent`（DOM 里没有）。
- * 四个渠道都应该是 `ready`：这是 #548 的功能本身。
- */
-const expectImageEntry = (where, want, nodes) => {
-  if (want === 'ready') {
-    if (nodes.image !== 1) {
-      bad(`${where} 图片入口（attach-image）应有且仅有 1 个，实际 ${nodes.image} 个`)
-    } else if (nodes.imageReady !== 1) {
-      bad(`${where} 图片入口存在但不可点（aria-disabled=true，实际可点 ${nodes.imageReady} 个）`)
-    } else {
-      ok(`${where} 图片入口存在且可点（attach-image ×1，#548 的三渠道图片通路）`)
-    }
-    return
-  }
-  if (nodes.image !== 0) {
-    bad(`${where} 仍然渲染了图片入口（期望 DOM 里没有，实际 ${nodes.image} 个）`)
-  } else {
-    ok(`${where} 图片入口不存在（DOM 里没有节点）`)
-  }
-}
-
-/**
- * 文档入口的三态期望：
- *  - `ready`：`acceptsDocuments(kind)` 为真 → 入口在且可点；
- *  - `disabled`：能力门关掉（今天只有 deepseek）→ 入口**仍在**，但明确标成不可用
- *    （`data-attachment-entry="unavailable"` + `aria-disabled="true"`），点下去给原因而不是静默；
- *  - `absent`：DOM 里没有。
- */
-const expectDocumentEntry = (where, want, nodes) => {
-  if (want === 'ready') {
-    if (nodes.documentReady !== 1) {
-      bad(
-        `${where} 文档入口应存在且可点（attach-document 可点 ${nodes.documentReady} 个 / 总数 ${nodes.document} 个）`
-      )
-    } else if (nodes.documentDisabled !== 0) {
-      bad(`${where} 文档入口同时出现了「不可用」标记，能力表自相矛盾`)
-    } else {
-      ok(`${where} 文档入口存在且可点（attach-document ×1，acceptsDocuments=true）`)
-    }
-    return
-  }
-  if (want === 'disabled') {
-    if (nodes.document !== 1) {
-      bad(`${where} 文档入口应渲染 1 个「不可用」解释按钮，实际 ${nodes.document} 个`)
-    } else if (nodes.documentDisabled !== 1 || nodes.documentReady !== 0) {
-      bad(
-        `${where} 文档入口没有标成不可用（unavailable=${nodes.documentDisabled}、ready=${nodes.documentReady}）`
-      )
-    } else {
-      ok(`${where} 文档入口按能力门渲染为不可用（acceptsDocuments=false，点下去给原因）`)
-    }
-    return
-  }
-  if (nodes.document !== 0) {
-    bad(`${where} 仍然渲染了文档入口（期望 DOM 里没有，实际 ${nodes.document} 个）`)
-  } else {
-    ok(`${where} 文档入口不存在（DOM 里没有节点）`)
-  }
-}
-
-const expectCaps = async (where, expected) => {
-  const nodes = await capNodes()
-  note(`${where} 入口节点数：${JSON.stringify(nodes)}`)
-  for (const name of ['search', 'asr', 'thinking']) {
-    if (!(name in expected)) {
-      continue
-    }
-    const got = nodes[name]
-    const want = expected[name]
-    const label = { search: '智能搜索', asr: '语音输入', thinking: '深度思考' }[name]
-    if (want && got === 0) {
-      bad(`${where} 缺少「${label}」入口`)
-    } else if (!want && got !== 0) {
-      bad(`${where} 仍然渲染了「${label}」入口（期望 DOM 里没有，实际 ${got} 个）`)
-    } else {
-      ok(`${where} ${label}入口${want ? '存在' : '不存在（DOM 里没有节点）'}`)
-    }
-  }
-  expectImageEntry(where, expected.image, nodes)
-  expectDocumentEntry(where, expected.document, nodes)
-}
-
-const lastMessageRequest = (requests) =>
-  requests.filter((request) => request.method === 'POST' && request.postData).at(-1)
-
-const sendAndCapture = async (requests, text) => {
-  const before = requests.length
-  const textarea = page.locator('textarea').last()
-  await textarea.click()
-  await textarea.fill(text)
-  await page.getByRole('button', { name: /^发送$|^Send$/ }).first().click()
-  const deadline = Date.now() + 15000
-  while (Date.now() < deadline) {
-    if (requests.slice(before).some((request) => request.method === 'POST' && request.postData)) {
-      break
-    }
-    await page.waitForTimeout(100)
-  }
-  await page.waitForTimeout(600)
-  return lastMessageRequest(requests.slice(before))
-}
-
+let served
 try {
-  // 端口自动发现（PORT 可注入）：固定 5293 会撞到 diagnostics 或遗留服务 → 假红
-  const served = await serveDir(DIST, { port: PORT, label: '标准产物 dist-standard' })
-  APP_URL = APP_URL || served.url
+  // 端口自动发现（PORT 可注入）：固定端口会撞到别的用例的静态服务 → 假红
+  served = await serveDir(DIST, { port: PORT, label: '标准产物 dist-standard' })
+  const APP_URL = served.url
   await verifyAppUrl(APP_URL, DIST, { variant: 'standard' })
 
+  /**
+   * 两条「与用例无关的启动链」的替身（`TEST_AUTH_SEAM=1` 让产物以为已登录 → 冷启动会真去领内置 Key、
+   * 进账户页会拉一次账号资料）。替身不是放宽：断言一个字没改，只是这两条链不打真网、不刷 console error。
+   * 清单来源：`tests/fixtures/startup/startup-chain-stubs.mjs`（黄金层与 L1 共用同一份）。
+   */
+  await installBuiltinKeyClaimStub(page)
+  await page.route(`https://${CONSUME_PROFILE_STUB.host}/api/v1/user/profile`, async (route) => {
+    const response = CONSUME_PROFILE_STUB.respond()
+    await route.fulfill({ status: response.status, headers: response.headers, body: response.body })
+  })
+
   // ---------- 上游全部打桩，不连外网 ----------
-  await page.route('https://api.deepseek.com/**', async (route) => {
-    const url = route.request().url()
-    if (url.includes('/models')) {
-      await route.fulfill({
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ data: [{ id: 'deepseek-flash', type: 'model' }] }),
-      })
-      return
-    }
-    await route.fulfill({
-      status: 200,
-      headers: { 'content-type': 'text/event-stream' },
-      body: ANTHROPIC_SSE,
+  const stubUpstream = async (base, sse, model) => {
+    await page.route(`${base}/**`, async (route) => {
+      const url = route.request().url()
+      if (url.includes('/models')) {
+        await route.fulfill({
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ data: [{ id: model, type: 'model' }] }),
+        })
+        return
+      }
+      await route.fulfill({ status: 200, headers: { 'content-type': 'text/event-stream' }, body: sse })
     })
-  })
-  await page.route(`${BASE_A}/**`, async (route) => {
-    const url = route.request().url()
-    if (url.includes('/models')) {
-      await route.fulfill({
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ data: [{ id: MODEL_A, type: 'model' }] }),
-      })
-      return
-    }
-    await route.fulfill({
-      status: 200,
-      headers: { 'content-type': 'text/event-stream' },
-      body: ANTHROPIC_SSE,
-    })
-  })
-  await page.route(`${BASE_O}/**`, async (route) => {
-    const url = route.request().url()
-    if (url.includes('/models')) {
-      await route.fulfill({
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ data: [{ id: MODEL_O, type: 'model' }] }),
-      })
-      return
-    }
-    await route.fulfill({
-      status: 200,
-      headers: { 'content-type': 'text/event-stream' },
-      body: OPENAI_SSE,
-    })
-  })
-  // 我们的渠道：真地址，但请求由 Playwright 拦截（不需要 host 绑定）
-  // （2026-11-18 起该上游走 OpenAI 协议：/v1/chat/completions + Authorization: Bearer，SSE 是 chat.completion.chunk）
-  await page.route(`${OURS_HOST}/**`, async (route) => {
-    const url = route.request().url()
-    if (url.includes('/models')) {
-      await route.fulfill({
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ data: [{ id: OURS_MODEL, type: 'model' }] }),
-      })
-      return
-    }
-    await route.fulfill({
-      status: 200,
-      headers: { 'content-type': 'text/event-stream' },
-      body: OPENAI_SSE,
-    })
-  })
+  }
+  await stubUpstream(OFFICIAL_HOST, ANTHROPIC_SSE, OFFICIAL_MODEL)
+  await stubUpstream(BASE_A, ANTHROPIC_SSE, MODEL_A)
+  await stubUpstream(BASE_O, OPENAI_SSE, MODEL_O)
+  // 内置服务：真地址，但请求由 Playwright 拦截（#812 起走 OpenAI 协议：/v1/chat/completions + Bearer）
+  await stubUpstream(OURS_HOST, OPENAI_SSE, OURS_MODEL)
 
   const requests = capturePaths(page)
 
   await page.goto(APP_URL, { waitUntil: 'domcontentloaded' })
   await page.evaluate(() => window.localStorage.clear())
+  // 只种一把 Key，**不**种 provider-kind：这样 [1] 断的是「标准构建的默认来源」，不是我们刚写进去的值
+  await page.evaluate((key) => window.localStorage.setItem('chat-demo:api-key', key), KEY)
   await page.reload({ waitUntil: 'domcontentloaded' })
-  await page.waitForTimeout(900)
+  await waitForAppReady()
 
-  // ---------- [1] 标准构建默认渠道 = DeepSeek 官方 ----------
-  console.log('\n[1] 默认渠道（标准构建）')
-  let dialog = await openSettings()
-  const defaultLabel = await channelLabel(dialog)
-  if (!/DeepSeek 官方|DeepSeek Official/.test(defaultLabel)) {
-    bad(`标准构建默认渠道不是 DeepSeek 官方：${JSON.stringify(defaultLabel)}`)
-  } else {
-    ok(`默认渠道 = ${defaultLabel}（标准构建 → deepseek）`)
+  // ---------- [1] 默认来源 + 官方行字段可见性 ----------
+  console.log('\n[1] 默认来源（标准构建）+ 官方行字段可见性')
+  const storedKind = await readProviderKind(page)
+  if (storedKind !== null) {
+    bad(`前置：刚清过的盘不该有 provider-kind，实际 ${JSON.stringify(storedKind)}`)
   }
-  await expectOnlyApiKey(dialog, 'DeepSeek 官方')
-  // #339：模型不可编辑，但必须看得见 —— 只读行（不是 input，所以上面的输入框计数仍是 1）
-  const builtInModel = await dialog.getByText(/^deepseek-flash$/).count()
-  if (builtInModel < 1) {
-    bad('DeepSeek 官方渠道没有露出内置模型（#339：至少要让用户知道当前用的是哪个模型）')
+  await openApiConfigSection(page, { row: 'official' })
+  await expectCheckedRow('默认来源', 'official', /DeepSeek 官方服务/)
+  await expectOfficialFields('官方行')
+  const officialPanelText = await page.locator('[data-testid="settings-source-official-panel"]').innerText()
+  if (!officialPanelText.includes(OFFICIAL_MODEL)) {
+    bad(`官方行没有露出内置模型 ${OFFICIAL_MODEL}（#339：至少要让用户知道当前用的是哪个模型）`)
   } else {
-    ok('DeepSeek 官方渠道展示只读模型 deepseek-flash')
+    ok(`官方行展示只读内置模型 ${OFFICIAL_MODEL}`)
   }
-  await expectNoCapabilityCopy(dialog, 'DeepSeek 官方渠道')
-  await shot('channel-deepseek')
+  await shot('official')
+  await closeSettings(page)
 
-  // 保存 Key（DeepSeek 官方渠道 → 共用一把）
-  await page.locator('input[type="password"]').first().fill(KEY)
-  await page.getByRole('button', { name: /^确定$|^Confirm$/ }).first().click()
-  await page.waitForTimeout(1200)
-  let stored = await readStorage()
-  if (stored['chat-demo:api-key'] !== KEY) {
-    bad('API Key 没有写入 localStorage')
-  } else {
-    ok('API Key 已保存')
-  }
-  if (Object.hasOwn(stored, 'chat-demo:base-url') || Object.hasOwn(stored, 'chat-demo:model')) {
-    bad(`内置渠道不该写地址/模型：${JSON.stringify(stored)}`)
-  } else {
-    ok('内置渠道没有把地址/模型写进 localStorage')
-  }
-  await closeSettings(dialog)
-
-  // ---------- [2] DeepSeek 官方：能力全开 + 请求路径 ----------
-  console.log('\n[2] DeepSeek 官方渠道')
-  // 随 #552 变更：三渠道支持图片。DeepSeek 的文档能力（#538）没变 —— 它不吃文档。
-  // 随 #813 变更：官方渠道是**精简工具栏** —— 右侧只留最右边的文件上传（`attach-image`），
-  // 语音入口与文档入口（含 `data-attachment-entry="unavailable"` 那种占位）**都不渲染**。
-  await expectCaps('DeepSeek 官方', {
-    search: true,
-    // 图片：deepseek 一直走 `files` 上传 + `file_id`（#551 的零改动边界，入口照旧可用）
-    image: 'ready',
-    // 文档：`acceptsDocuments('deepseek') === false`（#538 的能力门仍然是 false），
-    // 但 #813 起连「不可用」占位也不渲染 → `absent`（DOM 里没有节点）。
-    // 「能力门没有被削弱」在别的渠道继续被守：[3]~[5] 的 `document: 'ready'` 三条都在。
-    document: 'absent',
-    // 语音：官方渠道同样不再渲染语音入口（#813 同一刀）
-    asr: false,
-    thinking: true,
+  // ---------- [2] 官方来源真正生效 ----------
+  console.log('\n[2] 官方来源生效（请求路径 + 模型）')
+  await expectToolbar('官方来源', { document: 'absent' })
+  await expectLiveRequest(requests, '官方来源', '你好，官方来源', {
+    url: OFFICIAL_URL,
+    model: OFFICIAL_MODEL,
   })
-  const hitDeepseek = await sendAndCapture(requests, '你好，官方渠道')
-  if (!hitDeepseek) {
-    bad('DeepSeek 官方渠道没有发出消息请求')
-  } else {
-    if (hitDeepseek.url !== 'https://api.deepseek.com/anthropic/v1/messages') {
-      bad(`DeepSeek 官方发消息 URL 不对：${hitDeepseek.url}`)
-    } else {
-      ok(`DeepSeek 官方发消息 → ${new URL(hitDeepseek.url).pathname}`)
-    }
-    const body = JSON.parse(hitDeepseek.postData ?? '{}')
-    if (body.model !== 'deepseek-flash') {
-      bad(`DeepSeek 官方 model 不对：${JSON.stringify(body.model)}`)
-    } else {
-      ok(`DeepSeek 官方 model = ${body.model}`)
-    }
-  }
 
-  // ---------- [3] Anthropic 协议：三件套 + Key 不丢 ----------
-  console.log('\n[3] Anthropic 协议渠道')
-  dialog = await openSettings()
-  await selectProviderKind(page, /Anthropic 协议|Anthropic-compatible/)
-  dialog = page.getByRole('dialog').first()
-  await expectThreeInputs(dialog, 'Anthropic 协议')
-  await expectNoCapabilityCopy(dialog, 'Anthropic 协议渠道')
-  stored = await readStorage()
-  if (stored['chat-demo:api-key'] !== KEY) {
-    bad('切到 Anthropic 协议后 API Key 丢了')
-  } else {
-    ok('切到 Anthropic 协议后 API Key 仍在（共用一把）')
-  }
-  await page.getByLabel(/服务地址|Service URL/).first().fill(BASE_A)
-  await page.getByLabel(/服务地址|Service URL/).first().press('Enter')
-  await page.getByLabel(/^模型$|^Model$/).first().fill(MODEL_A)
-  await page.getByLabel(/^模型$|^Model$/).first().press('Enter')
-  await page.waitForTimeout(400)
-  stored = await readStorage()
-  if (stored['chat-demo:base-url:anthropic'] !== BASE_A || stored['chat-demo:model:anthropic'] !== MODEL_A) {
-    bad(`Anthropic 协议的地址/模型没有按渠道分开存：${JSON.stringify(stored)}`)
-  } else {
-    ok('Anthropic 协议的地址/模型按渠道落盘（chat-demo:base-url:anthropic / model:anthropic）')
-  }
-  await shot('channel-anthropic')
-  await closeSettings(dialog)
-  // 随 #552 变更：三渠道支持图片 —— `vision`（纸夹「上传文件」）现在有节点且可用，
-  // 旧断言 vision:false 是 #552 之前的现实。`docs` 仍为 true：#480 起 Anthropic 走
-  // `documents.textInjection`，文档入口一直是那个能吃 TXT/DOCX/PDF 的 picker（这一次没动）。
-  await expectCaps('Anthropic 协议', {
-    search: false,
-    // #548 给三家开了图片入口（base64 内联），#480/#538 的文档入口照旧可用
-    image: 'ready',
-    document: 'ready',
-    asr: false,
-    thinking: true,
+  // ---------- [3] 第三方：能切、打勾、三件套、真正生效（两种协议形状同一行） ----------
+  /**
+   * 顺序：**先 OpenAI 形状、再 Anthropic 形状**。这不是风格，是判据的先后（`protocolDetect.resolveProtocol`）：
+   *
+   *   · #794 之后协议不再是用户选的，第三方槽位首次进入时兜底值就是 `openai`（`source: 'default'`），
+   *     于是「OpenAI 形状」这一条**必须在槽位还空着的时候**走 —— 否则会先被上一轮的结论/缓存盖住；
+   *   · 「Anthropic 形状」有确定性判据（模型名 `claude` 前缀，或主机含 `anthropic`），任何时候都判得出来。
+   *
+   * 反过来写（先 Anthropic 再 OpenAI）就会红在产品没错的地方：OpenAI 形状只能靠 `/v1/models`
+   * 探两次鉴权风格、而两条桩都成功（结论相同 → 「没探明白」），于是协议**故意**保持不变（见该文件头
+   * 「不阻塞首条消息」）。这里不替产品编一条它没有的判据，只按它的真实判据排序。
+   */
+  console.log('\n[3] 第三方服务（OpenAI 形状 → Anthropic 形状）')
+  await openApiConfigSection(page, { row: 'third' })
+  await expectThirdFields('第三方行（OpenAI 形状）')
+  await fillBaseUrl(page, BASE_O)
+  await fillModel(page, MODEL_O)
+  await fillApiKey(page, KEY)
+  await clickApiKeyConfirm(page)
+  await waitForProviderKind(page, 'openai')
+  await expectCheckedRow('第三方（OpenAI）', 'third', /第三方服务/)
+  await shot('third-openai')
+  await closeSettings(page)
+  await expectToolbar('第三方（OpenAI）', { document: 'ready' })
+  await expectLiveRequest(requests, '第三方（OpenAI）', '你好，OpenAI 形状', {
+    url: `${BASE_O}/v1/chat/completions`,
+    model: MODEL_O,
   })
-  const hitAnthropic = await sendAndCapture(requests, '你好，Anthropic 协议')
-  if (!hitAnthropic) {
-    bad('Anthropic 协议渠道没有发出消息请求')
-  } else {
-    if (hitAnthropic.url !== `${BASE_A}/v1/messages`) {
-      bad(`Anthropic 协议发消息 URL 不对：${hitAnthropic.url}`)
-    } else {
-      ok(`Anthropic 协议发消息 → ${new URL(hitAnthropic.url).pathname}（自填地址生效）`)
-    }
-    const body = JSON.parse(hitAnthropic.postData ?? '{}')
-    if (body.model !== MODEL_A) {
-      bad(`Anthropic 协议 model 不对：${JSON.stringify(body.model)}`)
-    } else {
-      ok(`Anthropic 协议 model = ${body.model}（自填模型生效）`)
-    }
-  }
 
-  // ---------- [4] OpenAI 兼容：三件套 + /v1/chat/completions，能力入口全无 ----------
-  console.log('\n[4] OpenAI 兼容渠道')
-  dialog = await openSettings()
-  await selectProviderKind(page, /OpenAI 兼容|OpenAI-compatible/)
-  dialog = page.getByRole('dialog').first()
-  await expectThreeInputs(dialog, 'OpenAI 兼容')
-  await expectNoCapabilityCopy(dialog, 'OpenAI 兼容渠道')
-  await page.getByLabel(/服务地址|Service URL/).first().fill(BASE_O)
-  await page.getByLabel(/服务地址|Service URL/).first().press('Enter')
-  await page.getByLabel(/^模型$|^Model$/).first().fill(MODEL_O)
-  await page.getByLabel(/^模型$|^Model$/).first().press('Enter')
-  await page.waitForTimeout(400)
-  await shot('channel-openai')
-  await closeSettings(dialog)
-  // 随 #552 变更：三渠道支持图片（`vision: true`）；文档仍是文本注入（`docs: true`，未改）。
-  await expectCaps('OpenAI 兼容', {
-    search: false,
-    image: 'ready',
-    document: 'ready',
-    asr: false,
-    thinking: true,
+  // 同一行换成 Anthropic 形状：协议按地址 / 模型自适应（#794 之后没有「协议二选一」）。
+  // 「确认使用」只落盘草稿，「切到 anthropic」发生在展开这一行时（`detectThirdPartyProtocol` 的 effect），
+  // 所以这里**离开再回来** —— 这也是真实用户路径：配好之后回来看看，界面上就是 Anthropic 形状。
+  await openApiConfigSection(page, { row: 'third' })
+  await expectThirdFields('第三方行（改填 Anthropic 形状前）')
+  await fillBaseUrl(page, BASE_A)
+  await fillModel(page, MODEL_A)
+  await clickApiKeyConfirm(page)
+  await closeSettings(page)
+  await openApiConfigSection(page, { row: 'third' })
+  await waitForProviderKind(page, 'anthropic')
+  await expectCheckedRow('第三方（Anthropic）', 'third', /第三方服务/)
+  await shot('third-anthropic')
+  await closeSettings(page)
+  await expectLiveRequest(requests, '第三方（Anthropic）', '你好，Anthropic 形状', {
+    url: `${BASE_A}/v1/messages`,
+    model: MODEL_A,
   })
-  const hitOpenai = await sendAndCapture(requests, '你好，OpenAI 兼容')
-  if (!hitOpenai) {
-    bad('OpenAI 兼容渠道没有发出消息请求')
-  } else {
-    if (hitOpenai.url !== `${BASE_O}/v1/chat/completions`) {
-      bad(`OpenAI 兼容发消息 URL 不对：${hitOpenai.url}`)
-    } else {
-      ok(`OpenAI 兼容发消息 → ${new URL(hitOpenai.url).pathname}`)
-    }
-    const body = JSON.parse(hitOpenai.postData ?? '{}')
-    if (body.model !== MODEL_O) {
-      bad(`OpenAI 兼容 model 不对：${JSON.stringify(body.model)}`)
-    } else {
-      ok(`OpenAI 兼容 model = ${body.model}`)
-    }
-  }
 
-  // ---------- [5][6] 我们的渠道：只露 API Key + 内置地址/模型 ----------
-  console.log('\n[5][6] 我们的渠道')
-  dialog = await openSettings()
-  await selectProviderKind(page, /我们的渠道|Our Channel/)
-  dialog = page.getByRole('dialog').first()
-  // 清掉 Key 再看形态（#596：不管有没有 Key，这一行都不该有输入框）
-  await page.evaluate(() => {
-    window.localStorage.removeItem('chat-demo:api-key')
-    window.localStorage.removeItem('chat-demo:ours-server-key')
+  // ---------- [4] 能切换回官方 ----------
+  console.log('\n[4] 切换回官方服务')
+  await openApiConfigSection(page, { row: 'official' })
+  await fillApiKey(page, KEY)
+  await clickApiKeyConfirm(page)
+  await waitForProviderKind(page, 'deepseek')
+  await expectCheckedRow('切回官方', 'official', /DeepSeek 官方服务/)
+  await closeSettings(page)
+  await expectLiveRequest(requests, '切回官方', '你好，又回到官方', {
+    url: OFFICIAL_URL,
+    model: OFFICIAL_MODEL,
   })
-  await page.reload({ waitUntil: 'domcontentloaded' })
-  await page.waitForTimeout(1000)
-  dialog = await openSettings()
-  const oursLabel = await channelLabel(dialog)
-  if (!/我们的渠道|Our Channel/.test(oursLabel)) {
-    bad(`刷新后渠道选择没保住：${JSON.stringify(oursLabel)}`)
-  } else {
-    ok(`刷新后渠道仍是 ${oursLabel}（渠道选择持久化）`)
-  }
-  // #596：没有 Key 时也**没有输入框**（不是 disabled 的输入框），只有「重新领取」
-  await expectManagedKeyRow(dialog, '我们的渠道（未领取）')
-  const unclaimedText = await dialog.innerText()
-  if (!/尚未领取 Key|No key claimed yet/.test(unclaimedText)) {
-    bad('未领取时只读行没有说清「尚未领取」')
-  } else {
-    ok('未领取时只读行显示「尚未领取 Key」')
-  }
-  await shot('channel-ours-unclaimed')
-  const oursText = await dialog.innerText()
-  // 内置地址的主机与端口取自 config/endpoints.json（#274），不在这里另抄一份
-  for (const secret of [new URL(OURS_HOST).hostname, new URL(OURS_HOST).port, OURS_MODEL]) {
-    if (oursText.includes(secret)) {
-      bad(`我们的渠道把内置值露在界面上了：${secret}`)
-    } else {
-      ok(`我们的渠道界面不展示 ${secret}`)
-    }
-  }
-  await expectNoCapabilityCopy(dialog, '我们的渠道')
-  // 本机已有「服务端下发的那把」时：只读行显示尾号，请求头里带的也必须是这一把。
-  // 这里直接把领取结果写进本地（与 `applyManagedKey` 的落盘形态一致：Key + 下发标记），
-  // 不走网络 —— 领取链路本身在 `tests/unit/managed-key-596.test.mjs` 里按接口逐格验过。
-  const oursMark = {
-    fingerprint: keyFingerprint(KEY),
-    tail: KEY.slice(-4),
-    at: Date.now(),
-    id: 1,
-  }
+
+  // ---------- [5] 内置服务：能切、一个字都不可编辑、真正生效 ----------
+  console.log('\n[5] 内置服务')
+  /**
+   * 内置服务的切换路径（#807）：**行即动作** —— 本机已经握着「服务端下发的那把」时点行头直接生效
+   * （`planBuiltinClick` 的 `select` 分支，不发请求）；没有 / 是旧的才走领取。
+   * 这里按「启动对齐之后」的现场种盘（Key + 下发标记，与 `applyManagedKey` 同一形态），
+   * 领取链路本身由 `tests/unit/managed-key-596.test.mjs` 逐格验。
+   */
+  const oursMark = { fingerprint: keyFingerprint(KEY), tail: KEY.slice(-4), at: Date.now(), id: 1 }
   await page.evaluate(
     ([key, mark]) => {
       window.localStorage.setItem('chat-demo:api-key', key)
@@ -694,66 +603,59 @@ try {
     [KEY, oursMark]
   )
   await page.reload({ waitUntil: 'domcontentloaded' })
-  await page.waitForTimeout(1000)
-  dialog = await openSettings()
-  await expectManagedKeyRow(dialog, '我们的渠道（已领取）')
-  const claimedText = await dialog.innerText()
-  if (!claimedText.includes(`···${KEY.slice(-4)}`)) {
-    bad(`只读行没有显示服务端那把的尾号 ···${KEY.slice(-4)}`)
-  } else {
-    ok(`只读行显示当前 Key 尾号 ···${KEY.slice(-4)}`)
+  await waitForAppReady()
+  // 先落到「模型来源」页（展开官方行只是「正在查看」，不改变生效来源），
+  // 再**点内置服务行头** —— 这一下就是切换动作本身（#807：内置服务「行即动作」，没有表单也就没有「确认使用」）。
+  await openApiConfigSection(page, { row: 'official' })
+  await openSourceRow(page, 'builtin')
+  await waitForProviderKind(page, 'ours', { steps: ['点「内置服务」行头（行即动作 → 直接设成当前来源）'] })
+  await expectCheckedRow('切到内置服务', 'builtin', /内置服务/)
+  await expectBuiltinFields('内置行')
+  const builtinText = await page.locator('[data-testid="settings-source-builtin-panel"]').innerText()
+  // 内置地址的主机与端口取自 config/endpoints.json（#274），不在这里另抄一份
+  for (const secret of [new URL(OURS_HOST).hostname, new URL(OURS_HOST).port, OURS_MODEL]) {
+    if (secret && builtinText.includes(secret)) {
+      bad(`内置行把内部值露在界面上了：${secret}`)
+    } else if (secret) {
+      ok(`内置行界面不展示 ${secret}`)
+    }
   }
-  await shot('channel-ours')
-  await closeSettings(dialog)
-  // 随 #552 变更：三渠道支持图片（`vision: true`）；文档仍是文本注入（`docs: true`，未改）。
-  await expectCaps('我们的渠道', {
-    search: false,
-    image: 'ready',
-    document: 'ready',
-    asr: false,
-    thinking: true,
+  await shot('builtin')
+  await closeSettings(page)
+  await expectToolbar('内置来源', { document: 'ready' })
+  const hitOurs = await expectLiveRequest(requests, '内置来源', '你好，内置服务', {
+    url: OURS_URL,
+    model: OURS_MODEL,
   })
-  const hitOurs = await sendAndCapture(requests, '你好，我们的渠道')
-  if (!hitOurs) {
-    bad('我们的渠道没有发出消息请求')
-  } else {
-    if (hitOurs.url !== OURS_URL) {
-      bad(`我们的渠道发消息 URL 不对：${hitOurs.url}`)
-    } else {
-      ok(`我们的渠道发消息 → ${hitOurs.url}`)
-    }
-    const body = JSON.parse(hitOurs.postData ?? '{}')
-    if (body.model !== OURS_MODEL) {
-      bad(`我们的渠道 model 不对：${JSON.stringify(body.model)}`)
-    } else {
-      ok(`我们的渠道 model = ${body.model}`)
-    }
+  if (hitOurs !== null) {
     if (hitOurs.headers.authorization !== `Bearer ${KEY}`) {
-      bad(`我们的渠道 Authorization 头不对：${JSON.stringify(hitOurs.headers.authorization)}`)
+      bad(`内置来源 Authorization 头不对：${JSON.stringify(hitOurs.headers.authorization)}`)
     } else {
-      ok('我们的渠道 Authorization = Bearer <服务端下发的那把>')
+      ok('内置来源 Authorization = Bearer <服务端下发的那把>')
     }
     if (hitOurs.headers['x-api-key']) {
-      bad(`我们的渠道不该再带 x-api-key：${JSON.stringify(hitOurs.headers['x-api-key'])}`)
+      bad(`内置来源不该带 x-api-key：${JSON.stringify(hitOurs.headers['x-api-key'])}`)
     } else {
-      ok('我们的渠道未带 x-api-key（OpenAI 协议只用 Bearer）')
-    }
-    if (hitOurs.headers['anthropic-version']) {
-      bad(`我们的渠道不该带 anthropic-version：${hitOurs.headers['anthropic-version']}`)
-    } else {
-      ok('我们的渠道未带 anthropic-version（CORS 预检安全）')
-    }
-    for (const field of ['safety_check', 'tools', 'title']) {
-      if (Object.hasOwn(body, field)) {
-        bad(`我们的渠道请求体仍带 ${field}`)
-      } else {
-        ok(`我们的渠道请求体已剥离 ${field}`)
-      }
+      ok('内置来源未带 x-api-key（OpenAI 协议只用 Bearer）')
     }
   }
 
-  // ---------- [8] console error ----------
-  console.log('\n[8] console error')
+  // ---------- [6] 刷新后当前生效来源还在 ----------
+  console.log('\n[6] 刷新后来源持久化')
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await waitForAppReady()
+  await openApiConfigSection(page, { row: 'builtin' })
+  await expectCheckedRow('刷新后', 'builtin', /内置服务/)
+  const stored = await readStorage()
+  if (stored['chat-demo:provider-kind'] !== 'ours') {
+    bad(`刷新后 provider-kind 不是 ours：${JSON.stringify(stored['chat-demo:provider-kind'])}`)
+  } else {
+    ok('刷新后 chat-demo:provider-kind 仍是 ours（来源选择持久化）')
+  }
+  await closeSettings(page)
+
+  // ---------- [7] console error ----------
+  console.log('\n[7] console error')
   if (consoleErrors.length > 0) {
     bad(`console 有 ${consoleErrors.length} 条 error：${consoleErrors.slice(0, 3).join(' | ')}`)
   } else {
@@ -763,7 +665,11 @@ try {
   failures.push(`用例异常：${error instanceof Error ? error.message : String(error)}`)
 } finally {
   await browser.close()
-  cleanup()
+  try {
+    served?.kill()
+  } catch {
+    // 已关闭
+  }
 }
 
 console.log(`\n${failures.length === 0 ? 'PASS' : 'FAIL'} tests/integration/provider-channels.test.mjs`)

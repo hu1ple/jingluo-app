@@ -19,7 +19,14 @@ import { estimateTokens } from '../chat/contextBudget.js'
 import { openChatTransaction, reportStorageError } from '../chat/db.js'
 import { recordError } from '../diagnostics/collector.js'
 import { AttachmentAddError, type AttachmentAddStage } from './addError.js'
-import { ATTACHMENT_LIMITS, SUPPORTED_EXTENSIONS, type SupportedExtension } from './limits.js'
+import {
+  ATTACHMENT_LIMITS,
+  MIME_BY_EXTENSION,
+  SIZE_LIMIT_BYTES,
+  SUPPORTED_EXTENSIONS,
+  UNKNOWN_MIME_TYPES,
+  type SupportedExtension,
+} from './limits.js'
 import { parseDocxFile } from './parsers/docx.js'
 import { isPdfParseError, parsePdfFile } from './parsers/pdf.js'
 import { parseTxtFile } from './parsers/txt.js'
@@ -66,25 +73,11 @@ export class AttachmentError extends Error {
   }
 }
 
-/** 各格式允许的 MIME：扩展名与 MIME **双判**，只有两边都对得上才收 */
-const MIME_BY_EXTENSION: Record<SupportedExtension, readonly string[]> = {
-  '.txt': ['text/plain'],
-  '.docx': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
-  '.pdf': ['application/pdf'],
-}
-
 /**
- * 「系统没给 MIME」的两种取值：空串（部分 Android 文件提供器）与 `application/octet-stream`
- * （下载目录、第三方网盘）。这两种只当作「未提供」，判定交给扩展名；其余不匹配的 MIME 一律拒绝 ——
- * 把 .exe 改名成 .pdf 会在这里被挡下，且报错说清是 MIME 不符而不是格式不支持。
+ * 各格式允许的 MIME / 单文件上限 / 「系统没给 MIME」的取值：**都在 `./limits.ts`**（唯一来源）。
+ * 本文件从那里 import，不再自己维护第二份 —— 外部应用导入（`services/externalImport.ts`）
+ * 读的是同一张表，两边不会漂移。
  */
-const UNKNOWN_MIME_TYPES = new Set(['', 'application/octet-stream'])
-
-const SIZE_LIMIT_BYTES: Record<SupportedExtension, number> = {
-  '.txt': ATTACHMENT_LIMITS.txtMaxBytes,
-  '.docx': ATTACHMENT_LIMITS.docxMaxBytes,
-  '.pdf': ATTACHMENT_LIMITS.pdfMaxBytes,
-}
 
 /**
  * 解析器版本：与 `sha256` 一起构成缓存去重键。

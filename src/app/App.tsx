@@ -34,6 +34,7 @@ import { Toast } from '../components/base/Toast.js'
 import { showToast } from '../components/base/toastState.js'
 import { initChatBackground, useChatBackground } from '../services/chat/background.js'
 import { onUploadNotice } from '../services/attachments.js'
+import { useExternalImportBridge } from '../components/chatInput/useExternalImport.js'
 import { onMemoryNotice } from '../services/memory/sessionMemory.js'
 import { Button } from '../components/base/Button.js'
 import { stopReadAloud } from '../services/speech/readAloud.js'
@@ -179,6 +180,15 @@ export const App = () => {
   useEffect(() => {
     void startUpdateGate()
   }, [])
+
+  /**
+   * 外部应用文件导入（WPS / 微信 / QQ / 文件管理器的「打开方式 / 分享」）。
+   *
+   * 挂在这里而不是 ChatInput 里：订阅是**应用级**的，与当前停在哪个会话无关 ——
+   * 用户在别的会话里被分享进来，也要先切到新建对话再把附件铺进草稿。
+   * 非 Android（Web / iOS）时内部直接返回，一行行为都不产生。
+   */
+  useExternalImportBridge()
 
   /** 只为了让「公告弹窗是否让位」跟着判定结果重渲染；具体档位由下面两个组件自己读 */
   const updateGateKind = useUpdateGate((state) => state.gate.kind)

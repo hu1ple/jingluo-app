@@ -57,7 +57,7 @@
 | 历史导入导出 | ✅可用 —— ZIP 导入/导出纯本地，含附件（`SettingsDialog.tsx:470,517`、`history/zipWriter.ts`） | ✅可用 —— 同上 | ✅可用 —— 同上 |
 | 文档附件（TXT / DOCX / PDF） | ❌不可用 —— 两条通路都不成立：本仓库没有可用的原生上传实现（`/v1/chat/completions/files` 在 #360 确认不存在），也不做文本注入（`providerCapability.ts` 的 `acceptsDocuments('deepseek')` 为 false，#538）；入口渲染成禁用态并给出原因，不静默收下 | ✅可用 —— **文本注入**：解析正文按预算拼进 user 消息的 `<document name="…">` 块，附件引用注入后由 `contextBuilder.ts` 的 `buildWithDocuments()` 剥掉（`inject.ts` 的 `injectDocumentBlocks()`；能力表 `documents.textInjection=true`） | ✅可用 —— 同上，`buildWithDocuments()` 是**唯一请求入口**，文档与图片都从这里进（`documents.textInjection=true`） |
 | 图片 vision | ✅可用 —— Files API 上传拿 `file_id`，请求里 `image` + `file_id`（`client.ts` 的 `uploadFile()`、`FILES_BETA`；`reply.ts` 的 `toFileBlocks()`；能力表 `image.nativeFile=true`） | ✅可用 —— 本地编码后 base64 内联，**不发上传请求**（`imageSource.ts` 的 `toImagePart()`、`reply.ts` 的 `toFileBlocks()`；能力表 `image.base64=true`） | ✅可用 —— 同上，翻译层把内联图翻成 `{type:'image_url', image_url:{url:'data:…'}}`（`openaiAdapter.ts` 的 `toOpenAIRequest()` / 图片 part 映射；`image.base64=true`） |
-| 语音输入 ASR | ✅可用 —— `POST /v1/tools/asr`（multipart WAV/Ogg）返回全文（`speech.ts:17-46`、`providers.ts` 里 deepseek 的 `paths.tools`） | ❌不可用 —— `caps.asr=false`（上游没接口），VoiceButton 不渲染（`providers.ts:125`、`ChatInput.tsx:403-416`） | ❌不可用 —— `caps.asr=false`，且 `paths.tools` 是空串，连工具前缀都没定义（`providers.ts:136`） |
+| 语音输入 ASR | ✅可用 —— `POST /v1/tools/asr`（multipart WAV/Ogg）返回全文（`speech.ts:17-46`、`providers.ts` 里 deepseek 的 `paths.tools`） | ❌不可用 —— `caps.asr=false`（上游没接口），VoiceButton 不渲染（`providers.ts:125`、`ChatInput.tsx:412-425`） | ❌不可用 —— `caps.asr=false`，且 `paths.tools` 是空串，连工具前缀都没定义（`providers.ts:136`） |
 | 朗读 TTS | ✅可用 —— `POST /v1/tools/tts` 返回裸 PCM（24k 单声道），服务端过滤 markdown（`speech.ts:49-68`） | ❌不可用 —— `caps.tts=false`，`ReadAloudButton` 直接 `return null`（`providers.ts:126`、`ReadAloudButton.tsx:18-22`） | ❌不可用 —— 同上，无工具前缀 |
 
 **统计**（23 项能力 × 3 模式 = 69 格）
@@ -176,7 +176,7 @@
 | 历史导入导出 | 无（ZIP 本地） | 无 | `SettingsDialog.tsx` 的「数据管理」分组、`history/zipWriter.ts`、`history/importArchive.ts` |
 | 文档附件（TXT / DOCX / PDF） | **无请求字段**：走文本注入，正文拼进 user 消息的 `<document name="…">` 块，附件引用键 `attachments` 注入后即剥掉（`contextBuilder.ts` 的 `buildWithDocuments()`、`inject.ts` 的 `injectDocumentBlocks()`）；DeepSeek 一个字段都不发（`acceptsDocuments()` 为 false） | 无特殊事件（文本只上行） | `ChatInput.tsx` 的「添加文档」入口（`canAttachDocs` 门，`acceptsDocuments()`）、`AttachmentCard.tsx`（五态卡片）、`AttachmentPanel.tsx`（详情面板）、`MessageAttachments.tsx`（消息内） |
 | 图片 vision | 两条通路二选一：`POST {paths.files}`（`client.ts` 的 `uploadFile()` + `FILES_BETA`）拿 `file_id` 配 `image`/`file_id`（deepseek）；或本地编码 `{type:'image', source:{type:'base64'…}}` 内联（anthropic / openai / ours），OpenAI 侧再翻成 `{type:'image_url', image_url:{url:'data:…'}}`（`reply.ts` 的 `toFileBlocks()`、`openaiAdapter.ts` 的图片 part 映射）。走哪条只查 `providerCapability.ts` 的 `visionFor()` | 无特殊事件（图片只上行） | `ChatInput.tsx` 的图片入口（`canAttach` 门：`supportsImage()` + `visionFor()`）、`DraftAttachments.tsx`、`FileCard.tsx`、`MessageFile.tsx` |
-| 语音输入 ASR | `POST {baseUrl}{paths.tools}/asr`（`speech.ts:24`） | 纯 JSON `{text}`（`speech.ts:30-45`） | `ChatInput.tsx:403-416`（`caps.asr` 门下的 `VoiceButton`）、`VoiceButton.tsx`、`useVoiceInput.ts` |
+| 语音输入 ASR | `POST {baseUrl}{paths.tools}/asr`（`speech.ts:24`） | 纯 JSON `{text}`（`speech.ts:30-45`） | `ChatInput.tsx:412-425`（`caps.asr` 门下的 `VoiceButton`）、`VoiceButton.tsx`、`useVoiceInput.ts` |
 | 朗读 TTS | `POST {baseUrl}{paths.tools}/tts`（`speech.ts:55`） | 裸 PCM 流（`speech.ts:64-67`） | `ReadAloudButton.tsx:15-33`、`ReadingBars.tsx`、`services/speech/readAloud.ts` |
 
 **已有测试覆盖**（`tests/integration/full-acceptance.test.mjs`，8 组断言）
@@ -209,3 +209,17 @@
 5. **OpenAI 侧 prefill 探测 + 降级策略**（小修）。检测上游是否支持 assistant 尾部续写，不支持时把「继续生成」按钮置灰并给出说明，避免用户点了没反应（`canContinueReply` 加一个 `caps` 判断）。
 
 > 不建议补：服务端安全审核（无接口，客户端自建性价比低）、结构化 `latest_reminder`（协议固有限制，只能优化 system 措辞）。
+
+---
+
+## 五、平台能力差异（Android / Web / iOS）
+
+> 前三节的列是**服务类型**（DeepSeek / Anthropic / OpenAI），因为本矩阵的主体是「同一份前端代码在不同上游协议下能做什么」。
+> 这一节单列**平台**维度：有些能力取决于壳（`Capacitor.getPlatform()`），与上游协议无关。
+> 判定同样以代码为准，给的是文件 + 符号，不写行号。
+
+| 能力 | Android | Web | iOS |
+| --- | --- | --- | --- |
+| 外部应用文件导入（WPS / 微信 / QQ / 系统文件管理器的「打开方式 / 分享」） | ✅可用 —— `MainActivity` 上三组 `intent-filter`：`VIEW`（`scheme=content`/`file` + `CATEGORY_DEFAULT`，**不带** `BROWSABLE`，避免抢占浏览器选择器）、`SEND`（`EXTRA_STREAM`）、`SEND_MULTIPLE`（`EXTRA_STREAM` 的 `ArrayList<Uri>` **以及** `getClipData()`，两者都处理）。MIME 从 `src/services/attachments/limits.ts` 的 `SUPPORTED_EXTENSIONS` 派生（`text/plain` / `application/pdf` / docx 的长 MIME），另补 `application/octet-stream`（WPS / 微信常报这个值），**不用 `*/*`**，并在 `ExternalFilePlugin.resolveMime()` 里按扩展名二次校验。`content://` 一律 `ContentResolver.openInputStream()` 读，**不申请任何存储权限**（清单里没有 `READ_/WRITE_/MANAGE_EXTERNAL_STORAGE`）。副本落 `getCacheDir()/external-import/<uuid>-<name>`，JS 导入完调 `clearTemp(ids)` 删，冷启动再清扫 24h 前的残留；重复 intent 按签名 `uri + size + lastModified`（`SharedPreferences`，TTL 10 分钟）跳过。导入后 `newChat()` 进新建对话、文件交给既有的 `useAttachmentDrafts().addFiles()`（**不自动发送、不上传、不写第二套解析**）。证据：`android/app/src/main/AndroidManifest.xml`、`ExternalFilePlugin.java`、`src/services/externalImport.ts`、`src/components/chatInput/useExternalImport.ts` | ❌不可用（不存在该场景）—— 浏览器里没有「外部应用把文件推给某个网页」的系统级入口：`<a download>` / 拖拽 / `File System Access` 都是**用户在页面内主动选文件**，不存在 `ACTION_SEND` 这类跨应用 intent，也就没有「系统文件管理器点开方式分享给某个网页」这条路。代码侧 `services/externalImport.ts` 的 `isExternalImportSupported()` 判 `getPlatform() === 'android'`，非 Android 时 `subscribeExternalImport()` **连桥都不碰**、直接返回空退订函数，于是 Web 端不订阅、不弹提示、不渲染任何入口（行为与没有这个功能时完全一致） | ❓未实现 —— iOS 的对应能力是 `application(_:open:options:)` + `UTType` 的 Document Types（Info.plist）+ 分享用的 Share Extension target；当前工程既没有登记 Document Types，也没有 Share Extension，`ExternalFile` 插件只有 Android 实现（`android/app/src/main/java/com/example/deepseekchat/ExternalFilePlugin.java`），JS 侧在 `getPlatform() === 'ios'` 时同样直接返回。补齐需要新增 Xcode target + Info.plist 声明 + 一份 iOS 侧的原生实现 |
+
+**验证状态（不要当成已验证）**：Android 侧本轮只做到**静态验证** —— 本机没有 Android SDK（`ANDROID_HOME` 未设置），`gradle` 编译与真机安装**都没有跑过**，各厂商 ROM（微信 / QQ / WPS 的 FileProvider 差异）也没有实测。目前真正被自动验证的只有两件事：`tests/unit/external-import.test.mjs` 里 JS 侧的行为用例，以及该文件里「清单 MIME 与 `SUPPORTED_EXTENSIONS` 对齐 / Java 体积上限与 `ATTACHMENT_LIMITS` 对齐 / 清单无存储权限」三条静态一致性断言。真机手工清单见该测试文件头部与 PR 描述。

@@ -46,6 +46,7 @@ import {
 } from '../settings/settingsDialogState.js'
 import { enterKeyHintFor, resolveEnterKeyAction } from './enterKey.js'
 import { DragMask, useFileDrop } from './DragMask.js'
+import { useExternalImportInbox } from './useExternalImport.js'
 import { showToast } from '../base/toastState.js'
 import { ACCEPT, useUploads } from '../../services/attachments.js'
 import { IMAGE_ACCEPT } from '../../services/attachments/imageSource.js'
@@ -150,6 +151,14 @@ const Input = ({ sessionId }: { sessionId: string | null }) => {
     maxFiles: ATTACHMENT_LIMITS.maxFilesPerMessage,
     restoreIds: documents.map((item) => item.id),
   })
+  /**
+   * 外部应用分享进来的文件（Android）：只在「新建对话」这一版输入区接货，取到就直接走
+   * `docDrafts.addFiles()` —— **同一条入口**，不另起一套解析 / 落库。
+   *
+   * 为什么限定 `sessionId === null`：导入成功后 `useExternalImportBridge()` 会先 `newChat()`，
+   * 文件才送到这里；限定之后就不可能把附件塞进用户正在看的旧会话草稿（需求第 5 条）。
+   */
+  useExternalImportInbox(sessionId, docDrafts.addFiles)
   /**
    * 把「已就绪」的文档同步进草稿存储：`sendMessage()` 只读草稿，所以附件引用必须在发送前
    * 就落到 `drafts.documents` 上。解析中 / 失败 / 已取消的卡片留在输入区，但不进消息。

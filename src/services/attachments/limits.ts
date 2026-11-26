@@ -41,3 +41,57 @@ export const ATTACHMENT_LIMITS = {
 
 export const SUPPORTED_EXTENSIONS = ['.txt', '.docx', '.pdf'] as const
 export type SupportedExtension = (typeof SUPPORTED_EXTENSIONS)[number]
+
+/**
+ * 扩展名 → 允许的 MIME（**唯一来源**）。
+ *
+ * 谁在读它：
+ *  - `manager.ts` 的 `resolveExtension()` —— 入库时的「扩展名 + MIME 双判」；
+ *  - `externalImport.ts` —— 外部应用（WPS / 微信 / QQ）分享进来的文件按同一张表归一 MIME；
+ *  - `android/app/src/main/AndroidManifest.xml` 的三组 intent-filter（手工展开成字面量，
+ *    `tests/unit/external-import.test.mjs` 断言那边与这张表一致）。
+ *
+ * 类型是 `Record<SupportedExtension, …>`：往 `SUPPORTED_EXTENSIONS` 加一种格式而忘了在这里补
+ * MIME，**编译期**就会红，不用等到用户传上来才发现。
+ */
+export const MIME_BY_EXTENSION: Record<SupportedExtension, readonly string[]> = {
+  '.txt': ['text/plain'],
+  '.docx': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+  '.pdf': ['application/pdf'],
+}
+
+/**
+ * 「系统没给 MIME」的两种取值：空串（部分 Android 文件提供器）与 `application/octet-stream`
+ * （下载目录、第三方网盘、WPS / 微信分享）。这两种只当作「未提供」，判定交给扩展名；
+ * 其余不匹配的 MIME 一律拒绝 —— 把 .exe 改名成 .pdf 会被挡下，且报错说清是 MIME 不符。
+ */
+export const UNKNOWN_MIME_TYPES: ReadonlySet<string> = new Set(['', 'application/octet-stream'])
+
+/** 扩展名（小写，带点）；没有扩展名时为空串 */
+export const extensionOf = (filename: string): string => {
+  const dot = filename.lastIndexOf('.')
+  return dot > 0 ? filename.slice(dot).toLowerCase() : ''
+}
+
+const isSupportedExtension = (extension: string): extension is SupportedExtension =>
+  (SUPPORTED_EXTENSIONS as readonly string[]).indexOf(extension) >= 0
+
+/** 供外部按扩展名判支持的同一支判据（不要再各写一份 `includes()`） */
+export const supportsExtension = isSupportedExtension
+
+/**
+ * 各扩展名的单文件上限（字节）。**逐字段**从 `ATTACHMENT_LIMITS` 取出而不是转发整个对象：
+ * `limits-config.test.mjs` 要求每个 `LIMITS` 叶子在生产代码里被显式引用（见文件头）。
+ */
+export const SIZE_LIMIT_BYTES: Record<SupportedExtension, number> = {
+  '.txt': ATTACHMENT_LIMITS.txtMaxBytes,
+  '.docx': ATTACHMENT_LIMITS.docxMaxBytes,
+  '.pdf': ATTACHMENT_LIMITS.pdfMaxBytes,
+}
+
+/** 某个文件名的单文件上限；不支持的扩展名返回 `undefined`（调用方据扩展名先拒） */
+export const sizeLimitOf = (filename: string): number | undefined => {
+  const extension = extensionOf(filename)
+  return isSupportedExtension(extension) ? SIZE_LIMIT_BYTES[extension] : undefined
+}
+

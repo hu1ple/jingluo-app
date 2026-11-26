@@ -1,0 +1,66 @@
+{
+  "viewports": [
+    {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pixelsIdentical": true,
+      "sha256": {
+        "current": "982ca7b59f2f6c38d78f4b8b9e46c6418931631d05ac66d38726be00ab4a8a07",
+        "baseline": "982ca7b59f2f6c38d78f4b8b9e46c6418931631d05ac66d38726be00ab4a8a07"
+      },
+      "sameText": true,
+      "sameControls": true,
+      "controlCount": {
+        "current": 10,
+        "baseline": 10
+      },
+      "platform": "web",
+      "externalMentions": 0,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "textExcerpt": "今天有什么可以帮到你？ 快速模式 专家模式 深度思考 智能搜索 内容由 AI 生成，请仔细甄别"
+    },
+    {
+      "viewport": {
+        "width": 360,
+        "height": 740
+      },
+      "pixelsIdentical": true,
+      "sha256": {
+        "current": "cfc1e984ea79179447ac0f22f51027906f53bf6ef6e914c351b8826e38f9e7b8",
+        "baseline": "cfc1e984ea79179447ac0f22f51027906f53bf6ef6e914c351b8826e38f9e7b8"
+      },
+      "sameText": true,
+      "sameControls": true,
+      "controlCount": {
+        "current": 10,
+        "baseline": 10
+      },
+      "platform": "web",
+      "externalMentions": 0,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "textExcerpt": "今天有什么可以帮到你？ 快速模式 专家模式 深度思考 智能搜索 内容由 AI 生成，请仔细甄别"
+    }
+  ],
+  "verdicts": [
+    {
+      "viewport": 390,
+      "截图逐像素一致": true,
+      "可见文本完全一致": true,
+      "可交互控件集合一致": true,
+      "控制台无报错": true,
+      "网页端无 external-import 痕迹": true
+    },
+    {
+      "viewport": 360,
+      "截图逐像素一致": true,
+      "可见文本完全一致": true,
+      "可交互控件集合一致": true,
+      "控制台无报错": true,
+      "网页端无 external-import 痕迹": true
+    }
+  ]
+}

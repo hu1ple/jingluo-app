@@ -30,7 +30,12 @@
  * })
  * ```
  */
-import { ATTACHMENT_LIMITS, SUPPORTED_EXTENSIONS } from '../../services/attachments/limits.js'
+import {
+  SIZE_LIMIT_BYTES,
+  SUPPORTED_EXTENSIONS,
+  extensionOf,
+  sizeLimitOf,
+} from '../../services/attachments/limits.js'
 import type { SupportedExtension } from '../../services/attachments/limits.js'
 import type { DocumentAttachment, ParseOptions } from '../../services/attachments/types.js'
 import { showToast } from '../base/toastState.js'
@@ -144,28 +149,18 @@ const KNOWN_REASONS: readonly AttachmentErrorReason[] = [
   'openFailed',
 ]
 
-/** 各扩展名的单文件上限，全部来自 `limits.ts`（不在 UI 里另写数字） */
-const SIZE_LIMIT_BYTES: Record<SupportedExtension, number> = {
-  '.txt': ATTACHMENT_LIMITS.txtMaxBytes,
-  '.docx': ATTACHMENT_LIMITS.docxMaxBytes,
-  '.pdf': ATTACHMENT_LIMITS.pdfMaxBytes,
-}
-
 /** 文件对话框与拖入/粘贴共用的扩展名过滤串：`.txt,.docx,.pdf` */
 export const ACCEPT_DOCUMENTS = SUPPORTED_EXTENSIONS.join(',')
 
-export const extensionOf = (filename: string): string => {
-  const dot = filename.lastIndexOf('.')
-  return dot > 0 ? filename.slice(dot).toLowerCase() : ''
-}
+/**
+ * 扩展名 / 单文件上限 / 「支持哪些扩展名」的判据：**都在 `services/attachments/limits.ts`**
+ * （那才是唯一来源）。这里只做转出 —— UI 侧的调用点不用改 import 路径，
+ * 而外部应用导入（`services/externalImport.ts`）读的是同一张表，数字不会漂。
+ */
+export { extensionOf, sizeLimitOf }
 
 const isSupportedExtension = (extension: string): extension is SupportedExtension =>
   (SUPPORTED_EXTENSIONS as readonly string[]).indexOf(extension) >= 0
-
-export const sizeLimitOf = (filename: string): number | undefined => {
-  const extension = extensionOf(filename)
-  return isSupportedExtension(extension) ? SIZE_LIMIT_BYTES[extension] : undefined
-}
 
 /**
  * 选择/拖入的文件先在这里分拣：**不合格的一条也不静默吞掉**，全部作为 `rejected` 返回，

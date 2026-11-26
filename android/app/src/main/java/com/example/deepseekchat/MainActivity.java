@@ -1,5 +1,6 @@
 package com.example.deepseekchat;
 
+import android.content.Intent;
 import android.os.Build;
 import android.util.Log;
 import android.webkit.RenderProcessGoneDetail;
@@ -53,8 +54,35 @@ public class MainActivity extends BridgeActivity {
         // 身份的事留在 DeviceFingerprintPlugin 里，免得哪天顺手把标识写进诊断日志。
         registerPlugin(DeviceFingerprintPlugin.class);
         registerPlugin(CheckoutBrowserPlugin.class);
+        // 外部应用文件导入（WPS / 微信 / QQ / 文件管理器的「打开方式 / 分享」）：
+        // 冷启动的那条路 **不依赖 Capacitor 的 handleOnNewIntent 转发**，这里把初始 intent 直接
+        // 交给插件；热启动走下面的 onNewIntent。两条路都由插件按签名去重，不会重复导入。
+        registerPlugin(ExternalFilePlugin.class);
         super.onCreate(savedInstanceState);
         installRenderProcessGoneGuard();
+        ExternalFilePlugin.capture(this, getIntent());
+    }
+
+    /**
+     * 热启动：App 已在后台 / 已在前台时接到新的分享或「打开方式」。
+     *
+     * <p>三件事一件都不能少：
+     * <ul>
+     *   <li>{@code super.onNewIntent(intent)} —— Capacitor 的 BridgeActivity 在这里把 intent
+     *       转给 {@code bridge.onNewIntent()}（插件也会收到一次，去重层吃掉重复）；</li>
+     *   <li>{@code setIntent(intent)} —— 不更新的话，下一次 {@code getIntent()} 还是旧的，
+     *       进程重建后拿到的仍是首启那条（Android 文档要求 onNewIntent 里自己 setIntent）；</li>
+     *   <li>{@code ExternalFilePlugin.capture(...)} —— 真正的接收动作。</li>
+     * </ul>
+     */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        if (intent == null) {
+            return;
+        }
+        setIntent(intent);
+        ExternalFilePlugin.capture(this, intent);
     }
 
     /**

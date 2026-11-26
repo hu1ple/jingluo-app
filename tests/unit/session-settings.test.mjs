@@ -156,3 +156,19 @@ test('⑥ 全局背景未设置 + 会话未设置 → 什么背景都不加（da
   const appSource = readFileSync(path.join(ROOT, 'src/app/App.tsx'), 'utf8')
   assert.match(appSource, /data-chat-background=\{plan \? 'on' : undefined\}/u)
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 回归：有会话背景时，输入区那条「遮住滚动内容」的渐变不能再铺不透明页底色
+//
+// 用户反馈「设置背景后底部有白块」——根因就是 `.inputContainer` 的
+// `linear-gradient(... var(--dsw-alias-bg-base) 30% ...)` 在背景图上糊出一块白板。
+// 改动只是 CSS，这里用源码文本钉住，删掉那条件覆盖就会红。
+// ─────────────────────────────────────────────────────────────────────────────
+test('输入区在背景开启时必须透明（否则背景图上会有白块）', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const css = await readFile('src/components/session/SessionView.module.css', 'utf8')
+  const rule = /:global\(main\[data-chat-background='on'\]\)\s*\.inputContainer\s*\{[^}]*background:\s*transparent/u
+  assert.match(css, rule, '缺少 `main[data-chat-background="on"] .inputContainer { background: transparent }`')
+  // 反向：默认（无背景）那条渐变要留着，别顺手把滚动遮挡也删了
+  assert.match(css, /\.inputContainer\s*\{[^}]*linear-gradient/u, '无背景时的遮挡渐变不能一起删掉')
+})

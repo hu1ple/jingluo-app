@@ -251,6 +251,35 @@ const renderWithClicks = (props) => {
 
 const countOfText = (haystack, needle) => haystack.split(needle).length - 1
 
+/** 取某个 `data-testid` 节点的文本（静态 markup，节点里只有纯文本，split 足够） */
+const textsOfTestId = (markup, testId) =>
+  markup
+    .split(`data-testid="${testId}"`)
+    .slice(1)
+    .map((chunk) => chunk.slice(chunk.indexOf('>') + 1, chunk.indexOf('<')))
+    .map((text) => text.trim())
+
+/**
+ * 时间串要断言「来自 `created_at`」，但**不许依赖本机时区**（#门禁：这条用例在 CI 的
+ * `TZ=UTC` 下曾经必红 —— 渲染口径是 `YYYY-MM-DD HH:mm` 的**本机时区**，本机 CST 恰好等于
+ * 服务端给的 `+08:00` 才一直是绿的）。
+ *
+ * 做法是把渲染出来的「本机时区墙钟」**按同一进程的本机时区**解析回瞬间，再与 `created_at`
+ * 的瞬间比到分钟：两边用的是同一个 TZ，所以无论跑在 UTC / Shanghai / New_York 都成立。
+ * 这样守的是「时间那一格显示的是 `created_at`（不是 `paid_at`、不是 now、不是占位）且到分钟」，
+ * **不再守**「串长什么样」——具体格式另由 `key-identity-451` 的
+ * 「YYYY-MM-DD HH:mm（本机时区）」守。
+ */
+const instantOfLocalWallClock = (text) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/u.exec(text)
+  assert.notEqual(m, null, `时间格子得是 YYYY-MM-DD HH:mm（本机时区）的墙钟串，实际是 ${JSON.stringify(text)}`)
+  const [, y, mo, d, h, mi] = m
+  return new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi)).getTime()
+}
+
+/** 同一瞬间比到分钟（渲染到分钟，`created_at` 带秒） */
+const sameMinute = (renderedMs, sourceMs) => Math.floor(renderedMs / 60000) === Math.floor(sourceMs / 60000)
+
 test('⑤ 390 / 360 markup：有卡号显示掩码 + 复制取完整；无卡号没有卡号节点也不报错', () => {
   const withCode = orders.parseMyOrder(serverOrder())
   const withoutCode = orders.parseMyOrder(serverOrder({ out_trade_no: 'CP-PENDING-0002', status: 'PENDING', recharge_code: '' }))
@@ -273,7 +302,17 @@ test('⑤ 390 / 360 markup：有卡号显示掩码 + 复制取完整；无卡号
     assert.ok(markup.includes('已完成'), `${width}：COMPLETED 的文案由界面按 status 映射（不依赖 status_text）`)
     assert.ok(markup.includes('待支付'), `${width}：PENDING 也有自己的文案`)
     assert.ok(markup.includes('¥5.00'), `${width}：到账额度按元显示`)
-    assert.ok(markup.includes('2026-11-19 10:39'), `${width}：时间来自 created_at`)
+
+    // 时间那一格：有节点、非空、不是 `—`（占位），且确实是 `created_at` 这个瞬间。
+    // **不比对具体串** —— 渲染口径是本机时区，拿字面量比就等于把断言钉在跑用例的机器上。
+    const timeTexts = textsOfTestId(markup, 'account-consume-card-time')
+    assert.equal(timeTexts.length, 2, `${width}：两条订单都有时间格`)
+    for (const [index, text] of timeTexts.entries()) {
+      assert.notEqual(text, '', `${width}：第 ${index + 1} 条的时间格非空`)
+      assert.notEqual(text, '—', `${width}：第 ${index + 1} 条的时间格不是「认不出来」的占位`)
+    }
+    assert.ok(sameMinute(instantOfLocalWallClock(timeTexts[0]), withCode.createdAt * 1000), `${width}：时间来自 created_at（比到分钟，与时区无关）`)
+    assert.ok(sameMinute(instantOfLocalWallClock(timeTexts[1]), withoutCode.createdAt * 1000), `${width}：无卡号那条的时间同样来自它自己的 created_at`)
 
     // 「没有 recharge_code 的订单不显示卡号、不报错」：没有卡号节点、也没有复制按钮
     assert.equal(countOfText(markup, 'data-testid="account-consume-card-copy"'), 1, `${width}：无卡号的订单没有复制按钮（复制空串是假动作）`)

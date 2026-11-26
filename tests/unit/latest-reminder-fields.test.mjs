@@ -39,11 +39,25 @@ const { createLatestReminder, normalizeReminder } = await import(
 const NOW = new Date('2026-11-19T10:00:00+08:00')
 const fields = (reminder) => reminder.split(',')
 
+/**
+ * 日期段的期望值**按同一进程的本机时区**算，不写字面量。
+ *
+ * 实现口径（`latestReminder.ts` 注释）就是「日期与星期使用浏览器本地时区，避免 UTC 日期跨日」，
+ * 所以 `NOW` 这个瞬间在 Asia/Shanghai 是 11-19、在 UTC 也是 11-19、在 America/New_York 是 11-18。
+ * 原文写死 `'2026-11-19'` 等于要求跑用例的机器在 +08:00 一侧 —— 本机（CST）一直绿，CI 的 TZ=UTC
+ * 恰好也落在同一天才没暴露，纽约就必红。这里守的是「日期段取自 `NOW`、形状是 YYYY-MM-DD」，
+ * **不守时区偏移**（那属于本机时区口径，不是这条用例的守护对象）。
+ */
+const localDateOf = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
 test('无位置信息时 latest_reminder 仍是 5 段（缺项留空段，不是删段）', () => {
   const reminder = createLatestReminder({ locale: 'en-US', location: null }, NOW)
   const parts = fields(reminder)
   assert.equal(parts.length, 5, `段数必须是 5，实际 ${parts.length}：${reminder}`)
-  assert.equal(parts[0], '2026-11-19')
+  // 日期段：形状是 YYYY-MM-DD，且是 `NOW` 在**本机时区**的那一天（不写死哪一天，见 localDateOf）
+  assert.match(parts[0], /^\d{4}-\d{2}-\d{2}$/u, `日期段形状必须是 YYYY-MM-DD，实际 ${JSON.stringify(parts[0])}`)
+  assert.equal(parts[0], localDateOf(NOW), `日期段要取自 NOW（本机时区 ${Intl.DateTimeFormat().resolvedOptions().timeZone}）`)
   assert.equal(parts[2], '', '所在地缺失必须是空段')
   assert.equal(parts[3], 'Web')
   // 语言段取自应用语言（i18n），这里只要求非空，不钉具体文案

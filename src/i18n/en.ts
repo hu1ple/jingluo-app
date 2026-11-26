@@ -643,15 +643,41 @@ export const en = {
     'The upstream returned a web page instead of data, which usually means the gateway or proxy failed (a wrong endpoint URL looks the same). Retrying the same request will not change anything; expand the response summary below to see the content type and the first 200 characters.',
 
   // ---------- Chat background ----------
-  settingsChatBackground: 'Chat background',
+  /** 全局默认背景（本单改名：语义从「聊天背景」变成「新会话的默认背景」） */
+  settingsChatBackground: 'Default background',
   settingsChatBackgroundDescription:
-    'Stored on this device only (IndexedDB), never uploaded; resized to 1600px max edge',
+    'Used by new chats; chats with their own background are unaffected',
   settingsChatBackgroundUpload: 'Upload',
   settingsChatBackgroundClear: 'Clear',
   settingsChatBackgroundSaved: 'Applied to the chat area',
   settingsChatBackgroundCleared: 'Cleared; the chat area is back to default',
   settingsChatBackgroundFailed: 'Could not process this image; try a JPG or PNG',
   settingsChatBackgroundClearConfirm: 'Remove the current chat background?',
+
+  // ---------- 聊天设置（本单） ----------
+  chatSettings: 'Chat settings',
+  chatSettingsPrompt: 'Custom prompt',
+  chatSettingsPromptSubtitle: 'Set characters, worldbuilding, and writing rules',
+  chatSettingsBackground: 'Chat background',
+  chatSettingsBackgroundSubtitle: 'Customize this chat’s background',
+  chatSettingsBackgroundNeedsSession: 'Available after your first message',
+  chatSettingsScope: 'These settings apply to this chat only',
+  chatBackgroundPageTitle: 'Chat background',
+  chatBackgroundPreview: 'Background preview',
+  chatBackgroundPreviewEmpty: 'No background yet (follows the default background in settings)',
+  chatBackgroundChoose: 'Choose a background',
+  chatBackgroundStyleDefault: 'Default',
+  chatBackgroundStyleMountain: 'Mountains',
+  chatBackgroundStyleSunset: 'Gradient',
+  chatBackgroundStyleForest: 'Forest',
+  chatBackgroundStyleCustom: 'Custom',
+  chatBackgroundUpload: 'Upload your own image',
+  chatBackgroundUploadHint: 'Stored on this device only; longest edge compressed to 1600px',
+  chatBackgroundFade: 'Fade',
+  chatBackgroundBlur: 'Blur',
+  chatBackgroundReset: 'Reset to default',
+  chatBackgroundSave: 'Save settings',
+  chatBackgroundNeedImage: 'Choose an image first',
 
   // ---------- Feedback & logs ----------
   feedbackCellLabel: 'Feedback & logs',

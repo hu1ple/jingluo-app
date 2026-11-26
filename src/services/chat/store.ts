@@ -87,6 +87,8 @@ import { buildMessageBody, SYSTEM_PROMPT } from './requestBody.js'
 import { pickErrorNotice, rowKey } from './errorNotice.js'
 import { waitDeadlines } from './waitStage.js'
 import { composeWaitNotice, needsUpload, type WaitHint, type WaitStage } from './waitStage.js'
+import { removeSessionBackground } from './background.js'
+import type { SessionBackground } from './sessionBackground.js'
 import type { MergePlan, ImportMode } from './history/mergeSessions.js'
 import type { ImportSkip } from './history/toLocal.js'
 import { shouldRetryStreamTimeout, streamTimeoutStageOf } from './timeoutPolicy.js'
@@ -752,6 +754,33 @@ export const saveSessionPrompt = async (id: string, draft: string) => {
   return false
 }
 
+/**
+ * 保存会话级聊天背景（本单）：`undefined` = **清掉覆盖、回到全局默认**（「恢复默认」走这条）。
+ *
+ * 与 `saveSessionPrompt` 同一套纪律（先改内存里的会话、再落盘、落盘失败就回滚），
+ * 区别只在于字段是「三种来源 + 淡化 + 模糊」的复合值。图片本体不在这里写 ——
+ * 它按 `chat-background:session:<id>` 存在 `appAssets`，由 `applySessionBackground` 负责，
+ * 本函数只管这层 JSON 字段，于是「删图」与「清覆盖」是两个独立动作，谁也不会把对方弄坏。
+ */
+export const saveSessionBackground = async (
+  id: string,
+  background: SessionBackground | undefined
+): Promise<boolean> => {
+  const session = getSession(id)
+  if (!session || deletingSessions.has(id) || get().importingHistory) {
+    return false
+  }
+  updateSession(id, current => ({ ...current, background }))
+  if (await persist(id)) {
+    return true
+  }
+  // 落盘失败：只回滚「还是我写的那份」的会话，别把别人随后写进去的新值抹掉
+  updateSession(id, current => (current.background === background
+    ? { ...current, background: session.background }
+    : current))
+  return false
+}
+
 export const retrySaveSessions = () => {
   if (!get().importingHistory) {
     unsavedSessions.forEach(persist)
@@ -1298,6 +1327,9 @@ const removeSessionData = async (id: string): Promise<boolean> => {
       return false
     }
     await db.deleteSession(id)
+    // 本单：会话没了，它自己的背景图也不该留在 IndexedDB 里（`appAssets` 按 sessionId 存 key，
+    // 不清就是一条永远读不到、也永远算在占用里的孤儿 blob）。删库失败不影响删会话本身。
+    await removeSessionBackground(id).catch(db.reportStorageError('delete session background'))
     if (epoch !== historyEpoch) {
       return true
     }

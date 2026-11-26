@@ -13,22 +13,8 @@ import {
 import { saveSessionPrompt } from '../../services/chat/store.js'
 import type { Session } from '../../services/chat/types.js'
 import { Button } from '../base/Button.js'
-import { IconButton } from '../base/IconButton.js'
 import { Modal } from '../base/Modal.js'
 import styles from './PersonaDrawer.module.css'
-
-export const PersonaButton = ({ onClick }: { onClick: () => void }) => {
-  const t = useTranslate()
-  return <IconButton size="xl" tone="primary" tooltip={t('promptTitle')} onClick={onClick} icon={<IdentityIcon />} />
-}
-
-const IdentityIcon = () => (
-  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
-      <rect x="1.5" y="3.5" width="17" height="13" rx="3" />
-      <circle cx="7" cy="8.2" r="1.7" />
-      <path d="M3.9 13.3c.6-2.7 5.6-2.7 6.2 0M12.5 8h3M12.5 11.5h2" />
-    </svg>
-)
 
 /**
  * 标题区的圆角方块图标（设计稿：浅蓝底 + 蓝色「铅笔 + 星光」）。

@@ -29,23 +29,45 @@
   pointer-events: none;
 }
 
+/*
+ * 图 / 渐变层。
+ *
+ * `--chat-background-image` 有三种来源，但渲染通路只有这一条（`sessionBackground.ts` 的
+ * `backgroundPlanOf` 负责把它们都编成同一份 CSS 值）：全局默认图 `url("blob:…")`、
+ * 本会话上传的图 `url("blob:…")`、三个预设的 `linear-gradient(…)`。
+ *
+ * `filter: blur()` **只加在这一层**（固定背景层，`pointer-events: none`，不随消息滚动）。
+ * 绝不能加到消息列表或滚动容器上：那会让每一帧滚动都重算整屏模糊，低端机直接掉到个位数帧率。
+ */
 .main[data-chat-background='on']::before {
   z-index: 0;
-  background-image: var(--chat-background-image);
+  background-image: var(--chat-background-image, none);
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
+  filter: blur(var(--chat-background-blur, 0px));
+  /* 模糊会吃掉图层四周一小圈（露出底色），把底图放大 6% 盖住毛边 */
+  transform: scale(1.06);
 }
 
-/* 亮色遮罩 0.75 白，保证气泡、代码块与正文对比度 */
+/*
+ * 遮罩层：保证气泡、代码块与正文的对比度。
+ *
+ * 亮色默认 0.75 白、暗色默认 0.6 黑 —— 与会话无关的老行为**一个字没改**（变量缺省值就是它）。
+ * 会话里调了「背景淡化」时，App 会下发 `--chat-background-mask`（= 1 − 不透明度），
+ * 于是「图更淡」与「遮罩更厚」是同一件事，不会出现「图淡了、正文还是看不清」。
+ * 用 `opacity` 而不是 `rgba(var(…))`：CSS 变量拼不出颜色分量（那需要 color-mix，Chrome 111）。
+ */
 .main[data-chat-background='on']::after {
   z-index: 1;
-  background-color: rgba(255, 255, 255, 0.75);
+  background-color: #fff;
+  opacity: var(--chat-background-mask, 0.75);
 }
 
 /* 暗色主题跟随 body.dark 换成 0.6 黑遮罩 */
 :global(body.dark) .main[data-chat-background='on']::after {
-  background-color: rgba(0, 0, 0, 0.6);
+  background-color: #000;
+  opacity: var(--chat-background-mask, 0.6);
 }
 
 /* 内容层始终在背景与遮罩之上 */

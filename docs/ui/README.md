@@ -128,3 +128,20 @@ git grep -n -F 1.4.0-beta.1-settings-apikey.png -- '*.md' '*.json' '*.html' '*.t
    （`1.4.0-beta.8-ours-pay-…`）标识出处。要做「同一屏多帧只留首末帧」那一步，得先把这些散图标进索引。
    （#661 之前是 363 张 + 根目录 131 个散图；那 99 个散图在 #661 里因为**零引用**被归档外迁了，
    剩下的 32 个是「文件名字面出现在某份文档/测试里」的。）
+
+## 每会话聊天背景（本单）的 390 / 360 取证
+
+4 个场景 × 2 档宽度，全部由 `node scripts/shot-session-settings.mjs` 现跑现拍（`APP_URL` 指到本地 dev server）：
+
+| 文件 | 场景 |
+| --- | --- |
+| `session-settings-sheet-390.png` / `session-settings-sheet-360.png` | 会话页右上角「聊天设置」→ 底部抽屉：两行（自定义提示词 / 聊天背景，右侧显示当前值「默认」）+ 底部「设置仅对当前聊天生效」 |
+| `session-settings-background-page-390.png` / `session-settings-background-page-360.png` | 整页背景设置：顶部预览卡（远山 + 淡化 60% + 模糊 8px）、四宫格（选中打勾）、上传自定义图片、两根滑杆、恢复默认 / 保存设置 |
+| `session-settings-applied-390.png` / `session-settings-applied-360.png` | 保存后**该会话**聊天区出现远山背景（`main[data-chat-background=on][data-chat-background-style=mountain]`） |
+| `session-settings-sibling-unaffected-390.png` / `session-settings-sibling-unaffected-360.png` | 切到**另一条会话**：`main` 上没有 `data-chat-background`，背景完全不受影响 |
+
+脚本同时断言：pageerror 0 条、requestfailed 0 条；设置页那一行改名为「默认背景」、描述为「新会话默认使用；单独设置过的会话不受影响」；
+在设置里换默认背景后，没单独设置过的会话跟着变、单独设置过的会话仍是远山。
+
+> 视觉说明：三个预设（远山 / 渐变 / 森林）是 **CSS 渐变近似**，仓库里没有对应素材；
+> 换成正式图片只需把 `src/services/chat/sessionBackground.ts` 的 `PRESET_BACKGROUND_GRADIENTS` 换成 `url("…")`。

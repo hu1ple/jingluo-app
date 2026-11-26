@@ -13,9 +13,9 @@
 
 | 项 | 值 |
 | --- | --- |
-| 扫描范围 | `src/**` 全部源文件 **397** 个（`.css` **51** 个，其中 `*.module.css` **43** 个；其余 `.ts / .tsx / .html` 共 **346** 个） |
-| 口径拆分 | 51 `.css` + 262 `.ts` + 83 `.tsx` + 1 `.html` = 397 |
-| 命中总数 | **380** 处，分布在 **42** 个文件 |
+| 扫描范围 | `src/**` 全部源文件 **401** 个（`.css` **52** 个，其中 `*.module.css` **44** 个；其余 `.ts / .tsx / .html` 共 **349** 个） |
+| 口径拆分 | 52 `.css` + 263 `.ts` + 85 `.tsx` + 1 `.html` = 401 |
+| 命中总数 | **385** 处，分布在 **43** 个文件 |
 | 运行时下限 | WebView **83**（Chromium 83）。**首支持 ≤ 83 的特性一律记「无风险」，与有没有兜底无关** |
 | 构建期因素 | `rspack.config.ts` 用 `builtin:lightningcss-loader`，`targets` 取自 `package.json` 的 `browserslist`（强制含 `chrome >= 83`）。**已被构建期翻译掉的写法不算运行时假设** |
 
@@ -37,12 +37,12 @@
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 嵌套 `&` | — （构建期） | 153 | 153 | 0 | 0 | 0 | 0 | lightningcss 按 `chrome >= 83` 展开，非运行时假设 |
 | flex `gap` | 84 | 112 | 112 | 0 | 0 | 0 | 0 | 兜底已全覆盖（#217 补齐最后 2 处；W1-C1 / W1-C2 的新样式由 `pnpm run gen:gap` 补齐）；`check:gap` 口径见 §2.6 |
-| `min()` / `max()` | 79 | 30 | 0 | 30 | 0 | 0 | 0 | 79 ≤ 83，无风险（W1-C1 弹层宽高上限新增 2 处） |
+| `min()` / `max()` | 79 | 32 | 0 | 32 | 0 | 0 | 0 | 79 ≤ 83，无风险（W1-C1 弹层宽高上限新增 2 处） |
 | `:has()` | 105 | **0** | 0 | 0 | 0 | 0 | 0 | 16 处已由 #213 清零：改成渲染期显式状态类 `ds-markdown-before-ul` / `ds-markdown-before-ol`，低内核上零特性依赖 |
 | `:focus-visible` | 86 | 18 | 18 | 0 | 0 | 0 | 0 | 18 处全部合规：每处都有同选择器的 `:focus` 兜底 + `:focus:not(:focus-visible)` 收回（#215；W1-C1 的 `.tab` / `.input` 按同一套三件套写；#486 的 `.md-float-copy` 新增 1 处，同一套三件套）；`pnpm run check:focus` 守住 |
 | `@supports` 块（9 处 `(height/max-height: 100dvh)` + 2 处 `(scrollbar-gutter: …)`） | 108 | 12 | 12 | 0 | 0 | 0 | 0 | **11/11 前置等价兜底**：9 处有 `vh` 基座；2 处（`MessageList.module.css:22,74`，#216 / #236）有常驻 `overflow-y: scroll` 槽位 |
-| `overscroll-behavior` | 63 | 9 | 0 | 9 | 0 | 0 | 0 | 63 ≤ 83，无风险 |
-| `env(safe-area-inset-*)` | 69 | 10 | 0 | 10 | 0 | 0 | 0 | 69 ≤ 83，无风险（见 §5 的一致性备注） |
+| `overscroll-behavior` | 63 | 10 | 0 | 10 | 0 | 0 | 0 | 63 ≤ 83，无风险 |
+| `env(safe-area-inset-*)` | 69 | 12 | 0 | 12 | 0 | 0 | 0 | 69 ≤ 83，无风险（见 §5 的一致性备注） |
 | `getComputedStyle` 声明回读 | — （运行时） | 3 | 3 | 0 | 0 | 0 | **0** | #218 已修：`viewport.ts:55`、`scrollToFirstMessage.ts:30`、`collector.ts:723` 三处都有实测回读，假阳性归零（历史条目见 §3） |
 | `touch-action` | 36 | 8 | 0 | 8 | 0 | 0 | 0 | 36 ≤ 83，无风险 |
 | `backdrop-filter` | 76 | 2 | 0 | 2 | 0 | 0 | 0 | 76 ≤ 83，无风险（`-webkit-` 前缀另计 1 处） |
@@ -59,7 +59,7 @@
 | `color-mix()` | 111 | 0 | — | — | — | 0 | 0 | 未使用（且 lightningcss 会降级） |
 | `@layer` | 99 | 0 | — | — | — | 0 | 0 | 未使用 |
 | `accent-color` | 93 | 0 | — | — | — | 0 | 0 | 未使用 |
-| **合计** | | **380** | **315** | **59** | **1** | **5** | **0** | |
+| **合计** | | **385** | **315** | **64** | **1** | **5** | **0** | |
 
 > `100dvh` 的每一处声明，**没有一处**落在 `@supports` 之外（`dvh` 裸用命中数为 0）。这是本仓 #13 之后形成的最好的一条既有纪律，也是本次盘点最重要的**正面结论**：`dvh` 这一类零缺陷。
 
@@ -75,7 +75,7 @@
 
 | 文件:行 | 假设内容 | 类别 | 风险 | 处置 |
 | --- | --- | --- | --- | --- |
-| `app/App.module.css:105` | `@supports (height: 100dvh)`，块外 `:104` 有 `height: var(--app-viewport-height, 100vh)` | 2 | 低 | 已有兜底 |
+| `app/App.module.css:127` | `@supports (height: 100dvh)`，块外 `:126` 有 `height: var(--app-viewport-height, 100vh)` | 2 | 低 | 已有兜底 |
 | `components/announcements/Announcements.module.css:208` | `.popupBody`（首次进入的公告弹窗正文），块外 `:197` 有 `max-height: 70vh` 基座 | 2 | 低 | 已有兜底 |
 | `components/chatInput/ChatInput.module.css:268` | `@supports (max-height: 100dvh)`，块外 `:267` 有 `max-height: calc(var(--app-viewport-height, 100vh) - 120px)`（窄屏媒体查询内） | 2 | 低 | 已有兜底 |
 | `components/messages/MessageList.module.css:22` | `@supports (scrollbar-gutter: stable both-edges)` 现代内核收回 `overflow-y: auto`（#216），块外 `:16` 有常驻 `overflow-y: scroll` | 2 | 低 | 已有兜底 |
@@ -200,10 +200,10 @@
 | `components/messages/AssistantMessage.module.css:20,21` | `.waiting { display:flex; flex-wrap:wrap; column-gap:6px; row-gap:2px }`（#328 等待提示可能出现第二行） | 2 | 低 | **#328 已补**：`margin-right: 6px` + `margin-bottom: 2px`，由 `pnpm run gen:gap` 生成 |
 | ~~`components/settings/PaymentTrailDialog.module.css:71,113`~~ | `.tabs { display:flex; flex-wrap:wrap; gap:6px }`（#326 状态筛选页签）与 `.moreError { … gap:8px }`（#326 加载更多失败行） | 2 | 低 | **#561 已随文件删除**（三弹层合一）：两处兜底块随样式表一起删掉，不是漏了 |
 
-> 上表第 1 行是**总量**（43 个 `*.module.css` 里 111 处）；第 2–4 行是总量里的典型条目（`markdown.css` 那处是非 module，单独计入总数），
+> 上表第 1 行是**总量**（43 个 `*.module.css` 里 111 处，逐处数字按 2026-11-25 实跑；2026-11-26 新增的 `session/ChatSettings.module.css` 一处 `gap` 都没写，所以只是文件数 43 → 44、条数不变）；第 2–4 行是总量里的典型条目（`markdown.css` 那处是非 module，单独计入总数），
 > 不再逐行相加。第 5 行是删除记录，不计入 112。
 
-> 口径（#217 之后统一，本节数字按 2026-11-25 实跑）：`pnpm run check:gap` 报「扫描 **51** 个 CSS 文件（其中 **43** 个 CSS Module）：已兜底 **113** 条，跳过 **3** 条」。43 = `find src -name '*.module.css' | wc -l`；3 条跳过 = #159 的 `Settings.module.css:.backgroundRow` 1 条 + 非 flex 容器 2 条（`.m`、`.locationCell`）。（#681 复核：上一版记的 48/41/150 是 #499–#505 那一批进场时的口径，之后 `OursServices.module.css`（#583）与三份支付弹层 css（#561）删除，文件数掉到 46/39；本条与 `tests/unit/flex-gap-fallback.test.mjs` 的模块数断言同步。2026-11-25 复算：扫描面 46/39 → **51/43**、已兜底 105 → **113**、命中 104 → **111**。2026-11-26：侧栏搜索框 `.searchRow` 新增 1 处 `gap`，已兜底 113 → **114**、命中 111 → **112**。）
+> 口径（#217 之后统一，本节数字按 2026-11-25 实跑）：`pnpm run check:gap` 报「扫描 **51** 个 CSS 文件（其中 **43** 个 CSS Module）：已兜底 **113** 条，跳过 **3** 条」。43 = `find src -name '*.module.css' | wc -l`；3 条跳过 = #159 的 `Settings.module.css:.backgroundRow` 1 条 + 非 flex 容器 2 条（`.m`、`.locationCell`）。（#681 复核：上一版记的 48/41/150 是 #499–#505 那一批进场时的口径，之后 `OursServices.module.css`（#583）与三份支付弹层 css（#561）删除，文件数掉到 46/39；本条与 `tests/unit/flex-gap-fallback.test.mjs` 的模块数断言同步。2026-11-25 复算：扫描面 46/39 → **51/43**、已兜底 105 → **113**、命中 104 → **111**。2026-11-26：侧栏搜索框 `.searchRow` 新增 1 处 `gap`，已兜底 113 → **114**、命中 111 → **112**。2026-11-26（每会话聊天背景）：新增 `session/ChatSettings.module.css`，`pnpm run check:gap` 现跑现报「扫描 **52** 个 CSS 文件（其中 **44** 个 CSS Module）：已兜底 **114** 条，跳过 **3** 条」—— 模板里的间距一律用 `margin`，**没有新增一处裸 `gap`**，所以兜底条数不变、只是文件数 51/43 → **52/44**；`tests/unit/flex-gap-fallback.test.mjs` 的模块数断言同步改成 44。）
 
 ### 2.7 `inset`（17 处，构建期降级 → 已有兜底）
 
@@ -211,7 +211,7 @@
 
 | 文件:行 | 假设内容 | 类别 | 风险 | 处置 |
 | --- | --- | --- | --- | --- |
-| `app/App.module.css:3,28,77` | `inset: 0` 铺满 | 2 | 低 | 已有兜底（构建期翻译） |
+| `app/App.module.css:3,28,99` | `inset: 0` 铺满 | 2 | 低 | 已有兜底（构建期翻译） |
 | `app/ErrorBoundary.module.css:9` | `inset: 0` 铺满 | 2 | 低 | 已有兜底（构建期翻译） |
 | `components/base/ImagePreview.module.css:6` | `inset: 0` 铺满（#818 应用内图片预览的全屏遮罩） | 2 | 低 | 已有兜底（构建期翻译） |
 | `components/base/Modal.module.css:4,22` | `inset: 0` 铺满 | 2 | 低 | 已有兜底（构建期翻译） |

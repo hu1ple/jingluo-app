@@ -22,6 +22,7 @@ export const Modal = ({
   mainClassName,
   visible = true,
   zIndex,
+  testId,
   onClose,
 }: {
   title: ReactNode
@@ -49,6 +50,12 @@ export const Modal = ({
    * 需要显式抬高一层，否则新弹层会被压在下面点不到。
    */
   zIndex?: number
+  /**
+   * 测试接缝：把 `data-testid` 落在 `role="dialog"` 那一层（而不是调用方另包一层 div）。
+   * 与 `Button` 的 `testId` 同一个口径 —— 断言拿到的必须是**弹层本体**，
+   * 否则「抽屉开着吗」验的是内层容器的显隐，而不是这层 dialog。
+   */
+  testId?: string
   onClose: () => void
 }) => {
   const t = useTranslate()
@@ -116,6 +123,7 @@ export const Modal = ({
       <div
         ref={contentRef}
         className={clsx(styles.content, className)}
+        data-testid={testId}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

@@ -12,9 +12,14 @@ import styles from './Settings.module.css'
 type Status = { key: TranslationKey; error?: boolean } | null
 
 /**
- * 聊天背景：与上方三字段（API Key / 服务地址 / 模型）同一行样式。
- * 行内是缩略图 + 上传 + 清除；清除需就地二次确认，不新增卡片或二级页。
+ * **默认背景**（本单改名，原来是「聊天背景」）：与上方三字段（API Key / 服务地址 / 模型）同一行样式。
+ *
+ * 语义从「所有会话都用这张图」收窄成「**新会话 / 没有单独设置过的会话**用它」：
+ * 单独设置过的会话（`Session.background` 有覆盖）不受这里影响，改这里也不会把它们改掉。
+ * 存储、压缩口径、清除确认一个字没动 —— 只是显示名与描述跟着新语义改了，
+ * 否则用户会以为「在设置里换图 = 把所有会话的背景都换了」。
  */
+
 export const ChatBackgroundField = () => {
   const t = useTranslate()
   const url = useChatBackground((state) => state.url)

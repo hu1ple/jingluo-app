@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { PersonaDrawer, PersonaButton } from './PersonaDrawer.js'
+import { ChatSettings, ChatSettingsButton } from './ChatSettings.js'
 import clsx from 'clsx'
 import { useIsMobile } from '../../app/viewport.js'
 import { useTranslate } from '../../i18n/index.js'
@@ -24,8 +24,12 @@ export const SessionView = ({
   streaming: boolean
   siderCollapsed: boolean
 }) => {
-  const [personaId, setPersonaId] = useState<string | null>(null)
-  const personaButton = <PersonaButton onClick={() => setPersonaId(session.id)} />
+  /**
+   * 右上角按钮从「人设/提示词」换成「聊天设置」（滑杆图标）：抽屉里再分成
+   * 「自定义提示词」（既有 PersonaDrawer）与「聊天背景」（本单新增的整页）。
+   */
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const settingsButton = <ChatSettingsButton onClick={() => setSettingsOpen(true)} />
   const t = useTranslate()
   const isMobile = useIsMobile()
   const title = session.title || t('untitledChat')
@@ -45,14 +49,14 @@ export const SessionView = ({
   return (
     <div className={styles.view}>
       {isMobile ? (
-        <MobileHeader title={title} badge={badge} personaButton={personaButton} />
+        <MobileHeader title={title} badge={badge} actionButton={settingsButton} />
       ) : (
         <div className={styles.header}>
           <div className={clsx(styles.title, siderCollapsed && styles.withCollapsedSider)}>
             {title}
           </div>
           {badge}
-          <div style={{ marginLeft: 'auto' }}>{personaButton}</div>
+          <div style={{ marginLeft: 'auto' }}>{settingsButton}</div>
         </div>
       )}
       {/* #831 附件降级：分支会话里有附件在本机拿不到时，一条明确的说明（不报错、不挡对话） */}
@@ -61,7 +65,9 @@ export const SessionView = ({
           <SessionBranchAttachments session={session} />
         </div>
       )}
-      {personaId === session.id && <PersonaDrawer key={session.id} session={session} onClose={() => setPersonaId(null)} />}
+      {settingsOpen && (
+        <ChatSettings key={session.id} session={session} onClose={() => setSettingsOpen(false)} />
+      )}
       <MessageList
         session={session}
         streaming={streaming}

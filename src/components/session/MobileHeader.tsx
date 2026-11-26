@@ -16,10 +16,11 @@ import styles from './MobileHeader.module.css'
  */
 export const MobileHeader = ({
   title,
-  personaButton,
+  actionButton,
   badge,
 }: {
-  personaButton?: ReactNode
+  /** 右上角动作按钮：会话页 / 欢迎页都放「聊天设置」（原来放的是提示词按钮） */
+  actionButton?: ReactNode
   title?: string
   /** #831：会话来源徽标（分支会话才有）。放在标题右边，太挤时由 CSS 隐藏文字只留图标 */
   badge?: ReactNode
@@ -68,7 +69,7 @@ export const MobileHeader = ({
           {badge === undefined ? null : <span className={styles.badgeSlot}>{badge}</span>}
         </>
       )}
-      <div style={{ marginLeft: 'auto' }}>{personaButton}</div>
+      <div style={{ marginLeft: 'auto' }}>{actionButton}</div>
       {title === undefined ? null : (
         <IconButton
           size="xl"

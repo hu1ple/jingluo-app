@@ -32,7 +32,13 @@ import { AnnouncementPopup } from '../components/announcements/AnnouncementPopup
 import { applyResetFromLocation } from '../services/announcements/store.js'
 import { Toast } from '../components/base/Toast.js'
 import { showToast } from '../components/base/toastState.js'
-import { initChatBackground, useChatBackground } from '../services/chat/background.js'
+import {
+  initChatBackground,
+  loadSessionBackground,
+  useChatBackground,
+  useSessionBackground,
+} from '../services/chat/background.js'
+import { backgroundPlanOf, resolveSessionBackground } from '../services/chat/sessionBackground.js'
 import { onUploadNotice } from '../services/attachments.js'
 import { useExternalImportBridge } from '../components/chatInput/useExternalImport.js'
 import { onMemoryNotice } from '../services/memory/sessionMemory.js'
@@ -123,8 +129,19 @@ export const App = () => {
     state.activeId === null ? false : Object.hasOwn(state.streaming, state.activeId)
   )
   const activeId = useChatStore((state) => state.activeId)
-  // 聊天背景图存在 IndexedDB，刷新/重开后读回；只作用于聊天主区域
+  /**
+   * 聊天背景（本单改成三层：会话设置 > 全局默认 > 什么都不加）。
+   *
+   *   - `backgroundUrl`：设置页「默认背景」那张图（IndexedDB 固定 key，老用户升级前就在用的那张）；
+   *   - `sessionBackgroundUrl`：**当前会话**自己的图（key `chat-background:session:<id>`），
+   *     只在 url 的主人正是当前会话时才取用 —— 否则会 A 会话的图闪到 B 会话上；
+   *   - 两者合成 `plan`（`sessionBackground.ts` 的纯函数，L0 有测试），App 只按它铺变量。
+   */
   const backgroundUrl = useChatBackground((state) => state.url)
+  const sessionBackgroundUrl = useSessionBackground((state) =>
+    state.sessionId !== null && state.sessionId === activeId ? state.url : null
+  )
+  const plan = backgroundPlanOf(resolveSessionBackground(session, { url: backgroundUrl }, sessionBackgroundUrl))
   const needsBuiltinKey = useApiConfig((state) => shouldSyncManagedKey(state.kind, state.apiKey))
   // #800：对齐还需要登录态（领取链路要 JWT）；判断口径与账号面板一致（`authenticated`），不自己造一套
   const signedIn = useAuthStatus().authenticated
@@ -142,6 +159,10 @@ export const App = () => {
   useEffect(() => {
     void initChatBackground()
   }, [])
+  // 切会话时读回该会话自己的背景图；object URL 的 revoke 由 background.ts 统一管
+  useEffect(() => {
+    void loadSessionBackground(activeId)
+  }, [activeId])
   useEffect(bindChatPersistence, [])
 
   // 搜索结果面板只属于当前会话
@@ -208,12 +229,25 @@ export const App = () => {
     <>
       <div ref={frameRef} className={styles.frame}>
         {isMobile ? <MobileSider /> : siderCollapsed ? null : <Sider />}
+        {/*
+          * 背景三层叠放都挂在 `.main` 的伪元素上（App.module.css）：
+          *   ::before = 图/渐变（固定层，`pointer-events: none`，模糊只加在这一层）
+          *   ::after  = 遮罩（保正文对比度，alpha 由「背景淡化」决定）
+          * 会话级设置只影响这三个 CSS 变量的取值，不新增 DOM 节点、不碰消息列表。
+          */}
         <main
           className={styles.main}
-          data-chat-background={backgroundUrl ? 'on' : undefined}
+          data-chat-background={plan ? 'on' : undefined}
+          data-chat-background-style={plan?.style}
           style={
-            backgroundUrl
-              ? ({ '--chat-background-image': `url("${backgroundUrl}")` } as CSSProperties)
+            plan
+              ? ({
+                  '--chat-background-image': plan.imageCss,
+                  ...(plan.maskAlpha === null
+                    ? null
+                    : { '--chat-background-mask': String(plan.maskAlpha) }),
+                  ...(plan.blurPx > 0 ? { '--chat-background-blur': `${plan.blurPx}px` } : null),
+                } as CSSProperties)
               : undefined
           }
         >

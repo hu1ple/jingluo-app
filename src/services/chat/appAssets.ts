@@ -3,6 +3,19 @@ import { deleteAppAsset, loadAppAsset, saveAppAsset } from './db.js'
 /** 聊天背景图固定使用的素材 key：全局一份，与会话无关。 */
 export const CHAT_BACKGROUND_KEY = 'chat-background'
 
+/**
+ * 每会话自定义背景图的 key 前缀（本单）：`chat-background:session:<sessionId>`。
+ *
+ * 为什么不新建 store、也不升 DB 版本：`appAssets` 的 keyPath 就是 `key`（字符串主键），
+ * 多一个前缀只是多几条记录，升级回调一个字都不用改 —— 老用户的全局图 `chat-background`
+ * 原地不动，两条通路互不覆盖（`check:db-version` 因此也不该红）。
+ */
+export const SESSION_BACKGROUND_KEY_PREFIX = 'chat-background:session:'
+
+/** 会话 id → 该会话自定义背景图的素材 key */
+export const sessionBackgroundKey = (sessionId: string): string =>
+  `${SESSION_BACKGROUND_KEY_PREFIX}${sessionId}`
+
 /** 压缩参数：最长边 ≤1600px、JPEG 0.85，避免 4K 原图常驻内存。 */
 const MAX_EDGE = 1600
 const JPEG_QUALITY = 0.85
@@ -81,4 +94,30 @@ export const writeChatBackground = async (file: File): Promise<Blob> => {
 
 export const clearChatBackground = async (): Promise<void> => {
   await deleteAppAsset(CHAT_BACKGROUND_KEY)
+}
+
+/**
+ * 读取某条会话的自定义背景图原件；没设置过返回 null。
+ *
+ * 与全局那张（`readChatBackground`）是两条独立的 key，所以「给 A 会话换图」永远不会
+ * 动到设置页的「默认背景」，反过来也一样。
+ */
+export const readSessionBackground = async (sessionId: string): Promise<Blob | null> =>
+  (await loadAppAsset(sessionBackgroundKey(sessionId)))?.blob ?? null
+
+/**
+ * 写入**已经压缩好**的会话背景图。
+ *
+ * 为什么入参是 blob 而不是 File：背景设置页的流程是「上传 → 立刻出预览（草稿）→ 点保存才落库」，
+ * 压缩必须在**上传那一步**就做完（预览要的是压缩后的同一张图，否则「预览看到的」和「存下来的」
+ * 是两个画质）。压缩本身仍复用全局图那份实现 `compressChatBackground`（最长边 ≤1600px、JPEG 0.85），
+ * 不给会话图另开一套参数 —— 两套参数意味着「同一张图设成默认背景和设成会话背景，体积差一倍」。
+ */
+export const saveSessionBackgroundAsset = async (sessionId: string, blob: Blob): Promise<void> => {
+  await saveAppAsset(sessionBackgroundKey(sessionId), blob)
+}
+
+/** 删除该会话的自定义图（「恢复默认」清掉会话覆盖时一并调用）。 */
+export const clearSessionBackground = async (sessionId: string): Promise<void> => {
+  await deleteAppAsset(sessionBackgroundKey(sessionId))
 }

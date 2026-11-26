@@ -6,7 +6,7 @@ import { getSpec } from '../../services/api/providers.js'
 import { useApiConfig } from '../../services/api/apiConfig.js'
 import { setChatMode, useSettings, type ChatMode } from '../../services/settings.js'
 import { ChatInput } from '../chatInput/ChatInput.js'
-import { PersonaButton, PersonaDrawer } from './PersonaDrawer.js'
+import { ChatSettings, ChatSettingsButton } from './ChatSettings.js'
 import { MobileHeader } from './MobileHeader.js'
 import styles from './Welcome.module.css'
 
@@ -96,13 +96,17 @@ const ModeSwitch = () => {
 export const Welcome = () => {
   const t = useTranslate()
   const isMobile = useIsMobile()
-  const [personaOpen, setPersonaOpen] = useState(false)
-  const personaButton = <PersonaButton onClick={() => setPersonaOpen(true)} />
+  /**
+   * 新会话同样能进「聊天设置」：提示词那一行走的是新会话草稿（`setNewChatPrompt`），
+   * 聊天背景那一行在这里**禁用**（还没有会话 id，图没有地方存），见 ChatSettingsSheet 的注释。
+   */
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const settingsButton = <ChatSettingsButton onClick={() => setSettingsOpen(true)} />
   return (
     <div className={styles.container}>
-      {isMobile ? <MobileHeader personaButton={personaButton} /> :
-        <div className={styles.personaAction}>{personaButton}</div>}
-      {personaOpen && <PersonaDrawer onClose={() => setPersonaOpen(false)} />}
+      {isMobile ? <MobileHeader actionButton={settingsButton} /> :
+        <div className={styles.personaAction}>{settingsButton}</div>}
+      {settingsOpen && <ChatSettings onClose={() => setSettingsOpen(false)} />}
       <div className={styles.welcome}>
         <div className={styles.hero}>
           <div className={styles.greeting}>{t('welcomeMessageChat250808')}</div>

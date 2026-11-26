@@ -10,6 +10,7 @@ import type {
   StopReason,
   TextCitation,
 } from '../api/types.js'
+import type { SessionBackground } from './sessionBackground.js'
 
 /**
  * 消息附件。id 是本地标识（IndexedDB files 表的主键，原件按它存储，所有引用同一 id 的消息共用一份），
@@ -166,6 +167,18 @@ export type SessionBranchOrigin = {
 
 export type Session = {
   customSystemPrompt?: string
+  /**
+   * 会话级聊天背景（本单）：只作用于**这一条**会话，缺省 = 跟随设置页的「默认背景」。
+   *
+   * 三件纪律（都落在 `sessionBackground.ts` 的纯函数里，`tests/unit/session-settings.test.mjs` 钉住）：
+   *   1. **可选新增字段**：IndexedDB 是 schemaless 的，老记录没有它照样读得出来 →
+   *      不需要回填、不需要升 DB 版本（与 `branchOf` 同一套口径，见 `db.ts` 的版本注释）；
+   *   2. **宽容解析**：字段缺失 / 脏值一律回落 `default`（= 跟随全局默认），不许因为一条脏数据打不开会话；
+   *   3. **图片本体不进 JSON**：`style: 'custom'` 只记「这张会话图在哪一层」，图片本体按
+   *      `chat-background:session:<id>` 存在 IndexedDB 的 `appAssets` 里（`appAssets.ts`），
+   *      绝不 base64 塞进会话记录 —— 那是会把整份会话拖到几十 MB 的写法。
+   */
+  background?: SessionBackground
   /** 旧版双栏数据，读取会话时并入自定义提示词。 */
   userIdentity?: string
   id: string

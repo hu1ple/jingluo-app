@@ -637,14 +637,40 @@ export const zh = {
     '上游返回的是网页而不是数据，通常是网关或代理出错（接口地址填错了也会这样）；重试同一个请求不会有变化（不要重试），展开下面的响应摘要可以看到返回的内容类型与前 200 字',
 
   // ---------- 聊天背景 ----------
-  settingsChatBackground: '聊天背景',
-  settingsChatBackgroundDescription: '图片只保存在本机（IndexedDB），不会上传；最长边压缩到 1600px',
+  /** 全局默认背景（本单改名：语义从「聊天背景」变成「新会话的默认背景」） */
+  settingsChatBackground: '默认背景',
+  settingsChatBackgroundDescription: '新会话默认使用；单独设置过的会话不受影响',
   settingsChatBackgroundUpload: '上传',
   settingsChatBackgroundClear: '清除',
   settingsChatBackgroundSaved: '已应用到聊天区域',
   settingsChatBackgroundCleared: '已清除，聊天区域恢复默认背景',
   settingsChatBackgroundFailed: '图片处理失败，请换一张 JPG/PNG 图片再试',
   settingsChatBackgroundClearConfirm: '确认清除当前聊天背景？',
+
+  // ---------- 聊天设置（本单） ----------
+  chatSettings: '聊天设置',
+  chatSettingsPrompt: '自定义提示词',
+  chatSettingsPromptSubtitle: '设置人物、世界观及创作规则',
+  chatSettingsBackground: '聊天背景',
+  chatSettingsBackgroundSubtitle: '自定义当前会话的背景样式',
+  chatSettingsBackgroundNeedsSession: '发出第一条消息后可用',
+  chatSettingsScope: '设置仅对当前聊天生效',
+  chatBackgroundPageTitle: '聊天背景',
+  chatBackgroundPreview: '背景预览',
+  chatBackgroundPreviewEmpty: '未设置背景（跟随设置里的默认背景）',
+  chatBackgroundChoose: '选择背景',
+  chatBackgroundStyleDefault: '默认',
+  chatBackgroundStyleMountain: '远山',
+  chatBackgroundStyleSunset: '渐变',
+  chatBackgroundStyleForest: '森林',
+  chatBackgroundStyleCustom: '自定义',
+  chatBackgroundUpload: '上传自定义图片',
+  chatBackgroundUploadHint: '只保存在本机，最长边压缩到 1600px',
+  chatBackgroundFade: '背景淡化',
+  chatBackgroundBlur: '背景模糊',
+  chatBackgroundReset: '恢复默认',
+  chatBackgroundSave: '保存设置',
+  chatBackgroundNeedImage: '请先选一张图片',
 
   // ---------- 反馈与日志 ----------
   feedbackCellLabel: '反馈与日志',
